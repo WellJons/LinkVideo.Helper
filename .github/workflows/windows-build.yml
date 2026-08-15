@@ -54,7 +54,7 @@ jobs:
       - name: Upload verified Windows build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LinkVideo.Helper-${{ github.ref_name }}
+          name: LinkVideo.Helper-build-${{ github.run_number }}-${{ github.sha }}
           path: |
             release_upload/LinkVideo_VPN_Helper_Setup.exe
             release_upload/version.json
