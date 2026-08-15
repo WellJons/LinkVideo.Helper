@@ -21,11 +21,12 @@ import (
 )
 
 const (
-    productName = "LinkVideo.Helper"
-    appExeName  = "LinkVideo.Helper.exe"
-    appDirName  = "LinkVideo.Helper"
+    productName  = "LinkVideo.Helper"
+    appExeName   = "LinkVideo.Helper.exe"
+    appDirName   = "LinkVideo.Helper"
     uninstallKey = `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\LinkVideo.Helper`
     legacyInnoKey = `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\{8D39F3B2-8D87-4D9F-B5F6-2D7B65F08C21}_is1`
+    legacyInnoWowKey = `HKLM\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{8D39F3B2-8D87-4D9F-B5F6-2D7B65F08C21}_is1`
 )
 
 var version = "0.0.0-dev"
@@ -68,6 +69,29 @@ type shellExecuteInfoW struct {
     HProcess     uintptr
 }
 
+func shellExecuteRunAs(path string, args []string) error {
+    verb, _ := syscall.UTF16PtrFromString("runas")
+    file, _ := syscall.UTF16PtrFromString(path)
+    params, _ := syscall.UTF16PtrFromString(strings.Join(args, " "))
+    shell32 := syscall.NewLazyDLL("shell32.dll")
+    info := shellExecuteInfoW{
+        CBSize:       uint32(unsafe.Sizeof(shellExecuteInfoW{})),
+        FMask:        0x00000040,
+        LpVerb:       verb,
+        LpFile:       file,
+        LpParameters: params,
+        NShow:        1,
+    }
+    ok, _, callErr := shell32.NewProc("ShellExecuteExW").Call(uintptr(unsafe.Pointer(&info)))
+    if ok == 0 {
+        return fmt.Errorf("Windows не разрешила получить права администратора: %v", callErr)
+    }
+    if info.HProcess != 0 {
+        syscall.NewLazyDLL("kernel32.dll").NewProc("CloseHandle").Call(info.HProcess)
+    }
+    return nil
+}
+
 func ensureElevated() (bool, error) {
     if isProcessElevated() {
         return true, nil
@@ -76,22 +100,39 @@ func ensureElevated() (bool, error) {
     if err != nil {
         return false, err
     }
-    verb, _ := syscall.UTF16PtrFromString("runas")
-    file, _ := syscall.UTF16PtrFromString(self)
-    params, _ := syscall.UTF16PtrFromString(strings.Join(os.Args[1:], " "))
-    shell32 := syscall.NewLazyDLL("shell32.dll")
-    proc := shell32.NewProc("ShellExecuteExW")
-    info := shellExecuteInfoW{
-        CBSize: uint32(unsafe.Sizeof(shellExecuteInfoW{})),
-        FMask:  0x00000040,
-        LpVerb: verb,
-        LpFile: file,
-        LpParameters: params,
-        NShow: 1,
+    if err := shellExecuteRunAs(self, os.Args[1:]); err != nil {
+        return false, err
     }
-    ok, _, callErr := proc.Call(uintptr(unsafe.Pointer(&info)))
-    if ok == 0 {
-        return false, fmt.Errorf("Windows не разрешила получить права администратора: %v", callErr)
+    return false, nil
+}
+
+// The installed uninstaller cannot delete its own Program Files directory while
+// it is still running. Always move execution to a private temp copy first.
+func ensureUninstallerRunsFromTemp() (bool, error) {
+    self, err := os.Executable()
+    if err != nil {
+        return false, err
+    }
+    installDir := filepath.Clean(defaultInstallDir())
+    selfDir := filepath.Clean(filepath.Dir(self))
+    if !strings.EqualFold(selfDir, installDir) {
+        return true, nil
+    }
+    tempDir := filepath.Join(os.TempDir(), "LinkVideo.Helper-Uninstall")
+    if err := os.MkdirAll(tempDir, 0o755); err != nil {
+        return false, err
+    }
+    tempExe := filepath.Join(tempDir, fmt.Sprintf("Uninstall-%d.exe", os.Getpid()))
+    data, err := os.ReadFile(self)
+    if err != nil {
+        return false, err
+    }
+    if err := os.WriteFile(tempExe, data, 0o700); err != nil {
+        return false, err
+    }
+    if err := shellExecuteRunAs(tempExe, os.Args[1:]); err != nil {
+        _ = os.Remove(tempExe)
+        return false, err
     }
     return false, nil
 }
@@ -133,7 +174,7 @@ func extractPayload(dest string, progress progressFunc) error {
     done := 0
     for _, f := range zr.File {
         clean := filepath.Clean(f.Name)
-        if clean == "." || filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
+        if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
             return fmt.Errorf("недопустимый путь внутри пакета: %s", f.Name)
         }
         target := filepath.Join(dest, clean)
@@ -184,26 +225,6 @@ func extractPayload(dest string, progress progressFunc) error {
     return nil
 }
 
-func shortcutScript(appPath, dest string, desktop bool) string {
-    public := os.Getenv("PUBLIC")
-    programData := os.Getenv("PROGRAMDATA")
-    desktopPath := filepath.Join(public, "Desktop", "LinkVideo.Helper.lnk")
-    menuDir := filepath.Join(programData, `Microsoft\Windows\Start Menu\Programs\LinkVideo.Helper`)
-    menuPath := filepath.Join(menuDir, "LinkVideo.Helper.lnk")
-    desktopFlag := "$false"
-    if desktop {
-        desktopFlag = "$true"
-    }
-    return fmt.Sprintf(`$ErrorActionPreference='Stop';`+
-        `$w=New-Object -ComObject WScript.Shell;`+
-        `$menu='%s';New-Item -ItemType Directory -Force -Path $menu|Out-Null;`+
-        `$targets=@('%s');if(%s){$targets+=@('%s')};`+
-        `foreach($p in $targets){$s=$w.CreateShortcut($p);$s.TargetPath='%s';$s.WorkingDirectory='%s';$s.IconLocation='%s,0';$s.Description='LinkVideo.Helper';$s.Save()}`+
-        `if(-not %s){Remove-Item -Force -ErrorAction SilentlyContinue '%s'}`,
-        psEscape(menuDir), psEscape(menuPath), desktopFlag, psEscape(desktopPath),
-        psEscape(appPath), psEscape(dest), psEscape(appPath), desktopFlag, psEscape(desktopPath))
-}
-
 func psEscape(value string) string {
     return strings.ReplaceAll(value, "'", "''")
 }
@@ -219,20 +240,43 @@ func runPowerShell(script string) error {
 }
 
 func createShortcuts(appPath, dest string, desktop bool) error {
-    return runPowerShell(shortcutScript(appPath, dest, desktop))
+    public := strings.TrimSpace(os.Getenv("PUBLIC"))
+    programData := strings.TrimSpace(os.Getenv("PROGRAMDATA"))
+    if public == "" || programData == "" {
+        return errors.New("Windows не вернула пути PUBLIC/PROGRAMDATA")
+    }
+    desktopPath := filepath.Join(public, "Desktop", "LinkVideo.Helper.lnk")
+    menuDir := filepath.Join(programData, `Microsoft\Windows\Start Menu\Programs\LinkVideo.Helper`)
+    menuPath := filepath.Join(menuDir, "LinkVideo.Helper.lnk")
+    desktopFlag := "$false"
+    if desktop {
+        desktopFlag = "$true"
+    }
+    script := fmt.Sprintf(`$ErrorActionPreference='Stop';`+
+        `$w=New-Object -ComObject WScript.Shell;`+
+        `$menu='%s';New-Item -ItemType Directory -Force -Path $menu|Out-Null;`+
+        `$targets=@('%s');if(%s){$targets+=@('%s')};`+
+        `foreach($p in $targets){$s=$w.CreateShortcut($p);$s.TargetPath='%s';$s.WorkingDirectory='%s';$s.IconLocation='%s,0';$s.Description='LinkVideo.Helper';$s.Save()}`+
+        `if(-not %s){Remove-Item -Force -ErrorAction SilentlyContinue '%s'}`,
+        psEscape(menuDir), psEscape(menuPath), desktopFlag, psEscape(desktopPath),
+        psEscape(appPath), psEscape(dest), psEscape(appPath), desktopFlag, psEscape(desktopPath))
+    return runPowerShell(script)
 }
 
 func removeLegacyInstallArtifacts(dest string) {
-    runCleanup("reg.exe", "delete", legacyInnoKey, "/f")
-    runCleanup("reg.exe", "delete", `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\LinkVideo.Helper`, "/f")
+    for _, key := range []string{legacyInnoKey, legacyInnoWowKey, `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\LinkVideo.Helper`} {
+        runCleanup("reg.exe", "delete", key, "/f")
+    }
     for _, name := range []string{"unins000.exe", "unins000.dat", "unins001.exe", "unins001.dat"} {
         _ = os.Remove(filepath.Join(dest, name))
     }
-    for _, path := range []string{
-        filepath.Join(os.Getenv("PUBLIC"), "Desktop", "LinkVideo VPN Helper.lnk"),
-        filepath.Join(os.Getenv("PROGRAMDATA"), `Microsoft\Windows\Start Menu\Programs\LinkVideo.Helper`, "LinkVideo VPN Helper.lnk"),
-    } {
-        _ = os.Remove(path)
+    public := strings.TrimSpace(os.Getenv("PUBLIC"))
+    programData := strings.TrimSpace(os.Getenv("PROGRAMDATA"))
+    if public != "" {
+        _ = os.Remove(filepath.Join(public, "Desktop", "LinkVideo VPN Helper.lnk"))
+    }
+    if programData != "" {
+        _ = os.Remove(filepath.Join(programData, `Microsoft\Windows\Start Menu\Programs\LinkVideo.Helper`, "LinkVideo VPN Helper.lnk"))
     }
 }
 
@@ -290,27 +334,28 @@ func installProduct(opts installOptions, progress progressFunc) (string, error) 
 }
 
 func removeShortcuts() {
-    for _, path := range []string{
-        filepath.Join(os.Getenv("PUBLIC"), "Desktop", "LinkVideo.Helper.lnk"),
-        filepath.Join(os.Getenv("PUBLIC"), "Desktop", "LinkVideo VPN Helper.lnk"),
-        filepath.Join(os.Getenv("PROGRAMDATA"), `Microsoft\Windows\Start Menu\Programs\LinkVideo.Helper`),
-    } {
-        _ = os.RemoveAll(path)
+    public := strings.TrimSpace(os.Getenv("PUBLIC"))
+    programData := strings.TrimSpace(os.Getenv("PROGRAMDATA"))
+    if public != "" {
+        _ = os.Remove(filepath.Join(public, "Desktop", "LinkVideo.Helper.lnk"))
+        _ = os.Remove(filepath.Join(public, "Desktop", "LinkVideo VPN Helper.lnk"))
+    }
+    if programData != "" {
+        _ = os.RemoveAll(filepath.Join(programData, `Microsoft\Windows\Start Menu\Programs\LinkVideo.Helper`))
     }
 }
 
 func removeUserData() {
     // QSettings("LinkVideo", "LinkVideo.Helper") on Windows uses HKCU.
     runCleanup("reg.exe", "delete", `HKCU\Software\LinkVideo\LinkVideo.Helper`, "/f")
-    // Remove the legacy settings only on an explicit full-clean request.
     runCleanup("reg.exe", "delete", `HKCU\Software\LinkVideo\VPNHelper`, "/f")
-    for _, root := range []string{
-        filepath.Join(os.Getenv("LOCALAPPDATA"), "LinkVideo.Helper"),
-        filepath.Join(os.Getenv("APPDATA"), "LinkVideo.Helper"),
-    } {
-        if strings.TrimSpace(root) != "" && filepath.Clean(root) != "." {
-            _ = os.RemoveAll(root)
+    for _, envName := range []string{"LOCALAPPDATA", "APPDATA"} {
+        base := strings.TrimSpace(os.Getenv(envName))
+        if base == "" {
+            continue
         }
+        root := filepath.Join(base, "LinkVideo.Helper")
+        _ = os.RemoveAll(root)
     }
 }
 
@@ -319,8 +364,9 @@ func uninstallProduct(removeData bool, progress progressFunc) error {
     progress(8, "Остановка LinkVideo.Helper…")
     stopHelperProcesses()
     progress(25, "Удаление регистрации Windows…")
-    runCleanup("reg.exe", "delete", uninstallKey, "/f")
-    runCleanup("reg.exe", "delete", legacyInnoKey, "/f")
+    for _, key := range []string{uninstallKey, legacyInnoKey, legacyInnoWowKey} {
+        runCleanup("reg.exe", "delete", key, "/f")
+    }
     progress(38, "Удаление ярлыков…")
     removeShortcuts()
     if removeData {
@@ -329,14 +375,6 @@ func uninstallProduct(removeData bool, progress progressFunc) error {
     }
     progress(62, "Удаление файлов программы…")
     self, _ := os.Executable()
-    for _, entry := range []string{"_internal", "tools", "linkvideo_vpn_helper", "scripts", appExeName, "LinkVideo VPN Helper.exe", "updater.exe"} {
-        target := filepath.Join(dest, entry)
-        if strings.EqualFold(filepath.Clean(target), filepath.Clean(self)) {
-            continue
-        }
-        _ = os.RemoveAll(target)
-    }
-    // Other payload files are safe to remove after known settings are preserved.
     entries, _ := os.ReadDir(dest)
     for _, entry := range entries {
         target := filepath.Join(dest, entry.Name())
@@ -345,7 +383,6 @@ func uninstallProduct(removeData bool, progress progressFunc) error {
         }
         _ = os.RemoveAll(target)
     }
-    progress(95, "Завершение удаления…")
     progress(100, "LinkVideo.Helper удалён")
     return nil
 }
@@ -355,8 +392,9 @@ func scheduleSelfDelete() {
     if err != nil {
         return
     }
-    dest := filepath.Dir(self)
-    cmd := exec.Command("cmd.exe", "/C", fmt.Sprintf(`ping 127.0.0.1 -n 3 >nul & del /f /q "%s" & rmdir /s /q "%s"`, self, dest))
+    installDir := defaultInstallDir()
+    command := fmt.Sprintf(`ping 127.0.0.1 -n 3 >nul & del /f /q "%s" & rmdir /s /q "%s"`, self, installDir)
+    cmd := exec.Command("cmd.exe", "/C", command)
     cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
     _ = cmd.Start()
 }
