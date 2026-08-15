@@ -27,6 +27,8 @@ const (
     uninstallKey = `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\LinkVideo.Helper`
     legacyInnoKey = `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\{8D39F3B2-8D87-4D9F-B5F6-2D7B65F08C21}_is1`
     legacyInnoWowKey = `HKLM\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{8D39F3B2-8D87-4D9F-B5F6-2D7B65F08C21}_is1`
+    createNoWindowFlag = 0x08000000
+    moveFileDelayUntilReboot = 0x00000004
 )
 
 var version = "0.0.0-dev"
@@ -139,7 +141,7 @@ func ensureUninstallerRunsFromTemp() (bool, error) {
 
 func runHidden(name string, args ...string) error {
     cmd := exec.Command(name, args...)
-    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindowFlag}
     if out, err := cmd.CombinedOutput(); err != nil {
         return fmt.Errorf("%s: %w (%s)", name, err, strings.TrimSpace(string(out)))
     }
@@ -401,11 +403,23 @@ func scheduleSelfDelete() {
     if err != nil {
         return
     }
-    installDir := defaultInstallDir()
-    command := fmt.Sprintf(`ping 127.0.0.1 -n 3 >nul & del /f /q "%s" & rmdir /s /q "%s"`, self, installDir)
-    cmd := exec.Command("cmd.exe", "/C", command)
-    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-    _ = cmd.Start()
+    // Program Files is no longer occupied because the uninstaller is running
+    // from its bootstrap copy. Remove the now-empty product directory directly.
+    _ = os.RemoveAll(defaultInstallDir())
+
+    // Windows cannot delete the currently executing bootstrap EXE. Mark it for
+    // deletion at reboot with MoveFileExW instead of starting cmd.exe/ping/del.
+    path, err := syscall.UTF16PtrFromString(self)
+    if err != nil {
+        return
+    }
+    kernel32 := syscall.NewLazyDLL("kernel32.dll")
+    moveFileEx := kernel32.NewProc("MoveFileExW")
+    moveFileEx.Call(
+        uintptr(unsafe.Pointer(path)),
+        0,
+        uintptr(moveFileDelayUntilReboot),
+    )
 }
 
 func launchApplication(appPath string) error {
