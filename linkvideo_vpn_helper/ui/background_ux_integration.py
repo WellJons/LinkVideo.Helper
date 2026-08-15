@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
+import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from PySide6.QtCore import QTimer, Qt
+
+from linkvideo_vpn_helper.services.errors import classify_exception
 
 
 _INSTALLED = False
@@ -37,12 +42,12 @@ def _install_no_console_process_guard() -> None:
 
 
 def _install_inactive_clients_auto_refresh() -> None:
-    """Keep lifecycle data current without throwing a modal over the operator.
+    """Keep lifecycle data current and make its all-server scan deadline-bounded.
 
     The first visit performs the normal visible scan. Later refreshes run every
-    minute using the existing bounded worker path while suppressing only the
-    BusyDialog. Actions stay disabled during the refresh, so a background scan
-    cannot race a disable/delete operation.
+    minute without opening a modal spinner over the operator. Both manual and
+    automatic scans have a hard deadline and abandon stuck RouterOS futures
+    without waiting for executor shutdown.
     """
     from linkvideo_vpn_helper.ui.pages.inactive_clients_page import InactiveClientsPage
 
@@ -60,11 +65,96 @@ def _install_inactive_clients_auto_refresh() -> None:
         self._lv_auto_refresh_running = False
         self._lv_auto_refresh_selection = set()
         self._lv_auto_refresh_current = None
-        self._lv_task_busy_original = None
-        self._lv_task_show_original = None
         self._lv_refresh_timer = QTimer(self)
         self._lv_refresh_timer.setInterval(60_000)
         self._lv_refresh_timer.timeout.connect(lambda: _background_scan(self))
+
+    def patched_scan(self):
+        servers = self.registry.hosts()
+        background = bool(getattr(self, "_lv_auto_refresh_running", False))
+        if not servers:
+            if background:
+                self._lv_auto_refresh_running = False
+                return
+            self.task.show()
+            self.task.warning("Нет активных VPN-серверов", "Включите серверы в настройках.")
+            return
+        if getattr(self, "_cancel_event", None) is not None:
+            return
+
+        cancel_event = threading.Event()
+        self._cancel_event = cancel_event
+        self._busy_kind = "scan"
+        self._set_busy(True)
+        if not background:
+            self.task.show()
+            self.task.busy("Проверяю VPN-серверы", f"Проверено 0 из {len(servers)}", 0)
+
+        def worker():
+            records = []
+            errors = []
+            workers = min(8, max(1, len(servers)))
+            pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="inactive-vpn")
+            futures = {
+                pool.submit(
+                    self.service.list_lifecycle_clients,
+                    server,
+                    self.credentials,
+                    self.INACTIVE_DAYS,
+                    True,
+                ): server
+                for server in servers
+            }
+            pending = set(futures)
+            checked = 0
+            deadline = time.monotonic() + 24.0
+            try:
+                while pending and not cancel_event.is_set():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    done, pending = wait(
+                        pending,
+                        timeout=min(0.4, remaining),
+                        return_when=FIRST_COMPLETED,
+                    )
+                    for future in done:
+                        server = futures[future]
+                        checked += 1
+                        try:
+                            records.extend(future.result())
+                        except Exception as exc:
+                            errors.append((server, classify_exception(exc)))
+                        if not background:
+                            self.progressReady.emit(checked, len(servers), server)
+
+                if cancel_event.is_set():
+                    for future in pending:
+                        future.cancel()
+                    return
+
+                if pending:
+                    for future in pending:
+                        server = futures[future]
+                        future.cancel()
+                        errors.append(
+                            (
+                                server,
+                                classify_exception(
+                                    TimeoutError("VPN-сервер не завершил проверку до общего deadline")
+                                ),
+                            )
+                        )
+                    checked += len(pending)
+            finally:
+                # Critical: never wait here for a broken socket/thread. Its
+                # result is no longer allowed to hold the Qt completion path.
+                pool.shutdown(wait=False, cancel_futures=True)
+
+            if not cancel_event.is_set() and self._cancel_event is cancel_event:
+                self.scanReady.emit(records, errors)
+
+        threading.Thread(target=worker, daemon=True, name="inactive-vpn-scan").start()
 
     def _background_scan(self):
         if (
@@ -72,42 +162,19 @@ def _install_inactive_clients_auto_refresh() -> None:
             or getattr(self, "_cancel_event", None) is not None
             or getattr(self, "_busy_kind", "")
             or not self.isVisible()
+            or not self.registry.hosts()
         ):
             return
         self._lv_auto_refresh_running = True
         self._lv_auto_refresh_selection = set(getattr(self, "_selected_keys", set()))
         current = getattr(self, "current", None)
         self._lv_auto_refresh_current = self._key(current) if current is not None else None
-
-        # Reuse the proven scan/cancel implementation, but do not open a modal
-        # every 60 seconds. Restore these methods as soon as scanReady arrives.
-        self._lv_task_busy_original = self.task.busy
-        self._lv_task_show_original = self.task.show
-        self.task.busy = lambda *args, **kwargs: None
-        self.task.show = lambda *args, **kwargs: None
-        try:
-            self._scan()
-        except Exception:
-            _restore_task(self)
-            self._lv_auto_refresh_running = False
-            raise
-
-    def _restore_task(self):
-        busy = getattr(self, "_lv_task_busy_original", None)
-        show = getattr(self, "_lv_task_show_original", None)
-        if busy is not None:
-            self.task.busy = busy
-        if show is not None:
-            self.task.show = show
-        self._lv_task_busy_original = None
-        self._lv_task_show_original = None
+        patched_scan(self)
 
     def patched_on_scan(self, records, errors):
         was_background = bool(getattr(self, "_lv_auto_refresh_running", False))
         old_selection = set(getattr(self, "_lv_auto_refresh_selection", set()))
         old_current = getattr(self, "_lv_auto_refresh_current", None)
-        if was_background:
-            _restore_task(self)
         original_on_scan(self, records, errors)
         if not was_background:
             return
@@ -125,6 +192,7 @@ def _install_inactive_clients_auto_refresh() -> None:
                     self._sync_card_states()
                     self._render_detail()
                     break
+        self._sync_card_states()
         self._sync_batch_controls()
 
     def patched_activated(self):
@@ -147,6 +215,7 @@ def _install_inactive_clients_auto_refresh() -> None:
                 QTimer.singleShot(120, lambda: _background_scan(self))
 
     InactiveClientsPage.__init__ = patched_init
+    InactiveClientsPage._scan = patched_scan
     InactiveClientsPage._on_scan = patched_on_scan
     InactiveClientsPage.onActivated = patched_activated
     InactiveClientsPage.onDeactivated = patched_deactivated
