@@ -64,7 +64,9 @@ def _migrate_settings(settings: QSettings):
         else:
             legacy = QSettings("LinkVideo", "VPNHelper")
             legacy_theme = str(legacy.value("ui/theme", "", str) or "").lower()
-            settings.setValue("ui/theme_v2", "dark" if "dark" in legacy_theme else "system")
+            # На чистой установке фирменная LinkVideo — стандартная тема.
+            # Явную старую тёмную тему при обновлении у пользователя не отбираем.
+            settings.setValue("ui/theme_v2", "dark" if "dark" in legacy_theme else "linkvideo_2026")
 
     # Если приложение когда-то хранило учётные данные в старом VPNHelper,
     # переносим их только когда актуальные значения отсутствуют.
@@ -100,8 +102,13 @@ def main() -> int:
     settings = QSettings("LinkVideo", "LinkVideo.Helper")
     _migrate_settings(settings)
 
+    # Keep the historical settings key but replace its visible palette/name with
+    # the visual language of LinkVideo.Monitor.
+    from linkvideo_vpn_helper.brand_theme import install_linkvideo_brand_theme
+    install_linkvideo_brand_theme()
+
     from linkvideo_vpn_helper.theme import get_theme_style
-    theme_style = get_theme_style(str(settings.value("ui/theme_v2", "rose_milk", str) or "system"))
+    theme_style = get_theme_style(str(settings.value("ui/theme_v2", "linkvideo_2026", str) or "linkvideo_2026"))
     app.setStyleSheet(theme_style)
 
     saved_username = str(settings.value("username", "", str) or "").strip()
