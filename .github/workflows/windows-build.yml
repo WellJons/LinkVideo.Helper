@@ -22,7 +22,7 @@ concurrency:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,6 +32,12 @@ jobs:
         with:
           python-version: '3.12'
           cache: 'pip'
+
+      - name: Set up Go for next installer
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.x'
+          cache-dependency-path: installer_next/go.mod
 
       - name: Install Python dependencies
         shell: pwsh
@@ -47,11 +53,17 @@ jobs:
         shell: pwsh
         run: choco install innosetup --no-progress -y
 
-      - name: Build and verify full Setup
+      - name: Build and verify current Inno Setup
         shell: cmd
         run: build_setup.bat
 
-      - name: Upload verified Windows build artifact
+      # 3.0.8 develops the replacement installer in parallel. It is intentionally
+      # NOT used by the public update workflow until it passes real-machine tests.
+      - name: Build next LinkVideo installer and uninstaller
+        shell: pwsh
+        run: ./scripts/build_next_installer.ps1
+
+      - name: Upload verified current Windows build
         uses: actions/upload-artifact@v4
         with:
           name: LinkVideo.Helper-build-${{ github.run_number }}-${{ github.sha }}
@@ -60,8 +72,17 @@ jobs:
             release_upload/version.json
           if-no-files-found: error
 
-      # Only a version tag may create/update the private draft release.
-      # Branch and PR builds validate the exact same full Setup before a tag exists.
+      - name: Upload next installer test build
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinkVideo.Helper-next-installer-${{ github.run_number }}-${{ github.sha }}
+          path: |
+            installer_next/output/LinkVideo.Helper_Setup_Next.exe
+            installer_next/output/Uninstall.exe
+          if-no-files-found: error
+
+      # Only a version tag may create/update the current private draft release.
+      # The experimental installer above is never published by this step.
       - name: Create or update private draft Release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
