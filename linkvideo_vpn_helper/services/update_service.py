@@ -235,6 +235,8 @@ class UpdateService:
             headers={"User-Agent": f"LinkVideo.Helper/{APP_VERSION}", "Cache-Control": "no-cache"},
         )
         try:
+            if progress_callback:
+                progress_callback(0)
             with urllib.request.urlopen(request, timeout=60) as response:
                 total = int(response.headers.get("Content-Length", 0) or 0)
                 done = 0
@@ -246,7 +248,7 @@ class UpdateService:
                         handle.write(chunk)
                         done += len(chunk)
                         if progress_callback and total:
-                            progress_callback(min(100, int(done * 100 / total)))
+                            progress_callback(min(99, int(done * 100 / total)))
 
             if not temp_file.exists() or temp_file.stat().st_size < 64 * 1024:
                 raise RuntimeError("Сервер обновлений вернул слишком маленький файл")
@@ -285,13 +287,22 @@ class UpdateService:
             raise
 
     def run_setup(self, setup_path: Path) -> None:
+        """Launch the GUI installer without ever creating an intermediate console."""
         setup_path = Path(setup_path)
         if not setup_path.exists():
             raise FileNotFoundError(f"Файл обновления не найден: {setup_path}")
-        subprocess.Popen(
-            ["cmd", "/c", "start", "", str(setup_path)],
-            shell=False,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
-        )
-        time.sleep(1.5)
+
+        if os.name == "nt":
+            try:
+                os.startfile(str(setup_path))
+            except OSError:
+                flags = (
+                    int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                    | int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+                    | int(getattr(subprocess, "DETACHED_PROCESS", 0))
+                )
+                subprocess.Popen([str(setup_path)], shell=False, creationflags=flags)
+        else:
+            subprocess.Popen([str(setup_path)], shell=False)
+        time.sleep(1.0)
         os._exit(0)
