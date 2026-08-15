@@ -23,6 +23,10 @@ import (
 const (
     manifestURL = "https://raw.githubusercontent.com/WellJons/LinkVideo.Helper.Updates/main/update-manifest.json"
     appExeName   = "LinkVideo.Helper.exe"
+
+    createNewProcessGroup = 0x00000200
+    detachedProcess       = 0x00000008
+    createNoWindow        = 0x08000000
 )
 
 type pendingRequest struct {
@@ -54,10 +58,10 @@ type updateResult struct {
 
 func main() {
     if hasArg("--scheduled") {
-        // Run the worker from a temporary copy. This releases the installed
-        // updater EXE before the patch starts, so future patches can update the
-        // updater itself without falling back to a full Setup.
-        if err := launchTempWorker(); err != nil {
+        // Release the installed updater EXE before patching so the patch may
+        // replace the updater itself. The worker copy lives under Program Files,
+        // not in a user-writable TEMP directory.
+        if err := launchProtectedWorker(); err != nil {
             _ = writeResult(updateResult{Status: "error", Error: err.Error(), At: time.Now().UTC().Format(time.RFC3339)})
             clearPending()
             os.Exit(1)
@@ -67,10 +71,11 @@ func main() {
     if !hasArg("--scheduled-worker") {
         return
     }
-    defer scheduleTempSelfDelete()
 
-    // The normal Helper close event has already been accepted when the task is
-    // triggered. Give Qt a moment to release Program Files before patching.
+    // The protected sidecar is deliberately left in Program Files after exit.
+    // The next run replaces it only after the previous process has finished;
+    // uninstall/full Setup also removes it with the application directory. This
+    // avoids cmd.exe/self-delete helpers completely.
     time.Sleep(1800 * time.Millisecond)
     if err := runScheduled(); err != nil {
         _ = writeResult(updateResult{Status: "error", Error: err.Error(), At: time.Now().UTC().Format(time.RFC3339)})
@@ -79,40 +84,45 @@ func main() {
     }
 }
 
-func launchTempWorker() error {
+func launchProtectedWorker() error {
     self, err := os.Executable()
     if err != nil {
         return err
     }
-    tempDir := filepath.Join(os.TempDir(), "LinkVideo.Helper-SilentUpdater")
-    if err := os.MkdirAll(tempDir, 0o700); err != nil {
-        return err
+    workerDir := filepath.Join(installDir(), ".updater-worker")
+    // A previous sidecar is no longer running once the scheduled task can start
+    // this invocation. Cleaning it here guarantees the worker always matches the
+    // currently installed updater binary.
+    _ = os.RemoveAll(workerDir)
+    if err := os.MkdirAll(workerDir, 0o700); err != nil {
+        return fmt.Errorf("не удалось создать защищённый каталог updater: %w", err)
     }
-    tempExe := filepath.Join(tempDir, fmt.Sprintf("Updater-%d.exe", os.Getpid()))
-    data, err := os.ReadFile(self)
+    workerExe := filepath.Join(workerDir, "LinkVideo.Helper.Updater.Worker.exe")
+    source, err := os.Open(self)
     if err != nil {
         return err
     }
-    if err := os.WriteFile(tempExe, data, 0o700); err != nil {
+    defer source.Close()
+    target, err := os.OpenFile(workerExe, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o700)
+    if err != nil {
         return err
     }
-    cmd := exec.Command(tempExe, "--scheduled-worker")
+    if _, err := io.Copy(target, source); err != nil {
+        target.Close()
+        _ = os.Remove(workerExe)
+        return err
+    }
+    if err := target.Close(); err != nil {
+        _ = os.Remove(workerExe)
+        return err
+    }
+
+    cmd := exec.Command(workerExe, "--scheduled-worker")
     cmd.SysProcAttr = &syscall.SysProcAttr{
         HideWindow:    true,
-        CreationFlags: 0x00000200 | 0x00000008, // CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS
+        CreationFlags: createNewProcessGroup | detachedProcess,
     }
     return cmd.Start()
-}
-
-func scheduleTempSelfDelete() {
-    self, err := os.Executable()
-    if err != nil {
-        return
-    }
-    command := fmt.Sprintf(`ping 127.0.0.1 -n 3 >nul & del /f /q "%s"`, self)
-    cmd := exec.Command("cmd.exe", "/C", command)
-    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x00000008}
-    _ = cmd.Start()
 }
 
 func hasArg(wanted string) bool {
@@ -218,7 +228,7 @@ func runScheduled() error {
     defer cleanupTrustedPatch()
 
     cmd := exec.Command(trustedPatch, "--silent")
-    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
     if out, err := cmd.CombinedOutput(); err != nil {
         detail := strings.TrimSpace(string(out))
         if detail != "" {
@@ -347,7 +357,7 @@ func productVersion(path string) (string, error) {
         "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-Command", script, path,
     )
-    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
     out, err := cmd.CombinedOutput()
     if err != nil {
         return "", fmt.Errorf("не удалось определить установленную версию: %s", strings.TrimSpace(string(out)))
