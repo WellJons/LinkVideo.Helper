@@ -98,8 +98,8 @@ func launchTempWorker() error {
     }
     cmd := exec.Command(tempExe, "--scheduled-worker")
     cmd.SysProcAttr = &syscall.SysProcAttr{
-        HideWindow:     true,
-        CreationFlags:  0x00000200 | 0x00000008, // CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS
+        HideWindow:    true,
+        CreationFlags: 0x00000200 | 0x00000008, // CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS
     }
     return cmd.Start()
 }
@@ -209,7 +209,15 @@ func runScheduled() error {
         return errors.New("подготовленный файл не является Windows EXE")
     }
 
-    cmd := exec.Command(patchPath, "--silent")
+    // Never execute directly from the user-writable staging directory. Copy to
+    // Program Files and verify the official hash again there before CreateProcess.
+    trustedPatch, cleanupTrustedPatch, err := prepareTrustedPatch(patchPath, expectedHash)
+    if err != nil {
+        return err
+    }
+    defer cleanupTrustedPatch()
+
+    cmd := exec.Command(trustedPatch, "--silent")
     cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
     if out, err := cmd.CombinedOutput(); err != nil {
         detail := strings.TrimSpace(string(out))
