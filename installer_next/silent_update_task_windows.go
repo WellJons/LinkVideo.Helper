@@ -81,9 +81,11 @@ func verifySilentUpdateTask(dest string) error {
         `$ErrorActionPreference='Stop';`+
             `$t=Get-ScheduledTask -TaskName '%s';`+
             `if(-not $t){throw 'task missing'};`+
-            `if($t.Principal.UserId -ne 'SYSTEM'){throw 'task principal is not SYSTEM'};`+
+            `$uid=[string]$t.Principal.UserId;`+
+            `if($uid -notin @('SYSTEM','NT AUTHORITY\SYSTEM','S-1-5-18')){throw 'task principal is not SYSTEM'};`+
             `$a=$t.Actions|Select-Object -First 1;`+
-            `if([string]$a.Execute -ne '%s'){throw 'task action mismatch'}`,
+            `if([string]$a.Execute -ne '%s'){throw 'task action mismatch'};`+
+            `if([string]$a.Arguments -ne '--scheduled'){throw 'task arguments mismatch'}`,
         psEscape(silentUpdateTaskName), psEscape(updaterPath),
     )
     if err := runPowerShell(script); err != nil {
