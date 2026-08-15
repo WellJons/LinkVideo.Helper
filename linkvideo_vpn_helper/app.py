@@ -99,6 +99,12 @@ def main() -> int:
     from linkvideo_vpn_helper.ui.port_traffic_inline import install_inline_port_traffic
     install_inline_port_traffic()
 
+    # Exact-version patch releases are downloaded without a confirmation dialog
+    # and applied by the pre-registered SYSTEM updater when Helper closes. Full
+    # installers intentionally keep the normal visible confirmation flow.
+    from linkvideo_vpn_helper.ui.silent_update_integration import install_silent_patch_updates
+    install_silent_patch_updates()
+
     settings = QSettings("LinkVideo", "LinkVideo.Helper")
     _migrate_settings(settings)
 
