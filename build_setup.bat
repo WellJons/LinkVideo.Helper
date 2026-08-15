@@ -68,7 +68,7 @@ if errorlevel 1 (
 )
 
 rem 6. Copy exactly the verified installer to the upload folder.
-echo [6/7] Preparing Google Drive upload file...
+echo [6/7] Preparing verified release file...
 copy /y "%SETUP%" "release_upload\LinkVideo_VPN_Helper_Setup.exe" >nul
 if errorlevel 1 exit /b 1
 
@@ -87,7 +87,6 @@ echo READY: release_upload\version.json
 echo VERSION: %APPVER%
 echo ============================================================
 echo.
-echo 1. Upload Setup as a NEW VERSION of the existing Google Drive setup file.
-echo 2. Only after Setup upload is complete, upload release_upload\version.json
-
-echo Google Drive IDs/URLs remain unchanged.
+echo Primary path: publish this Setup as a GitHub Release asset.
+echo Transition path: upload Setup + version.json to the existing Google Drive files once for 3.0.8 migration.
+echo After migration, Google Drive remains fallback only.
