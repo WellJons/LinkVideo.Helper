@@ -85,6 +85,8 @@ jobs:
           path: |
             installer_next/output/LinkVideo.Helper_Setup_Next.exe
             installer_next/output/Uninstall.exe
+            release_payload/LinkVideo.Helper_Payload_*.zip
+            release_payload/LinkVideo.Helper_Payload_*.json
           if-no-files-found: error
 
       # Only a version tag may create/update the current private draft release.
