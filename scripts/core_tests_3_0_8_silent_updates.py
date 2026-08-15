@@ -50,7 +50,6 @@ assert 'exec.Command(trustedPatch, "--silent")' in updater
 # to Program Files and hashed again before it is executed as SYSTEM.
 assert 'filepath.Join(installDir(), ".update")' in trusted
 assert "sha256File(trustedPath)" in trusted
-assert "actualHash, expectedHash" not in trusted  # comparison is explicit below
 assert "!strings.EqualFold(actualHash, expectedHash)" in trusted
 assert "os.O_EXCL" in trusted
 
