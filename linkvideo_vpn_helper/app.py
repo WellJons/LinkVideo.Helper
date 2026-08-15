@@ -91,6 +91,12 @@ def main() -> int:
     from linkvideo_vpn_helper.ui.operation_cancel_guard import install_operation_cancel_guard
     install_operation_cancel_guard()
 
+    # Port connection tracking is attached only to an opened client card. Search
+    # itself stays conntrack-free and therefore cannot become slower because of
+    # the live per-port indicators.
+    from linkvideo_vpn_helper.ui.port_traffic_inline import install_inline_port_traffic
+    install_inline_port_traffic()
+
     settings = QSettings("LinkVideo", "LinkVideo.Helper")
     _migrate_settings(settings)
 
