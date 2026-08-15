@@ -53,9 +53,22 @@ type updateResult struct {
 }
 
 func main() {
-    if !hasArg("--scheduled") {
+    if hasArg("--scheduled") {
+        // Run the worker from a temporary copy. This releases the installed
+        // updater EXE before the patch starts, so future patches can update the
+        // updater itself without falling back to a full Setup.
+        if err := launchTempWorker(); err != nil {
+            _ = writeResult(updateResult{Status: "error", Error: err.Error(), At: time.Now().UTC().Format(time.RFC3339)})
+            clearPending()
+            os.Exit(1)
+        }
         return
     }
+    if !hasArg("--scheduled-worker") {
+        return
+    }
+    defer scheduleTempSelfDelete()
+
     // The normal Helper close event has already been accepted when the task is
     // triggered. Give Qt a moment to release Program Files before patching.
     time.Sleep(1800 * time.Millisecond)
@@ -64,6 +77,42 @@ func main() {
         clearPending()
         os.Exit(1)
     }
+}
+
+func launchTempWorker() error {
+    self, err := os.Executable()
+    if err != nil {
+        return err
+    }
+    tempDir := filepath.Join(os.TempDir(), "LinkVideo.Helper-SilentUpdater")
+    if err := os.MkdirAll(tempDir, 0o700); err != nil {
+        return err
+    }
+    tempExe := filepath.Join(tempDir, fmt.Sprintf("Updater-%d.exe", os.Getpid()))
+    data, err := os.ReadFile(self)
+    if err != nil {
+        return err
+    }
+    if err := os.WriteFile(tempExe, data, 0o700); err != nil {
+        return err
+    }
+    cmd := exec.Command(tempExe, "--scheduled-worker")
+    cmd.SysProcAttr = &syscall.SysProcAttr{
+        HideWindow:     true,
+        CreationFlags:  0x00000200 | 0x00000008, // CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS
+    }
+    return cmd.Start()
+}
+
+func scheduleTempSelfDelete() {
+    self, err := os.Executable()
+    if err != nil {
+        return
+    }
+    command := fmt.Sprintf(`ping 127.0.0.1 -n 3 >nul & del /f /q "%s"`, self)
+    cmd := exec.Command("cmd.exe", "/C", command)
+    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x00000008}
+    _ = cmd.Start()
 }
 
 func hasArg(wanted string) bool {
