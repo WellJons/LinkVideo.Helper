@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-"""Make cancellable background operations actually cancellable from the UI.
+"""Make interactive searches actually cancellable without weakening mutations.
 
-BusyDialog is shared by many pages.  Historically it swallowed Escape and used
+BusyDialog is shared by many pages. Historically it swallowed Escape and used
 WindowModal unconditionally, which meant an interactive search could block both
 Esc and the main-window close button while a network worker was stuck.
 
-For pages that expose ``cancel_current_action()``, the busy dialog becomes
-non-modal and Escape is routed to that cancellation hook.  Other long-running
-mutations retain the original modal behaviour.
+Only a page with a live ``_cancel_event`` is treated as cancellable. Destructive
+RouterOS mutations on the same page keep the original modal behaviour.
 """
 
 from PySide6.QtCore import Qt
@@ -28,14 +27,17 @@ def _cancel_hook(dialog: BusyDialog):
     cache = getattr(parent, "_page_cache", None)
     current_key = getattr(parent, "_current_key", "")
     page = cache.get(current_key) if isinstance(cache, dict) else None
+    event = getattr(page, "_cancel_event", None)
+    if event is None or getattr(event, "is_set", lambda: True)():
+        return None
     hook = getattr(page, "cancel_current_action", None)
     return hook if callable(hook) else None
 
 
 def _show_centered(dialog: BusyDialog):
-    # A cancellable operation must never disable the main window.  This also
-    # guarantees that Windows' close button still works if a remote socket is
-    # wedged below Python's normal timeout handling.
+    # Search may be cancelled or the application closed even if one remote
+    # socket is wedged. Mutations remain WindowModal and cannot be interrupted
+    # by closing the main window halfway through a RouterOS change.
     dialog.setWindowModality(
         Qt.WindowModality.NonModal if _cancel_hook(dialog) else Qt.WindowModality.WindowModal
     )
@@ -50,8 +52,6 @@ def _reject(dialog: BusyDialog):
                 dialog.hide()
                 return
         except Exception:
-            # Never turn an Escape key into a UI crash.  Fall through to the
-            # original behaviour if a page-specific cancellation hook fails.
             pass
     return _ORIGINAL_REJECT(dialog)
 
