@@ -86,6 +86,11 @@ def main() -> int:
     app.setOrganizationName("LinkVideo")
     app.setQuitOnLastWindowClosed(True)
 
+    # Busy network operations that expose cancel_current_action() must remain
+    # cancellable by Esc and must not disable the main window's close button.
+    from linkvideo_vpn_helper.ui.operation_cancel_guard import install_operation_cancel_guard
+    install_operation_cancel_guard()
+
     settings = QSettings("LinkVideo", "LinkVideo.Helper")
     _migrate_settings(settings)
 
