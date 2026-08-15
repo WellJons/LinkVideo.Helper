@@ -57,19 +57,10 @@ def install_silent_patch_updates() -> None:
                     )
                     self._silent_patch_staged = True
                 except Exception as exc:
-                    # Do not interrupt startup for a background patch. A manual
-                    # update check may still surface the reason through a toast.
+                    # A background patch must never manipulate Qt widgets from
+                    # its worker thread. Keep the error for diagnostics and let
+                    # the next normal update check retry.
                     self._silent_patch_error = str(exc)
-                    if not startup:
-                        try:
-                            self.toast.showMessage(
-                                "Фоновый патч не подготовлен",
-                                str(exc),
-                                5000,
-                            )
-                            self._position_toast()
-                        except Exception:
-                            pass
                 finally:
                     self._silent_patch_download_busy = False
 
