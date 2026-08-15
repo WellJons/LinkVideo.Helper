@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build / release artifacts
+build/
+dist/
+installer_output/
+release_upload/
+patch_output/
+*.spec.bak
+
+# Local logs / temp
+*.log
+*.tmp
+*.temp
+*.bak
+*_patch_backup_*/
+
+# IDE / OS
+.vscode/
+.idea/
+.vs/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# LinkVideo local/private data
+VPN_Backups/
+**/VPN_Backups/
+*.secrets.json
+*.credentials.json
+.env
+.env.*
+!.env.example
+
+# Runtime caches / downloaded tools
+tools/
+ffmpeg.exe
+
+# Generated installers and binaries
+*.exe
+*.msi
+*.zip
+
+# Keep source icon
+!icon.ico
