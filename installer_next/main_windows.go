@@ -13,56 +13,48 @@ import (
 )
 
 const (
-    windowW = 860
-    windowH = 540
+    windowW  = 860
+    windowH  = 540
     sidebarW = 246
 
-    wmCreate = 0x0001
-    wmDestroy = 0x0002
-    wmClose = 0x0010
-    wmPaint = 0x000F
-    wmCommand = 0x0111
+    wmCreate         = 0x0001
+    wmDestroy        = 0x0002
+    wmClose          = 0x0010
+    wmPaint          = 0x000F
+    wmCommand        = 0x0111
     wmCtlColorStatic = 0x0138
-    wmSetFont = 0x0030
-    wmApp = 0x8000
-    msgProgress = wmApp + 1
-    msgWorkDone = wmApp + 2
+    wmSetFont        = 0x0030
+    wmApp            = 0x8000
+    msgProgress      = wmApp + 1
+    msgWorkDone      = wmApp + 2
 
-    wsOverlapped = 0x00000000
-    wsCaption = 0x00C00000
-    wsSysMenu = 0x00080000
-    wsMinimizeBox = 0x00020000
-    wsChild = 0x40000000
-    wsVisible = 0x10000000
-    wsTabStop = 0x00010000
-
-    bsPushButton = 0x00000000
+    wsCaption      = 0x00C00000
+    wsSysMenu      = 0x00080000
+    wsMinimizeBox  = 0x00020000
+    wsChild        = 0x40000000
+    wsVisible      = 0x10000000
+    wsTabStop      = 0x00010000
     bsAutoCheckbox = 0x00000003
-    ssLeft = 0x00000000
 
-    swHide = 0
-    swShow = 5
+    swHide       = 0
+    swShow       = 5
     swShowNormal = 1
-
-    bnClicked = 0
-    bstChecked = 1
-    bmGetCheck = 0x00F0
+    bnClicked    = 0
+    bstChecked   = 1
+    bmGetCheck   = 0x00F0
+    bmSetCheck   = 0x00F1
 
     pbmSetRange32 = 0x0406
-    pbmSetPos = 0x0402
-    pbsSmooth = 0x01
+    pbmSetPos     = 0x0402
+    pbsSmooth     = 0x01
+    transparent   = 1
 
-    transparent = 1
-    dtLeft = 0x0000
-    dtWordBreak = 0x0010
-    colorWindow = 5
-
-    idBack = 1001
-    idNext = 1002
-    idCancel = 1003
-    idDesktop = 1010
+    idBack       = 1001
+    idNext       = 1002
+    idCancel     = 1003
+    idDesktop    = 1010
     idRemoveData = 1011
-    idRunAfter = 1012
+    idRunAfter   = 1012
 )
 
 const (
@@ -75,98 +67,100 @@ const (
 type point struct{ X, Y int32 }
 type rect struct{ Left, Top, Right, Bottom int32 }
 type msg struct {
-    Hwnd uintptr
+    Hwnd    uintptr
     Message uint32
-    WParam uintptr
-    LParam uintptr
-    Time uint32
-    Pt point
+    WParam  uintptr
+    LParam  uintptr
+    Time    uint32
+    Pt      point
     Private uint32
 }
 type paintStruct struct {
-    Hdc uintptr
-    Erase int32
-    RcPaint rect
-    Restore int32
+    Hdc       uintptr
+    Erase     int32
+    RcPaint   rect
+    Restore   int32
     IncUpdate int32
-    Reserved [32]byte
+    Reserved  [32]byte
 }
 type wndClassEx struct {
-    CbSize uint32
-    Style uint32
-    LpfnWndProc uintptr
-    CbClsExtra int32
-    CbWndExtra int32
-    HInstance uintptr
-    HIcon uintptr
-    HCursor uintptr
+    CbSize        uint32
+    Style         uint32
+    LpfnWndProc   uintptr
+    CbClsExtra    int32
+    CbWndExtra    int32
+    HInstance     uintptr
+    HIcon         uintptr
+    HCursor       uintptr
     HbrBackground uintptr
-    LpszMenuName *uint16
+    LpszMenuName  *uint16
     LpszClassName *uint16
-    HIconSm uintptr
+    HIconSm       uintptr
 }
 
 type appUI struct {
-    hwnd uintptr
-    page int
+    hwnd      uintptr
+    page      int
     uninstall bool
-    working bool
-    failed bool
-    appPath string
+    working   bool
+    failed    bool
+    appPath   string
 
-    sidebarBrand uintptr
+    sidebarBrand   uintptr
     sidebarVersion uintptr
-    title uintptr
-    desc uintptr
-    detail uintptr
-    desktop uintptr
-    removeData uintptr
-    runAfter uintptr
-    progress uintptr
-    progressText uintptr
-    back uintptr
-    next uintptr
-    cancel uintptr
+    title          uintptr
+    desc           uintptr
+    detail         uintptr
+    desktop        uintptr
+    removeData     uintptr
+    runAfter       uintptr
+    progress       uintptr
+    progressText   uintptr
+    back           uintptr
+    next           uintptr
+    cancel         uintptr
 
     titleFont uintptr
-    bodyFont uintptr
+    bodyFont  uintptr
     smallFont uintptr
+    sideBrush uintptr
+    bodyBrush uintptr
 
     statusMu sync.Mutex
-    status string
-    workErr error
+    status   string
+    workErr  error
 }
 
 var ui appUI
 
 var (
-    user32 = syscall.NewLazyDLL("user32.dll")
+    user32   = syscall.NewLazyDLL("user32.dll")
     kernel32 = syscall.NewLazyDLL("kernel32.dll")
-    gdi32 = syscall.NewLazyDLL("gdi32.dll")
+    gdi32    = syscall.NewLazyDLL("gdi32.dll")
     comctl32 = syscall.NewLazyDLL("comctl32.dll")
 
     pRegisterClassExW = user32.NewProc("RegisterClassExW")
-    pCreateWindowExW = user32.NewProc("CreateWindowExW")
-    pDefWindowProcW = user32.NewProc("DefWindowProcW")
-    pShowWindow = user32.NewProc("ShowWindow")
-    pUpdateWindow = user32.NewProc("UpdateWindow")
-    pGetMessageW = user32.NewProc("GetMessageW")
+    pCreateWindowExW  = user32.NewProc("CreateWindowExW")
+    pDefWindowProcW   = user32.NewProc("DefWindowProcW")
+    pShowWindow       = user32.NewProc("ShowWindow")
+    pUpdateWindow     = user32.NewProc("UpdateWindow")
+    pGetMessageW      = user32.NewProc("GetMessageW")
     pTranslateMessage = user32.NewProc("TranslateMessage")
     pDispatchMessageW = user32.NewProc("DispatchMessageW")
-    pPostQuitMessage = user32.NewProc("PostQuitMessage")
-    pDestroyWindow = user32.NewProc("DestroyWindow")
-    pPostMessageW = user32.NewProc("PostMessageW")
-    pSendMessageW = user32.NewProc("SendMessageW")
-    pSetWindowTextW = user32.NewProc("SetWindowTextW")
-    pEnableWindow = user32.NewProc("EnableWindow")
-    pBeginPaint = user32.NewProc("BeginPaint")
-    pEndPaint = user32.NewProc("EndPaint")
-    pFillRect = user32.NewProc("FillRect")
-    pGetClientRect = user32.NewProc("GetClientRect")
-    pSetBkMode = gdi32.NewProc("SetBkMode")
-    pSetTextColor = gdi32.NewProc("SetTextColor")
+    pPostQuitMessage  = user32.NewProc("PostQuitMessage")
+    pDestroyWindow    = user32.NewProc("DestroyWindow")
+    pPostMessageW     = user32.NewProc("PostMessageW")
+    pSendMessageW     = user32.NewProc("SendMessageW")
+    pSetWindowTextW   = user32.NewProc("SetWindowTextW")
+    pBeginPaint       = user32.NewProc("BeginPaint")
+    pEndPaint         = user32.NewProc("EndPaint")
+    pFillRect         = user32.NewProc("FillRect")
+    pGetClientRect    = user32.NewProc("GetClientRect")
+    pMessageBoxW      = user32.NewProc("MessageBoxW")
+    pSetBkMode        = gdi32.NewProc("SetBkMode")
+    pSetTextColor     = gdi32.NewProc("SetTextColor")
     pCreateSolidBrush = gdi32.NewProc("CreateSolidBrush")
-    pCreateFontW = gdi32.NewProc("CreateFontW")
+    pCreateFontW      = gdi32.NewProc("CreateFontW")
     pGetModuleHandleW = kernel32.NewProc("GetModuleHandleW")
 )
 
@@ -181,7 +175,7 @@ func rgb(r, g, b byte) uintptr {
 
 func createFont(size int, weight int) uintptr {
     h, _, _ := pCreateFontW.Call(
-        uintptr(int32(-size)), 0, 0, 0, uintptr(weight), 0, 0, 0,
+        uintptr(int64(-size)), 0, 0, 0, uintptr(weight), 0, 0, 0,
         1, 0, 0, 5, 0, uintptr(unsafe.Pointer(wstr("Segoe UI"))),
     )
     return h
@@ -200,13 +194,19 @@ func createControl(class, text string, style uint32, x, y, w, h, id int) uintptr
 }
 
 func setText(hwnd uintptr, text string) {
-    pSetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(wstr(text))))
+    if hwnd != 0 {
+        pSetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(wstr(text))))
+    }
 }
 
 func show(hwnd uintptr, visible bool) {
-    if hwnd == 0 { return }
+    if hwnd == 0 {
+        return
+    }
     cmd := uintptr(swHide)
-    if visible { cmd = swShow }
+    if visible {
+        cmd = swShow
+    }
     pShowWindow.Call(hwnd, cmd)
 }
 
@@ -237,48 +237,45 @@ func renderPage() {
     show(ui.back, ui.page == pageOptions && !ui.working)
     show(ui.cancel, ui.page != pageFinish && !ui.working)
 
-    if ui.page == pageWelcome {
-        setText(ui.title, func() string { if ui.uninstall { return "Удаление LinkVideo.Helper" }; return "Добро пожаловать" }())
+    switch ui.page {
+    case pageWelcome:
         if ui.uninstall {
+            setText(ui.title, "Удаление LinkVideo.Helper")
             setText(ui.desc, "Мастер удалит LinkVideo.Helper с этого компьютера. На следующем шаге можно выбрать, сохранять ли настройки приложения.")
-            setText(ui.detail, "Ваши выгруженные видеозаписи в папке «Видео» не удаляются.")
-            setText(ui.next, "Продолжить")
+            setText(ui.detail, "Выгруженные видеозаписи в папке «Видео» не удаляются.")
         } else {
-            setText(ui.desc, "Установщик LinkVideo.Helper подготовит рабочую среду, обновит существующую версию без потери настроек и зарегистрирует отдельный деинсталлятор.")
-            setText(ui.detail, "Windows x64 · установка в Program Files · существующие настройки сохраняются")
-            setText(ui.next, "Продолжить")
+            setText(ui.title, "Добро пожаловать")
+            setText(ui.desc, "Установщик LinkVideo.Helper обновит существующую версию без потери настроек и зарегистрирует отдельный деинсталлятор.")
+            setText(ui.detail, "Windows x64 · Program Files · существующие настройки сохраняются")
         }
-    } else if ui.page == pageOptions {
+        setText(ui.next, "Продолжить")
+    case pageOptions:
         if ui.uninstall {
             setText(ui.title, "Что удалить?")
-            setText(ui.desc, "Файлы программы будут удалены всегда. Настройки, B2O-сессия и локальный кэш удаляются только по вашему выбору.")
-            setText(ui.detail, "Снятый флажок позволяет позже установить Helper заново с прежними настройками.")
+            setText(ui.desc, "Файлы программы удаляются всегда. Настройки, B2O-сессия и локальный кэш — только по вашему выбору.")
+            setText(ui.detail, "Если флажок снят, следующая установка увидит прежние настройки.")
             setText(ui.next, "Удалить")
         } else {
             setText(ui.title, "Параметры установки")
-            setText(ui.desc, "Программа будет установлена в C:\\Program Files\\LinkVideo.Helper. Предыдущая Inno-версия будет корректно переведена на новый установщик.")
+            setText(ui.desc, "Программа будет установлена в C:\\Program Files\\LinkVideo.Helper. Предыдущая Inno-версия будет переведена на новый установщик.")
             setText(ui.detail, "Настройки и сохранённые учётные данные не перезаписываются.")
             setText(ui.next, "Установить")
         }
-    } else if ui.page == pageProgress {
-        setText(ui.title, func() string { if ui.uninstall { return "Удаление…" }; return "Установка…" }())
+    case pageProgress:
+        if ui.uninstall { setText(ui.title, "Удаление…") } else { setText(ui.title, "Установка…") }
         setText(ui.desc, "Не закрывайте окно до завершения операции.")
         setText(ui.detail, "")
-        show(ui.next, false)
-    } else if ui.page == pageFinish {
-        show(ui.next, true)
-        show(ui.cancel, false)
-        show(ui.back, false)
+    case pageFinish:
         if ui.failed {
             setText(ui.title, "Операция не завершена")
-            setText(ui.desc, "Windows вернула ошибку. Файлы публичного релиза не изменялись — это тест нового установщика.")
+            setText(ui.desc, "Windows вернула ошибку. Это тест нового установщика; публичный канал обновлений не затронут.")
             ui.statusMu.Lock(); detail := ui.status; ui.statusMu.Unlock()
             setText(ui.detail, detail)
             setText(ui.next, "Закрыть")
         } else if ui.uninstall {
             setText(ui.title, "LinkVideo.Helper удалён")
             setText(ui.desc, "Удаление завершено. Окно можно закрыть.")
-            setText(ui.detail, "Спасибо за использование LinkVideo.Helper.")
+            setText(ui.detail, "Видеозаписи пользователя не изменялись.")
             setText(ui.next, "Готово")
         } else {
             setText(ui.title, "Установка завершена")
@@ -295,8 +292,6 @@ func startWork() {
     ui.working = true
     ui.failed = false
     ui.page = pageProgress
-    pEnableWindow.Call(ui.back, 0)
-    pEnableWindow.Call(ui.cancel, 0)
     renderPage()
     go func() {
         progress := func(percent int, status string) {
@@ -336,8 +331,7 @@ func onNext() {
 }
 
 func onBack() {
-    if ui.working { return }
-    if ui.page == pageOptions {
+    if !ui.working && ui.page == pageOptions {
         ui.page = pageWelcome
         renderPage()
     }
@@ -350,20 +344,22 @@ func wndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
         ui.titleFont = createFont(28, 600)
         ui.bodyFont = createFont(17, 400)
         ui.smallFont = createFont(14, 400)
+        ui.sideBrush, _, _ = pCreateSolidBrush.Call(rgb(36, 103, 235))
+        ui.bodyBrush, _, _ = pCreateSolidBrush.Call(rgb(248, 250, 253))
 
-        ui.sidebarBrand = createControl("STATIC", "LinkVideo", wsChild|wsVisible|ssLeft, 28, 44, 190, 34, 0)
-        ui.sidebarVersion = createControl("STATIC", "HELPER  ·  "+version, wsChild|wsVisible|ssLeft, 28, 84, 190, 26, 0)
-        ui.title = createControl("STATIC", "", wsChild|wsVisible|ssLeft, sidebarW+34, 52, 540, 44, 0)
-        ui.desc = createControl("STATIC", "", wsChild|wsVisible|ssLeft, sidebarW+34, 112, 530, 86, 0)
-        ui.detail = createControl("STATIC", "", wsChild|wsVisible|ssLeft, sidebarW+34, 210, 530, 62, 0)
-        ui.desktop = createControl("BUTTON", "Создать ярлык на рабочем столе", wsChild|wsVisible|wsTabStop|bsAutoCheckbox, sidebarW+34, 292, 420, 28, idDesktop)
-        ui.removeData = createControl("BUTTON", "Удалить настройки, B2O-сессию и локальный кэш", wsChild|wsVisible|wsTabStop|bsAutoCheckbox, sidebarW+34, 292, 500, 28, idRemoveData)
-        ui.runAfter = createControl("BUTTON", "Запустить LinkVideo.Helper", wsChild|wsVisible|wsTabStop|bsAutoCheckbox, sidebarW+34, 292, 420, 28, idRunAfter)
+        ui.sidebarBrand = createControl("STATIC", "LinkVideo", wsChild|wsVisible, 28, 44, 190, 34, 0)
+        ui.sidebarVersion = createControl("STATIC", "HELPER  ·  "+version, wsChild|wsVisible, 28, 84, 190, 26, 0)
+        ui.title = createControl("STATIC", "", wsChild|wsVisible, sidebarW+34, 52, 540, 44, 0)
+        ui.desc = createControl("STATIC", "", wsChild|wsVisible, sidebarW+34, 112, 530, 86, 0)
+        ui.detail = createControl("STATIC", "", wsChild|wsVisible, sidebarW+34, 210, 530, 62, 0)
+        ui.desktop = createControl("BUTTON", "Создать ярлык на рабочем столе", wsChild|wsVisible|wsTabStop|bsAutoCheckbox, sidebarW+34, 292, 430, 28, idDesktop)
+        ui.removeData = createControl("BUTTON", "Удалить настройки, B2O-сессию и локальный кэш", wsChild|wsVisible|wsTabStop|bsAutoCheckbox, sidebarW+34, 292, 510, 28, idRemoveData)
+        ui.runAfter = createControl("BUTTON", "Запустить LinkVideo.Helper", wsChild|wsVisible|wsTabStop|bsAutoCheckbox, sidebarW+34, 292, 430, 28, idRunAfter)
         ui.progress = createControl("msctls_progress32", "", wsChild|pbsSmooth, sidebarW+34, 292, 500, 22, 0)
-        ui.progressText = createControl("STATIC", "Подготовка…", wsChild|ssLeft, sidebarW+34, 326, 500, 56, 0)
-        ui.back = createControl("BUTTON", "Назад", wsChild|wsVisible|wsTabStop|bsPushButton, sidebarW+34, 448, 110, 38, idBack)
-        ui.cancel = createControl("BUTTON", "Отмена", wsChild|wsVisible|wsTabStop|bsPushButton, sidebarW+300, 448, 110, 38, idCancel)
-        ui.next = createControl("BUTTON", "Продолжить", wsChild|wsVisible|wsTabStop|bsPushButton, sidebarW+420, 448, 126, 38, idNext)
+        ui.progressText = createControl("STATIC", "Подготовка…", wsChild, sidebarW+34, 326, 500, 56, 0)
+        ui.back = createControl("BUTTON", "Назад", wsChild|wsVisible|wsTabStop, sidebarW+34, 448, 110, 38, idBack)
+        ui.cancel = createControl("BUTTON", "Отмена", wsChild|wsVisible|wsTabStop, sidebarW+300, 448, 110, 38, idCancel)
+        ui.next = createControl("BUTTON", "Продолжить", wsChild|wsVisible|wsTabStop, sidebarW+420, 448, 126, 38, idNext)
 
         setFont(ui.sidebarBrand, ui.titleFont)
         setFont(ui.sidebarVersion, ui.smallFont)
@@ -372,8 +368,8 @@ func wndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
         setFont(ui.detail, ui.smallFont)
         for _, h := range []uintptr{ui.desktop, ui.removeData, ui.runAfter, ui.progressText, ui.back, ui.cancel, ui.next} { setFont(h, ui.smallFont) }
         pSendMessageW.Call(ui.progress, pbmSetRange32, 0, 100)
-        pSendMessageW.Call(ui.desktop, 0x00F1, bstChecked, 0)
-        pSendMessageW.Call(ui.runAfter, 0x00F1, bstChecked, 0)
+        pSendMessageW.Call(ui.desktop, bmSetCheck, bstChecked, 0)
+        pSendMessageW.Call(ui.runAfter, bmSetCheck, bstChecked, 0)
         renderPage()
         return 0
     case wmCommand:
@@ -398,32 +394,26 @@ func wndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
         ui.failed = wParam != 0
         ui.page = pageFinish
         renderPage()
-        if ui.uninstall && !ui.failed {
-            scheduleSelfDelete()
-        }
+        if ui.uninstall && !ui.failed { scheduleSelfDelete() }
         return 0
     case wmCtlColorStatic:
         hdc := wParam
         pSetBkMode.Call(hdc, transparent)
         target := lParam
         if target == ui.sidebarBrand || target == ui.sidebarVersion {
-            pSetTextColor.Call(hdc, rgb(255,255,255))
-            brush, _, _ := pCreateSolidBrush.Call(rgb(36,103,235))
-            return brush
+            pSetTextColor.Call(hdc, rgb(255, 255, 255))
+            return ui.sideBrush
         }
-        pSetTextColor.Call(hdc, rgb(24,35,52))
-        brush, _, _ := pCreateSolidBrush.Call(rgb(248,250,253))
-        return brush
+        pSetTextColor.Call(hdc, rgb(24, 35, 52))
+        return ui.bodyBrush
     case wmPaint:
         var ps paintStruct
         hdc, _, _ := pBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
         var r rect
         pGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&r)))
-        bg, _, _ := pCreateSolidBrush.Call(rgb(248,250,253))
-        pFillRect.Call(hdc, uintptr(unsafe.Pointer(&r)), bg)
-        side := rect{Left:0, Top:0, Right:sidebarW, Bottom:r.Bottom}
-        blue, _, _ := pCreateSolidBrush.Call(rgb(36,103,235))
-        pFillRect.Call(hdc, uintptr(unsafe.Pointer(&side)), blue)
+        pFillRect.Call(hdc, uintptr(unsafe.Pointer(&r)), ui.bodyBrush)
+        side := rect{Left: 0, Top: 0, Right: sidebarW, Bottom: r.Bottom}
+        pFillRect.Call(hdc, uintptr(unsafe.Pointer(&side)), ui.sideBrush)
         pEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
         return 0
     case wmClose:
@@ -437,11 +427,15 @@ func wndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
     return ret
 }
 
+func showError(text string) {
+    pMessageBoxW.Call(0, uintptr(unsafe.Pointer(wstr(text))), uintptr(unsafe.Pointer(wstr(productName))), 0x10)
+}
+
 func runQuietUninstall() int {
     ok, err := ensureElevated()
     if err != nil { return 2 }
     if !ok { return 0 }
-    if err := uninstallProduct(false, func(int,string){}); err != nil { return 3 }
+    if err := uninstallProduct(false, func(int, string) {}); err != nil { return 3 }
     scheduleSelfDelete()
     return 0
 }
@@ -453,11 +447,12 @@ func main() {
     }
     elevated, err := ensureElevated()
     if err != nil {
-        syscall.MessageBox(0, wstr(err.Error()), wstr(productName), 0x10)
+        showError(err.Error())
         return
     }
     if !elevated { return }
 
+    _ = comctl32.Load()
     ui.uninstall = buildMode == "uninstaller"
     ui.page = pageWelcome
 
@@ -467,24 +462,29 @@ func main() {
         CbSize: uint32(unsafe.Sizeof(wndClassEx{})),
         LpfnWndProc: syscall.NewCallback(wndProc),
         HInstance: hinst,
-        HCursor: 0,
-        HbrBackground: colorWindow + 1,
+        HbrBackground: 6,
         LpszClassName: className,
     }
-    if atom, _, _ := pRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc))); atom == 0 {
+    atom, _, _ := pRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
+    if atom == 0 {
+        showError("Не удалось зарегистрировать окно установщика")
         return
     }
+
     title := productName + " — установка"
     if ui.uninstall { title = productName + " — удаление" }
     hwnd, _, _ := pCreateWindowExW.Call(
         0,
         uintptr(unsafe.Pointer(className)),
         uintptr(unsafe.Pointer(wstr(title))),
-        wsOverlapped|wsCaption|wsSysMenu|wsMinimizeBox,
+        wsCaption|wsSysMenu|wsMinimizeBox,
         0x80000000, 0x80000000, windowW, windowH,
         0, 0, hinst, 0,
     )
-    if hwnd == 0 { return }
+    if hwnd == 0 {
+        showError("Не удалось открыть окно установщика")
+        return
+    }
     ui.hwnd = hwnd
     pShowWindow.Call(hwnd, swShowNormal)
     pUpdateWindow.Call(hwnd)
