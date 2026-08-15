@@ -5,6 +5,8 @@ Set-Location $root
 $versionLine = Select-String -Path 'linkvideo_vpn_helper/version.py' -Pattern '^APP_VERSION\s*=\s*["'']([^"'']+)["'']' | Select-Object -First 1
 if (-not $versionLine) { throw 'APP_VERSION not found' }
 $version = $versionLine.Matches[0].Groups[1].Value
+$versionParts = @($version.Split('.') | ForEach-Object { [int]$_ })
+while ($versionParts.Count -lt 4) { $versionParts += 0 }
 
 $appDir = Join-Path $root 'dist\LinkVideo.Helper'
 if (-not (Test-Path (Join-Path $appDir 'LinkVideo.Helper.exe'))) {
@@ -15,29 +17,45 @@ $installerDir = Join-Path $root 'installer_next'
 $outputDir = Join-Path $installerDir 'output'
 $payloadPath = Join-Path $installerDir 'payload.zip'
 $resourcePath = Join-Path $installerDir 'resource.syso'
+$versionInfoPath = Join-Path $installerDir 'versioninfo.generated.json'
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $outputDir '*.exe')
 
 function New-VersionResource([string]$Description, [string]$OriginalName, [string]$InternalName) {
     Remove-Item -Force -ErrorAction SilentlyContinue $resourcePath
+    # goversioninfo always reads a JSON config before applying CLI overrides.
+    # Keep the generated file minimal and explicit; numeric components are passed
+    # below so Windows ProductVersion is deterministic for updater validation.
+    Set-Content -LiteralPath $versionInfoPath -Value '{}' -Encoding utf8NoBOM
+    $iconPath = Join-Path $root 'icon.ico'
     Push-Location $installerDir
     try {
-        # Pinned generator: resource.syso is consumed automatically by go build.
         go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 `
             -64 `
-            -icon=(Join-Path $root 'icon.ico') `
-            -o='resource.syso' `
-            -file-version=$version `
-            -product-version=$version `
-            -product-name='LinkVideo.Helper' `
-            -description=$Description `
-            -original-name=$OriginalName `
-            -internal-name=$InternalName
+            -icon $iconPath `
+            -o 'resource.syso' `
+            -company 'LinkVideo' `
+            -file-version $version `
+            -product-version $version `
+            -product-name 'LinkVideo.Helper' `
+            -description $Description `
+            -original-name $OriginalName `
+            -internal-name $InternalName `
+            -ver-major $versionParts[0] `
+            -ver-minor $versionParts[1] `
+            -ver-patch $versionParts[2] `
+            -ver-build $versionParts[3] `
+            -product-ver-major $versionParts[0] `
+            -product-ver-minor $versionParts[1] `
+            -product-ver-patch $versionParts[2] `
+            -product-ver-build $versionParts[3] `
+            $versionInfoPath
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path $resourcePath)) {
             throw 'Failed to generate Windows version/icon resource'
         }
     } finally {
         Pop-Location
+        Remove-Item -Force -ErrorAction SilentlyContinue $versionInfoPath
     }
 }
 
@@ -78,8 +96,11 @@ foreach ($file in @($setup, $uninstall)) {
     if ([string]::IsNullOrWhiteSpace($productVersion)) {
         throw "$($item.Name) has no ProductVersion"
     }
-    $normalized = ($productVersion -replace '\.0$','')
-    if ($normalized -ne $version -and $productVersion -ne $version) {
+    $productParts = @($productVersion.Split('.') | ForEach-Object { [int]($_ -replace '[^0-9].*$','') })
+    while ($productParts.Count -gt 1 -and $productParts[-1] -eq 0) { $productParts = $productParts[0..($productParts.Count-2)] }
+    $expectedParts = @($versionParts)
+    while ($expectedParts.Count -gt 1 -and $expectedParts[-1] -eq 0) { $expectedParts = $expectedParts[0..($expectedParts.Count-2)] }
+    if (($productParts -join '.') -ne ($expectedParts -join '.')) {
         throw "$($item.Name) ProductVersion is '$productVersion', expected '$version'"
     }
     $hash = (Get-FileHash -Algorithm SHA256 $file).Hash.ToLowerInvariant()
@@ -92,4 +113,5 @@ python scripts/make_release_payload.py --source $appDir --version $version --out
 
 Remove-Item -Force -ErrorAction SilentlyContinue $payloadPath
 Remove-Item -Force -ErrorAction SilentlyContinue $resourcePath
+Remove-Item -Force -ErrorAction SilentlyContinue $versionInfoPath
 Write-Host 'NEXT INSTALLER BUILD OK'
