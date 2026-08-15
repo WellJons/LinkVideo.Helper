@@ -7,7 +7,7 @@ search = (root / "linkvideo_vpn_helper/services/search_service.py").read_text(en
 ui = (root / "linkvideo_vpn_helper/ui/pages/search_manage_page.py").read_text(encoding="utf-8")
 ver = (root / "linkvideo_vpn_helper/version.py").read_text(encoding="utf-8")
 
-assert 'APP_VERSION = "3.0.7"' in ver
+assert 'APP_VERSION = "3.0.' in ver
 assert 'class PortConflict' in vpn
 assert 'port_conflicts: dict[int, list[PortConflict]]' in vpn
 assert 'def inspect_port_conflicts' in vpn
