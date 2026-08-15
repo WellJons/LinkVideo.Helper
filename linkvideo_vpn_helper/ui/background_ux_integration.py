@@ -145,7 +145,6 @@ def _install_inactive_clients_auto_refresh() -> None:
                                 ),
                             )
                         )
-                    checked += len(pending)
             finally:
                 # Critical: never wait here for a broken socket/thread. Its
                 # result is no longer allowed to hold the Qt completion path.
@@ -223,10 +222,97 @@ def _install_inactive_clients_auto_refresh() -> None:
     InactiveClientsPage._lv_auto_refresh_installed = True
 
 
+def _install_vpn_server_refresh_deadline() -> None:
+    """Make the already-automatic VPN dashboard refresh impossible to hang.
+
+    The page already refreshes every 20 seconds and suppresses its modal during
+    timer refreshes. This layer keeps that UX but adds Esc cancellation and a
+    hard deadline so one broken RouterOS/API call cannot hold the dashboard.
+    """
+    from linkvideo_vpn_helper.ui.pages.vpn_servers_page import VPNServersPage
+
+    if getattr(VPNServersPage, "_lv_deadline_refresh_installed", False):
+        return
+
+    original_on_stats = VPNServersPage._on_stats
+
+    def patched_refresh(self, silent: bool = False):
+        if self._busy:
+            return
+        servers = self.registry.hosts()
+        if not servers:
+            self.task.show()
+            self.task.warning("Нет VPN-серверов", "Включите серверы в настройках.")
+            return
+
+        cancel_event = threading.Event()
+        self._cancel_event = cancel_event
+        self._set_busy(True)
+        self._refresh_silent_mode = bool(silent)
+        if not silent:
+            self.task.show()
+            self.task.busy("Проверяю VPN-серверы", f"Серверов: {len(servers)}")
+
+        def one(host: str):
+            stat = self.service.analyze_server_quick(host, self.credentials)
+            auto = self.automation.get_status(host, self.credentials)
+            return stat, auto
+
+        def worker():
+            rows = []
+            pool = ThreadPoolExecutor(max_workers=min(8, len(servers)), thread_name_prefix="vpn-dashboard")
+            futures = {pool.submit(one, host): host for host in servers}
+            pending = set(futures)
+            deadline = time.monotonic() + 20.0
+            try:
+                while pending and not cancel_event.is_set():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    done, pending = wait(
+                        pending,
+                        timeout=min(0.35, remaining),
+                        return_when=FIRST_COMPLETED,
+                    )
+                    for future in done:
+                        host = futures[future]
+                        try:
+                            stat, auto = future.result()
+                            rows.append((host, stat, auto, None))
+                        except Exception as exc:
+                            rows.append((host, None, None, classify_exception(exc).message))
+
+                if cancel_event.is_set():
+                    for future in pending:
+                        future.cancel()
+                    return
+
+                for future in pending:
+                    host = futures[future]
+                    future.cancel()
+                    rows.append((host, None, None, "Сервер не ответил до общего deadline"))
+            finally:
+                pool.shutdown(wait=False, cancel_futures=True)
+
+            if not cancel_event.is_set() and self._cancel_event is cancel_event:
+                self.statsReady.emit(rows)
+
+        threading.Thread(target=worker, daemon=True, name="vpn-dashboard-refresh").start()
+
+    def patched_on_stats(self, rows):
+        self._cancel_event = None
+        return original_on_stats(self, rows)
+
+    VPNServersPage.refresh = patched_refresh
+    VPNServersPage._on_stats = patched_on_stats
+    VPNServersPage._lv_deadline_refresh_installed = True
+
+
 def install_background_ux() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
     _install_no_console_process_guard()
     _install_inactive_clients_auto_refresh()
+    _install_vpn_server_refresh_deadline()
     _INSTALLED = True
