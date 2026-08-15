@@ -72,4 +72,24 @@ assert "CreationFlags: createNoWindowFlag" in patcher
 assert 'filepath.Join(installDir(), ".updater-worker")' in updater
 assert "os.TempDir()" not in updater
 
+# Guard the whole runtime tree, not only the files touched in this PR. Build
+# scripts may use cmd by design, but the installed GUI/updater runtime may not
+# spawn a console shell as an implementation detail.
+runtime_roots = [
+    ROOT / "linkvideo_vpn_helper",
+    ROOT / "installer_next",
+    ROOT / "patcher",
+    ROOT / "silent_updater",
+]
+for runtime_root in runtime_roots:
+    for path in runtime_root.rglob("*"):
+        if path.suffix.lower() not in {".py", ".go"} or not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        assert "os.system(" not in text, f"console shell API in runtime: {path.relative_to(ROOT)}"
+        assert 'exec.Command("cmd.exe"' not in text, f"cmd.exe in runtime: {path.relative_to(ROOT)}"
+        assert 'exec.Command("cmd"' not in text, f"cmd in runtime: {path.relative_to(ROOT)}"
+        assert '["cmd", "/c"' not in text.lower(), f"cmd /c in runtime: {path.relative_to(ROOT)}"
+        assert '["cmd.exe", "/c"' not in text.lower(), f"cmd.exe /c in runtime: {path.relative_to(ROOT)}"
+
 print("CORE TESTS 3.0.8 BACKGROUND UX / NO-CONSOLE OK")
