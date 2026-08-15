@@ -14,6 +14,7 @@ if (-not (Test-Path (Join-Path $appDir 'LinkVideo.Helper.exe'))) {
 }
 
 $installerDir = Join-Path $root 'installer_next'
+$silentUpdaterDir = Join-Path $root 'silent_updater'
 $outputDir = Join-Path $installerDir 'output'
 $payloadPath = Join-Path $installerDir 'payload.zip'
 $resourcePath = Join-Path $installerDir 'resource.syso'
@@ -60,32 +61,48 @@ function New-VersionResource([string]$Description, [string]$OriginalName, [strin
 }
 
 Write-Host "[Next installer] Version $version"
-Write-Host '[1/5] Building standalone uninstaller...'
+Write-Host '[1/6] Building standalone uninstaller...'
 python -c "import zipfile; zipfile.ZipFile(r'$payloadPath','w').close()"
 New-VersionResource 'LinkVideo.Helper Uninstaller' 'Uninstall.exe' 'LinkVideo.Helper.Uninstall'
 Push-Location $installerDir
 try {
     go build -trimpath -ldflags "-H=windowsgui -X main.version=$version -X main.buildMode=uninstaller" -o (Join-Path $outputDir 'Uninstall.exe') .
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to build Uninstall.exe' }
 } finally {
     Pop-Location
     Remove-Item -Force -ErrorAction SilentlyContinue $resourcePath
 }
 
-Write-Host '[2/5] Preparing application payload...'
+Write-Host '[2/6] Building privileged silent updater...'
+$updaterOutput = Join-Path $appDir 'LinkVideo.Helper.Updater.exe'
+Remove-Item -Force -ErrorAction SilentlyContinue $updaterOutput
+Push-Location $silentUpdaterDir
+try {
+    go build -trimpath -ldflags '-H=windowsgui' -o $updaterOutput .
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to build LinkVideo.Helper.Updater.exe' }
+} finally {
+    Pop-Location
+}
+if (-not (Test-Path $updaterOutput) -or (Get-Item $updaterOutput).Length -lt 200000) {
+    throw 'Silent updater output is missing or unexpectedly small'
+}
+
+Write-Host '[3/6] Preparing application payload...'
 Copy-Item -Force (Join-Path $outputDir 'Uninstall.exe') (Join-Path $appDir 'Uninstall.exe')
 python -c "import pathlib,zipfile; root=pathlib.Path(r'$appDir'); out=pathlib.Path(r'$payloadPath'); z=zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED,compresslevel=9); [(z.write(p,p.relative_to(root).as_posix())) for p in root.rglob('*') if p.is_file()]; z.close()"
 
-Write-Host '[3/5] Building one-file LinkVideo installer...'
+Write-Host '[4/6] Building one-file LinkVideo installer...'
 New-VersionResource 'LinkVideo.Helper Setup' 'LinkVideo.Helper_Setup.exe' 'LinkVideo.Helper.Setup'
 Push-Location $installerDir
 try {
     go build -trimpath -ldflags "-H=windowsgui -X main.version=$version -X main.buildMode=installer" -o (Join-Path $outputDir 'LinkVideo.Helper_Setup_Next.exe') .
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to build LinkVideo.Helper_Setup_Next.exe' }
 } finally {
     Pop-Location
     Remove-Item -Force -ErrorAction SilentlyContinue $resourcePath
 }
 
-Write-Host '[4/5] Verifying installer files and ProductVersion...'
+Write-Host '[5/6] Verifying installer files, updater and ProductVersion...'
 $setup = Join-Path $outputDir 'LinkVideo.Helper_Setup_Next.exe'
 $uninstall = Join-Path $outputDir 'Uninstall.exe'
 foreach ($file in @($setup, $uninstall)) {
@@ -106,8 +123,11 @@ foreach ($file in @($setup, $uninstall)) {
     $hash = (Get-FileHash -Algorithm SHA256 $file).Hash.ToLowerInvariant()
     Write-Host "$($item.Name): $([math]::Round($item.Length/1MB,2)) MB | ProductVersion $productVersion | SHA256 $hash"
 }
+$updaterItem = Get-Item $updaterOutput
+$updaterHash = (Get-FileHash -Algorithm SHA256 $updaterOutput).Hash.ToLowerInvariant()
+Write-Host "$($updaterItem.Name): $([math]::Round($updaterItem.Length/1MB,2)) MB | SHA256 $updaterHash"
 
-Write-Host '[5/5] Creating private payload baseline for future patches...'
+Write-Host '[6/6] Creating private payload baseline for future patches...'
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $root 'release_payload')
 python scripts/make_release_payload.py --source $appDir --version $version --out-dir (Join-Path $root 'release_payload')
 
