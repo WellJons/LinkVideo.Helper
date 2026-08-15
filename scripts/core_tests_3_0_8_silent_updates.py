@@ -8,6 +8,7 @@ app = (ROOT / "linkvideo_vpn_helper/app.py").read_text(encoding="utf-8")
 installer = (ROOT / "installer_next/silent_update_task_windows.go").read_text(encoding="utf-8")
 backend = (ROOT / "installer_next/backend_windows.go").read_text(encoding="utf-8")
 updater = (ROOT / "silent_updater/main_windows.go").read_text(encoding="utf-8")
+trusted = (ROOT / "silent_updater/trusted_patch_windows.go").read_text(encoding="utf-8")
 patcher = (ROOT / "patcher/silent_mode_windows.go").read_text(encoding="utf-8")
 build = (ROOT / "scripts/build_next_installer.ps1").read_text(encoding="utf-8")
 
@@ -42,7 +43,16 @@ assert "raw.githubusercontent.com/WellJons/LinkVideo.Helper.Updates/main/update-
 assert "findPatch(manifest.Patches, installed)" in updater
 assert "sha256File(patchPath)" in updater
 assert "actualHash != expectedHash" in updater
-assert 'exec.Command(patchPath, "--silent")' in updater
+assert "prepareTrustedPatch(patchPath, expectedHash)" in updater
+assert 'exec.Command(trustedPatch, "--silent")' in updater
+
+# Close the hash-to-exec replacement window: the verified staging EXE is copied
+# to Program Files and hashed again before it is executed as SYSTEM.
+assert 'filepath.Join(installDir(), ".update")' in trusted
+assert "sha256File(trustedPath)" in trusted
+assert "actualHash, expectedHash" not in trusted  # comparison is explicit below
+assert "!strings.EqualFold(actualHash, expectedHash)" in trusted
+assert "os.O_EXCL" in trusted
 
 # The updater runs its worker from TEMP so a patch may replace the installed
 # updater itself. The patcher silent path never shows UI or starts Helper from
