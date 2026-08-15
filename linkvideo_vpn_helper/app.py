@@ -99,6 +99,11 @@ def main() -> int:
     from linkvideo_vpn_helper.ui.port_traffic_inline import install_inline_port_traffic
     install_inline_port_traffic()
 
+    # Search completion and inline port rows have separate rendering lifecycles.
+    # Keep the floating busy dialog and custom item widgets synchronized.
+    from linkvideo_vpn_helper.ui.search_visual_fixes import install_search_visual_fixes
+    install_search_visual_fixes()
+
     # Exact-version patch releases are downloaded without a confirmation dialog
     # and applied by the pre-registered SYSTEM updater when Helper closes. Full
     # installers intentionally keep the normal visible confirmation flow.
@@ -108,8 +113,8 @@ def main() -> int:
     settings = QSettings("LinkVideo", "LinkVideo.Helper")
     _migrate_settings(settings)
 
-    # Keep the historical settings key but replace its visible palette/name with
-    # the visual language of LinkVideo.Monitor.
+    # Keep the historical settings key but expose it under the LinkVideo name.
+    # Runtime colors remain the balanced Helper palette from theme.py.
     from linkvideo_vpn_helper.brand_theme import install_linkvideo_brand_theme
     install_linkvideo_brand_theme()
 
