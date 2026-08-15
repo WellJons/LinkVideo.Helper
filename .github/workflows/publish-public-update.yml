@@ -1,0 +1,156 @@
+name: Publish public update
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish, for example v3.0.8
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      UPDATES_REPO: WellJons/LinkVideo.Helper.Updates
+      GH_TOKEN: ${{ secrets.UPDATES_REPO_TOKEN }}
+
+    steps:
+      - name: Resolve source release tag
+        id: release
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${{ github.event.release.tag_name }}"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "Release tag is empty" >&2
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check update repository token
+        shell: bash
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "Repository secret UPDATES_REPO_TOKEN is not configured." >&2
+            exit 1
+          fi
+
+      - name: Download private release assets
+        env:
+          SOURCE_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          mkdir -p release-files
+          GH_TOKEN="$SOURCE_TOKEN" gh release download "${{ steps.release.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir release-files \
+            --pattern '*Setup.exe'
+          GH_TOKEN="$SOURCE_TOKEN" gh release download "${{ steps.release.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir release-files \
+            --pattern 'LinkVideo.Helper_Patch_*.exe' || true
+          ls -lah release-files
+          SETUP_FILE="$(find release-files -maxdepth 1 -type f -name '*Setup.exe' | head -n 1)"
+          if [ -z "$SETUP_FILE" ]; then
+            echo "Setup executable was not found in the source release." >&2
+            exit 1
+          fi
+          echo "SETUP_FILE=$SETUP_FILE" >> "$GITHUB_ENV"
+          echo "SETUP_NAME=$(basename "$SETUP_FILE")" >> "$GITHUB_ENV"
+
+      - name: Calculate installer SHA-256
+        shell: bash
+        run: |
+          SHA256="$(sha256sum "$SETUP_FILE" | awk '{print $1}')"
+          echo "SETUP_SHA256=$SHA256" >> "$GITHUB_ENV"
+          echo "$SHA256  $SETUP_NAME"
+
+      - name: Publish public release assets
+        shell: bash
+        run: |
+          TAG="${{ steps.release.outputs.tag }}"
+          VERSION="${{ steps.release.outputs.version }}"
+          mapfile -t ASSETS < <(find release-files -maxdepth 1 -type f -name '*.exe' -print)
+          if [ "${#ASSETS[@]}" -eq 0 ]; then
+            echo "No release EXE assets found" >&2
+            exit 1
+          fi
+          if gh release view "$TAG" --repo "$UPDATES_REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${ASSETS[@]}" --repo "$UPDATES_REPO" --clobber
+          else
+            ARGS=(release create "$TAG" "${ASSETS[@]}" --repo "$UPDATES_REPO" --title "LinkVideo.Helper $VERSION" --notes "Публичный канал обновлений LinkVideo.Helper. Исходный код хранится в приватном репозитории.")
+            if [[ "$TAG" == *-* ]]; then
+              ARGS+=(--prerelease)
+            fi
+            gh "${ARGS[@]}"
+          fi
+
+      - name: Update public manifest
+        shell: bash
+        run: |
+          TAG="${{ steps.release.outputs.tag }}"
+          VERSION="${{ steps.release.outputs.version }}"
+          DOWNLOAD_URL="https://github.com/$UPDATES_REPO/releases/download/$TAG/$SETUP_NAME"
+          rm -rf updates-repo
+          gh repo clone "$UPDATES_REPO" updates-repo
+          python3 - "$VERSION" "$TAG" "$DOWNLOAD_URL" "$SETUP_SHA256" "$UPDATES_REPO" "$PWD/release-files" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import re
+          import sys
+
+          version, tag, setup_url, setup_sha, repo, assets_dir = sys.argv[1:7]
+          patches = {}
+          assets = pathlib.Path(assets_dir)
+          pattern = re.compile(r"^LinkVideo\.Helper_Patch_(\d+(?:\.\d+){1,3})_to_(\d+(?:\.\d+){1,3})\.exe$")
+          for path in assets.glob("LinkVideo.Helper_Patch_*.exe"):
+              match = pattern.match(path.name)
+              if not match:
+                  continue
+              from_version, to_version = match.groups()
+              if to_version != version:
+                  continue
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              url = f"https://github.com/{repo}/releases/download/{tag}/{path.name}"
+              patches[from_version] = {"download_url": url, "sha256": digest}
+
+          manifest = {
+              "version": version,
+              "download_url": setup_url,
+              "sha256": setup_sha,
+              "notes": f"Доступна версия LinkVideo.Helper {version}.",
+              "mandatory": False,
+              "patches": patches,
+          }
+          output = pathlib.Path("updates-repo/update-manifest.json")
+          output.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          PY
+          cd updates-repo
+          git config user.name "LinkVideo Release Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add update-manifest.json
+          if git diff --cached --quiet; then
+            echo "Manifest is already up to date."
+          else
+            git commit -m "Publish LinkVideo.Helper $VERSION"
+            git push origin HEAD:main
+          fi
+
+      - name: Verify public manifest
+        shell: bash
+        run: |
+          curl --fail --silent --show-error \
+            "https://raw.githubusercontent.com/$UPDATES_REPO/main/update-manifest.json" \
+            | python3 -m json.tool
