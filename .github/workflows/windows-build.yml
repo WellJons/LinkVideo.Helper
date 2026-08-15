@@ -1,10 +1,13 @@
-name: Build LinkVideo.Helper 2.0
+name: Build LinkVideo.Helper
 
 on:
   workflow_dispatch:
   push:
     tags:
       - 'v*'
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -25,30 +28,47 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pyinstaller
 
-      - name: Static self-check
+      - name: Static and regression checks
         shell: pwsh
         run: |
           python scripts/self_check.py
           python scripts/core_tests.py
-
-      - name: Build application
-        shell: cmd
-        run: build_onedir.bat
+          python scripts/core_tests_3_0_7.py
+          python scripts/core_tests_3_0_8.py
 
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --no-progress -y
 
-      - name: Build Setup and release package
+      - name: Build verified Setup
         shell: cmd
-        run: prepare_release.bat
+        run: build_setup.bat
 
-      - name: Upload Windows release artifacts
+      - name: Upload Windows build artifact
         uses: actions/upload-artifact@v4
         with:
           name: LinkVideo.Helper-${{ github.ref_name }}
           path: |
-            release_upload/LinkVideo.Helper_Setup.exe
-            release_upload/LinkVideo.Helper_2.0_Project.zip
+            release_upload/LinkVideo_VPN_Helper_Setup.exe
             release_upload/version.json
           if-no-files-found: error
+
+      # A tag creates/updates a DRAFT private release. Publishing the draft by
+      # hand is intentional: it is the final human gate. The separate
+      # publish-public-update workflow then mirrors the verified binaries to
+      # LinkVideo.Helper.Updates and writes the public update-manifest.json.
+      - name: Create or update private draft Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $asset = "release_upload/LinkVideo_VPN_Helper_Setup.exe"
+          $notes = "RELEASE_3.0.8_RU.txt"
+          gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $asset --repo $env:GITHUB_REPOSITORY --clobber
+          } else {
+            gh release create $tag $asset --repo $env:GITHUB_REPOSITORY --draft --title "LinkVideo.Helper $($tag.TrimStart('v'))" --notes-file $notes
+          }
