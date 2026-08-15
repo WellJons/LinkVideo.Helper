@@ -42,6 +42,15 @@ assert "pool.shutdown(wait=False, cancel_futures=True)" in ux
 assert "_lv_auto_refresh_selection" in ux
 assert "_lv_auto_refresh_current" in ux
 
+# The VPN dashboard already refreshes itself every 20 seconds in its page code;
+# the integration adds a deadline and real Esc cancellation to that existing
+# refresh path instead of letting one dead server block the whole dashboard.
+assert "_install_vpn_server_refresh_deadline" in ux
+assert "time.monotonic() + 20.0" in ux
+assert "self._cancel_event = cancel_event" in ux
+assert "VPNServersPage.refresh = patched_refresh" in ux
+assert "VPNServersPage._on_stats = patched_on_stats" in ux
+
 # Runtime subprocess guard covers FFmpeg and any future Python console helpers.
 assert "class HiddenPopen" in ux
 assert "CREATE_NO_WINDOW" in ux
