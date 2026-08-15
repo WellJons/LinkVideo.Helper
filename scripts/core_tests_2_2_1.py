@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import py_compile
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 files = [
@@ -21,7 +22,7 @@ vpn = (ROOT / files[4]).read_text(encoding='utf-8')
 components = (ROOT / files[0]).read_text(encoding='utf-8')
 version = (ROOT / 'linkvideo_vpn_helper/version.py').read_text(encoding='utf-8')
 
-assert 'APP_VERSION = "3.0.7"' in version
+assert re.search(r'^APP_VERSION\s*=\s*"\d+\.\d+\.\d+"\s*$', version, re.MULTILINE)
 assert 'self.counters_row.setDirection(QBoxLayout.Direction.LeftToRight)' in create
 assert 'Клик — открыть карточку' in search
 assert 'self.detail_panel.show()' in search

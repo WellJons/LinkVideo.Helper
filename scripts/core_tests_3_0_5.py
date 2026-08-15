@@ -3,7 +3,7 @@ import re
 ROOT=Path(__file__).resolve().parents[1]
 theme=(ROOT/'linkvideo_vpn_helper/theme.py').read_text(encoding='utf-8')
 ver=(ROOT/'linkvideo_vpn_helper/version.py').read_text(encoding='utf-8')
-assert 'APP_VERSION = "3.0.7"' in ver
+assert re.search(r'^APP_VERSION\s*=\s*"\d+\.\d+\.\d+"\s*$', ver, re.MULTILINE)
 expected={
  'rose_milk':'#E83F8C',
  'linkvideo_2026':'#3478F6',

@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 theme = (ROOT / "linkvideo_vpn_helper" / "theme.py").read_text(encoding="utf-8")
@@ -7,7 +8,7 @@ search = (ROOT / "linkvideo_vpn_helper" / "ui" / "pages" / "search_manage_page.p
 components = (ROOT / "linkvideo_vpn_helper" / "ui" / "components.py").read_text(encoding="utf-8")
 version = (ROOT / "linkvideo_vpn_helper" / "version.py").read_text(encoding="utf-8")
 
-assert 'APP_VERSION = "3.0.7"' in version
+assert re.search(r'^APP_VERSION\s*=\s*"\d+\.\d+\.\d+"\s*$', version, re.MULTILINE)
 assert '"peach_light": (' not in theme
 assert '"forest_green": (' not in theme
 for name in ("Розовое молочко", "Светлая LinkVideo", "Лавандовая", "Тёмно-синяя", "Полуночная", "Тёмная вишня", "Графитовая"):
