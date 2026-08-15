@@ -33,11 +33,13 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
-      - name: Set up Go for next installer
+      - name: Set up Go for installer and patcher
         uses: actions/setup-go@v6
         with:
           go-version: '1.24.x'
-          cache-dependency-path: installer_next/go.mod
+          cache-dependency-path: |
+            installer_next/go.mod
+            patcher/go.mod
 
       - name: Install Python dependencies
         shell: pwsh
@@ -62,6 +64,10 @@ jobs:
       - name: Build next LinkVideo installer and uninstaller
         shell: pwsh
         run: ./scripts/build_next_installer.ps1
+
+      - name: Compile differential patch pipeline
+        shell: pwsh
+        run: ./scripts/test_patch_builder.ps1
 
       - name: Upload verified current Windows build
         uses: actions/upload-artifact@v4
