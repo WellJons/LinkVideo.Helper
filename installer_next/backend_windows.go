@@ -151,7 +151,7 @@ func runCleanup(name string, args ...string) {
 }
 
 func stopHelperProcesses() {
-    for _, image := range []string{appExeName, "LinkVideo VPN Helper.exe", "updater.exe"} {
+    for _, image := range []string{appExeName, "LinkVideo VPN Helper.exe", "updater.exe", silentUpdaterExeName} {
         runCleanup("taskkill.exe", "/IM", image, "/T", "/F")
     }
     time.Sleep(450 * time.Millisecond)
@@ -325,9 +325,16 @@ func installProduct(opts installOptions, progress progressFunc) (string, error) 
     if err := createShortcuts(appPath, dest, opts.DesktopShortcut); err != nil {
         return "", fmt.Errorf("не удалось создать ярлыки: %w", err)
     }
-    progress(91, "Регистрация в Windows…")
+    progress(90, "Регистрация в Windows…")
     if err := registerUninstall(appPath, dest); err != nil {
         return "", fmt.Errorf("не удалось зарегистрировать удаление: %w", err)
+    }
+    progress(95, "Настройка фоновых патчей…")
+    if err := registerSilentUpdateTask(dest); err != nil {
+        return "", err
+    }
+    if err := verifySilentUpdateTask(dest); err != nil {
+        return "", err
     }
     progress(100, "LinkVideo.Helper установлен")
     return appPath, nil
@@ -363,6 +370,8 @@ func uninstallProduct(removeData bool, progress progressFunc) error {
     dest := defaultInstallDir()
     progress(8, "Остановка LinkVideo.Helper…")
     stopHelperProcesses()
+    progress(18, "Удаление фонового updater…")
+    removeSilentUpdateTask()
     progress(25, "Удаление регистрации Windows…")
     for _, key := range []string{uninstallKey, legacyInnoKey, legacyInnoWowKey} {
         runCleanup("reg.exe", "delete", key, "/f")
