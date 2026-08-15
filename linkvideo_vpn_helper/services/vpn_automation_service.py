@@ -2,25 +2,28 @@ from __future__ import annotations
 
 """Public LV Automation service facade for 3.0.8.
 
-The original implementation is kept in ``vpn_automation_service_core``.  This
+The original implementation is kept in ``vpn_automation_service_core``. This
 facade adds RouterOS-version compatibility around component upserts while
 preserving the tested lifecycle/runtime logic from the core implementation.
 """
 
-from typing import Iterable
+from typing import Callable, Iterable, TypeVar
 
+from linkvideo_vpn_helper.services import vpn_automation_service_core as _core
 from linkvideo_vpn_helper.services.vpn_automation_service_core import *  # noqa: F401,F403
 from linkvideo_vpn_helper.services.vpn_automation_service_core import (
     VPNAutomationService as _CoreVPNAutomationService,
 )
+
+_T = TypeVar("_T")
 
 
 class VPNAutomationService(_CoreVPNAutomationService):
     """LV automation with tolerant RouterOS component installation.
 
     RouterOS releases differ slightly in accepted fields for scripts/logging
-    actions/logging rules.  A single unsupported optional field must not leave
-    the server in a half-installed state.  Required fields are never dropped;
+    actions/logging rules. A single unsupported optional field must not leave
+    the server in a half-installed state. Required fields are never dropped;
     only known optional compatibility fields are retried without.
     """
 
@@ -131,3 +134,44 @@ class VPNAutomationService(_CoreVPNAutomationService):
         if "flagged=yes" in low:
             return hint + "; RouterOS помечен flagged — Scheduler может блокироваться"
         return hint
+
+    @staticmethod
+    def _call_core_with_public_api(call: Callable[[], _T]) -> _T:
+        """Keep legacy tests/extensions that monkeypatch this module working.
+
+        Methods inherited from ``vpn_automation_service_core`` resolve the API
+        class in the core module's globals. The public module historically was
+        monkeypatched directly by tests and troubleshooting harnesses, so mirror
+        that binding only for the duration of the call.
+        """
+        public_api = globals().get("RouterOSAPIClient", _core.RouterOSAPIClient)
+        old_api = _core.RouterOSAPIClient
+        _core.RouterOSAPIClient = public_api
+        try:
+            return call()
+        finally:
+            _core.RouterOSAPIClient = old_api
+
+    def install_or_update(self, server, creds):
+        return self._call_core_with_public_api(lambda: super(VPNAutomationService, self).install_or_update(server, creds))
+
+    def set_automation_enabled(self, server, creds, enabled):
+        return self._call_core_with_public_api(
+            lambda: super(VPNAutomationService, self).set_automation_enabled(server, creds, enabled)
+        )
+
+    def set_quarantine_enabled(self, server, creds, enabled):
+        return self._call_core_with_public_api(
+            lambda: super(VPNAutomationService, self).set_quarantine_enabled(server, creds, enabled)
+        )
+
+    def seed_lifecycle(self, server, creds):
+        return self._call_core_with_public_api(lambda: super(VPNAutomationService, self).seed_lifecycle(server, creds))
+
+    def mark_manual_state(self, server, creds, login, enabled):
+        return self._call_core_with_public_api(
+            lambda: super(VPNAutomationService, self).mark_manual_state(server, creds, login, enabled)
+        )
+
+    def get_status(self, server, creds):
+        return self._call_core_with_public_api(lambda: super(VPNAutomationService, self).get_status(server, creds))
