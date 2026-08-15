@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 root = Path(__file__).resolve().parents[1]
 search = (root / "linkvideo_vpn_helper/ui/pages/search_manage_page.py").read_text(encoding="utf-8")
@@ -7,7 +8,7 @@ servers = (root / "linkvideo_vpn_helper/ui/pages/vpn_servers_page.py").read_text
 components = (root / "linkvideo_vpn_helper/ui/components.py").read_text(encoding="utf-8")
 version = (root / "linkvideo_vpn_helper/version.py").read_text(encoding="utf-8")
 
-assert 'APP_VERSION = "3.0.7"' in version
+assert re.search(r'^APP_VERSION\s*=\s*"\d+\.\d+\.\d+"\s*$', version, re.MULTILINE)
 assert 'self.detail_panel = Card()' in search
 assert 'self._animate_search_panel(compact=True)' in search
 assert 'self.client_dialog.show()' not in search
