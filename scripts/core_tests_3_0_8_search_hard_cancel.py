@@ -44,7 +44,8 @@ def main() -> None:
 
     root = Path(__file__).resolve().parents[1]
     search_source = (root / "linkvideo_vpn_helper/services/search_service.py").read_text(encoding="utf-8")
-    assert "ThreadPoolExecutor" not in search_source, "interactive facade reintroduced non-daemon executor"
+    assert "ThreadPoolExecutor(" not in search_source, "interactive facade reintroduced non-daemon executor"
+    assert "from concurrent.futures import" not in search_source
     assert "daemon=True" in search_source
 
     cancel_source = (root / "linkvideo_vpn_helper/ui/operation_cancel_guard.py").read_text(encoding="utf-8")
