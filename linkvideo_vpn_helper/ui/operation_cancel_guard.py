@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-"""Make interactive searches actually cancellable without weakening mutations.
+"""Make interactive waits cancellable/non-blocking without weakening mutations.
 
 BusyDialog is shared by many pages. Historically it swallowed Escape and used
 WindowModal unconditionally, which meant an interactive search could block both
 Esc and the main-window close button while a network worker was stuck.
 
 Only a page with a live ``_cancel_event`` is treated as cancellable. Destructive
-RouterOS mutations on the same page keep the original modal behaviour.
+RouterOS mutations on the same page keep the original modal behaviour. Purely
+informational/background waits (for example update check/download) may opt into
+non-modal display with the ``lvBackgroundWait`` property.
 """
 
 from PySide6.QtCore import Qt
@@ -34,12 +36,20 @@ def _cancel_hook(dialog: BusyDialog):
     return hook if callable(hook) else None
 
 
+def _is_background_wait(dialog: BusyDialog) -> bool:
+    try:
+        return bool(dialog.property("lvBackgroundWait"))
+    except RuntimeError:
+        return False
+
+
 def _show_centered(dialog: BusyDialog):
-    # Search may be cancelled or the application closed even if one remote
-    # socket is wedged. Mutations remain WindowModal and cannot be interrupted
-    # by closing the main window halfway through a RouterOS change.
+    # Searches and read-only background jobs may be cancelled/closed without
+    # weakening destructive RouterOS operations. Mutation dialogs stay modal.
     dialog.setWindowModality(
-        Qt.WindowModality.NonModal if _cancel_hook(dialog) else Qt.WindowModality.WindowModal
+        Qt.WindowModality.NonModal
+        if _is_background_wait(dialog) or _cancel_hook(dialog)
+        else Qt.WindowModality.WindowModal
     )
     return _ORIGINAL_SHOW_CENTERED(dialog)
 
@@ -53,6 +63,11 @@ def _reject(dialog: BusyDialog):
                 return
         except Exception:
             pass
+    if _is_background_wait(dialog):
+        # Hiding the indicator does not cancel the bounded background request,
+        # but it must never trap the user in a modal child window.
+        dialog.hide()
+        return
     return _ORIGINAL_REJECT(dialog)
 
 
