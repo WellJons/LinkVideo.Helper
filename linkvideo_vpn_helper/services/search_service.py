@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-"""Public bounded multi-VPN search facade for 3.0.8.
+"""Interactive multi-VPN search with a true UI deadline.
 
-The existing login search already has a hard UI deadline.  This facade applies
-the same rule to the auxiliary all-server operations so no future UI path can
-reintroduce a wait-for-the-slowest-VPN hang.
+RouterOS calls are deliberately executed in daemon threads here.  Python's
+ThreadPoolExecutor uses non-daemon worker threads and a stuck socket can keep the
+whole Helper process alive even after the UI operation has timed out.  Search is
+interactive, so a broken VPN must never own the application lifetime.
 """
 
+import queue
+import threading
 import time
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from typing import Callable
+from typing import Callable, Iterable
 
 from linkvideo_vpn_helper.services.search_service_core import *  # noqa: F401,F403
 from linkvideo_vpn_helper.services.search_service_core import FastSearchService as _CoreFastSearchService
@@ -17,6 +19,154 @@ from linkvideo_vpn_helper.services.vpn_service import SessionCredentials
 
 
 class FastSearchService(_CoreFastSearchService):
+    @staticmethod
+    def _interactive_deadline_seconds(creds: SessionCredentials, server_count: int) -> float:
+        """Total wall-clock budget for one interactive all-server operation."""
+        socket_timeout = max(1.0, float(getattr(creds, "timeout", 4.5) or 4.5))
+        # A dead RouterOS normally reaches its socket timeout before this.  The
+        # small margin is for authentication and result delivery, not a second
+        # sequential wait.  Number of servers does not multiply the budget because
+        # they are checked concurrently.
+        return min(10.0, max(6.5, socket_timeout + 2.5))
+
+    def _daemon_server_calls(
+        self,
+        servers: Iterable[str],
+        worker: Callable[[str], object],
+        *,
+        creds: SessionCredentials,
+        progress: Callable[[int, int, str], None] | None = None,
+        cancel_event=None,
+        deadline_seconds: float | None = None,
+    ) -> tuple[list[tuple[str, object]], list[ServerSearchError], int]:
+        """Run every server independently without creating non-daemon workers.
+
+        There is intentionally one daemon thread per configured VPN.  The current
+        LinkVideo registry is small (roughly a dozen servers), and this guarantees
+        that one permanently blocked socket cannot occupy a worker slot and prevent
+        another VPN from even being attempted.
+        """
+        ordered = [str(x).strip() for x in servers if str(x).strip()]
+        total = len(ordered)
+        if total == 0:
+            return [], [], 0
+
+        budget = (
+            float(deadline_seconds)
+            if deadline_seconds is not None
+            else self._interactive_deadline_seconds(creds, total)
+        )
+        deadline_at = time.monotonic() + max(0.25, budget)
+        completed: queue.Queue[tuple[str, bool, object]] = queue.Queue()
+
+        def run_one(server: str) -> None:
+            try:
+                completed.put((server, True, worker(server)))
+            except BaseException as exc:  # keep a broken connector isolated to its server
+                completed.put((server, False, exc))
+
+        for server in ordered:
+            threading.Thread(
+                target=run_one,
+                args=(server,),
+                daemon=True,
+                name=f"lv-vpn-search:{server}",
+            ).start()
+
+        pending = set(ordered)
+        results: list[tuple[str, object]] = []
+        errors: list[ServerSearchError] = []
+        checked = 0
+
+        while pending:
+            if cancel_event is not None and cancel_event.is_set():
+                break
+            remaining = deadline_at - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                server, ok, payload = completed.get(timeout=min(0.12, remaining))
+            except queue.Empty:
+                continue
+            if server not in pending:
+                continue
+            pending.remove(server)
+            checked += 1
+            if ok:
+                results.append((server, payload))
+            else:
+                errors.append(ServerSearchError(server, classify_exception(payload)))
+            if progress and not (cancel_event is not None and cancel_event.is_set()):
+                progress(checked, total, server)
+
+        if cancel_event is None or not cancel_event.is_set():
+            # Results are useful even when one or more VPNs did not answer.  Mark
+            # those servers explicitly and complete the UI operation immediately.
+            for server in ordered:
+                if server not in pending:
+                    continue
+                pending.remove(server)
+                checked += 1
+                errors.append(self._timeout_error(server))
+                if progress:
+                    progress(checked, total, server)
+
+        return results, errors, checked
+
+    def search_login_all(
+        self,
+        servers: list[str],
+        creds: SessionCredentials,
+        query: str,
+        progress: Callable[[int, int, str], None] | None = None,
+        cancel_event=None,
+        deadline_seconds: float | None = None,
+    ) -> SearchReport:
+        """Search and hydrate each VPN in the same bounded server operation.
+
+        Older builds first reported all servers as checked and only then started a
+        second pool to build client cards.  That produced the visible 95% hang.
+        A server is now counted as checked only after its matching cards are ready.
+        """
+        value = str(query or "").strip()
+        report = SearchReport(total=len(servers))
+        if not value:
+            return report
+
+        def search_one(server: str) -> list:
+            matches = []
+            for login in self._server_matching_logins(server, creds, value):
+                if cancel_event is not None and cancel_event.is_set():
+                    break
+                client = self.vpn_service.get_client(
+                    server,
+                    creds,
+                    login,
+                    include_port_conflicts=True,
+                )
+                if client is not None:
+                    matches.append(client)
+            return matches
+
+        results, errors, checked = self._daemon_server_calls(
+            servers,
+            search_one,
+            creds=creds,
+            progress=progress,
+            cancel_event=cancel_event,
+            deadline_seconds=deadline_seconds,
+        )
+        report.checked = checked
+        report.errors.extend(errors)
+
+        order = {server: index for index, server in enumerate(servers)}
+        for _server, clients in results:
+            for client in clients or []:
+                if not any(x.server == client.server and x.login == client.login for x in report.matches):
+                    report.matches.append(client)
+        report.matches.sort(key=lambda client: (order.get(client.server, 10_000), client.login))
+        return report
+
     def _bounded_all_server_calls(
         self,
         servers: list[str],
@@ -26,54 +176,14 @@ class FastSearchService(_CoreFastSearchService):
         cancel_event=None,
         deadline_seconds: float | None = None,
     ) -> tuple[list[tuple[str, object]], list[ServerSearchError], int]:
-        """Run independent server calls without waiting for stale socket threads."""
-        if not servers:
-            return [], [], 0
-        workers = min(self.max_workers, max(1, len(servers)))
-        deadline = time.monotonic() + (
-            float(deadline_seconds) if deadline_seconds is not None else self._deadline_seconds(creds, len(servers))
+        return self._daemon_server_calls(
+            servers,
+            worker,
+            creds=creds,
+            progress=progress,
+            cancel_event=cancel_event,
+            deadline_seconds=deadline_seconds,
         )
-        results: list[tuple[str, object]] = []
-        errors: list[ServerSearchError] = []
-        checked = 0
-        pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="vpn-bounded-search")
-        futures = {pool.submit(worker, server): server for server in servers}
-        pending = set(futures)
-        try:
-            while pending:
-                if cancel_event is not None and cancel_event.is_set():
-                    for item in pending:
-                        item.cancel()
-                    break
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                done, pending = wait(
-                    pending,
-                    timeout=min(0.25, remaining),
-                    return_when=FIRST_COMPLETED,
-                )
-                for future in done:
-                    server = futures[future]
-                    checked += 1
-                    try:
-                        results.append((server, future.result()))
-                    except Exception as exc:
-                        errors.append(ServerSearchError(server, classify_exception(exc)))
-                    if progress:
-                        progress(checked, len(servers), server)
-
-            for future in list(pending):
-                server = futures[future]
-                future.cancel()
-                checked += 1
-                errors.append(self._timeout_error(server))
-                if progress:
-                    progress(checked, len(servers), server)
-            pending.clear()
-        finally:
-            pool.shutdown(wait=False, cancel_futures=True)
-        return results, errors, checked
 
     def suggest_free_login_all(
         self,
@@ -123,7 +233,7 @@ class FastSearchService(_CoreFastSearchService):
         results, errors, checked = self._bounded_all_server_calls(
             servers,
             creds,
-            lambda server: self.search_port(server, creds, value),
+            lambda server: super(FastSearchService, self).search_port(server, creds, value),
             progress=progress,
             cancel_event=cancel_event,
             deadline_seconds=deadline_seconds,
