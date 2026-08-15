@@ -23,6 +23,8 @@ import (
     "unsafe"
 )
 
+const createNoWindowFlag = 0x08000000
+
 type changedFile struct {
     SHA256 string `json:"sha256"`
     Size   int64  `json:"size"`
@@ -370,7 +372,7 @@ func productVersion(path string) (string, error) {
     }
     script := `$ErrorActionPreference='Stop';[Console]::Out.Write([string](Get-Item -LiteralPath $args[0]).VersionInfo.ProductVersion)`
     cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script, path)
-    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindowFlag}
     out, err := cmd.CombinedOutput()
     if err != nil {
         return "", fmt.Errorf("не удалось определить установленную версию: %s", strings.TrimSpace(string(out)))
@@ -384,7 +386,7 @@ func productVersion(path string) (string, error) {
 
 func runHidden(name string, args ...string) error {
     cmd := exec.Command(name, args...)
-    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindowFlag}
     return cmd.Run()
 }
 
