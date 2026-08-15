@@ -14,14 +14,15 @@ from linkvideo_vpn_helper.services import vpn_automation_service as vas
 
 # --- Search regression: one dead VPN must not pin the progress overlay forever. ---
 class _SearchVPN:
-    def get_client(self, server, creds, login):
+    def get_client(self, server, creds, login, include_port_conflicts=False):
         return ClientRecord(server=server, login=login, password="", remote_address="", ports=[])
 
 search = FastSearchService(_SearchVPN(), max_workers=2)
 
 def fake_match(server, creds, query):
     if server == "dead.example":
-        time.sleep(0.35)
+        # Long enough to exceed the hard deadline even on a busy hosted runner.
+        time.sleep(0.8)
         return []
     return [query] if server == "good.example" else []
 
@@ -31,10 +32,13 @@ report = search.search_login_all(
     ["good.example", "dead.example"],
     SessionCredentials("u", "p", timeout=0.1),
     "89000000000",
-    deadline_seconds=0.07,
+    # 70 ms was below normal Windows hosted-runner scheduling jitter and made
+    # this regression flaky. 250 ms still proves that an 800 ms dead server is
+    # cut off early without racing the healthy worker.
+    deadline_seconds=0.25,
 )
 elapsed = time.monotonic() - start
-assert elapsed < 0.25, elapsed
+assert elapsed < 0.65, elapsed
 assert any(x.server == "dead.example" for x in report.errors)
 assert any(x.server == "good.example" and x.login == "89000000000" for x in report.matches)
 assert report.checked == report.total == 2

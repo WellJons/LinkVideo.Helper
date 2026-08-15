@@ -2,16 +2,27 @@ name: Build LinkVideo.Helper
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - main
   push:
+    branches:
+      - main
+      - 'fix/**'
     tags:
       - 'v*'
 
 permissions:
   contents: write
 
+concurrency:
+  group: linkvideo-helper-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,35 +39,29 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pyinstaller
 
-      - name: Static and regression checks
+      - name: Complete release preflight
         shell: pwsh
-        run: |
-          python scripts/self_check.py
-          python scripts/core_tests.py
-          python scripts/core_tests_3_0_7.py
-          python scripts/core_tests_3_0_8.py
+        run: python scripts/release_preflight.py
 
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --no-progress -y
 
-      - name: Build verified Setup
+      - name: Build and verify full Setup
         shell: cmd
         run: build_setup.bat
 
-      - name: Upload Windows build artifact
+      - name: Upload verified Windows build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LinkVideo.Helper-${{ github.ref_name }}
+          name: LinkVideo.Helper-build-${{ github.run_number }}-${{ github.sha }}
           path: |
             release_upload/LinkVideo_VPN_Helper_Setup.exe
             release_upload/version.json
           if-no-files-found: error
 
-      # A tag creates/updates a DRAFT private release. Publishing the draft by
-      # hand is intentional: it is the final human gate. The separate
-      # publish-public-update workflow then mirrors the verified binaries to
-      # LinkVideo.Helper.Updates and writes the public update-manifest.json.
+      # Only a version tag may create/update the private draft release.
+      # Branch and PR builds validate the exact same full Setup before a tag exists.
       - name: Create or update private draft Release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
