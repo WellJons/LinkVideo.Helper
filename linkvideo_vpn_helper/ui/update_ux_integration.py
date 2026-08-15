@@ -22,7 +22,9 @@ def install_update_ux() -> None:
 
     Startup checks stay quiet. A user-initiated check owns a centered spinner from
     the first network request until a final result. Downloads expose real byte
-    progress from UpdateService, including silent differential patches.
+    progress from UpdateService, including silent differential patches. The
+    indicator itself is deliberately non-modal: checking/downloading may never
+    trap the operator in Helper while a remote channel is slow.
     """
     global _INSTALLED
     if _INSTALLED:
@@ -50,6 +52,10 @@ def install_update_ux() -> None:
         dialog = getattr(self, "_lv_update_dialog", None)
         if dialog is None:
             dialog = BusyDialog(self)
+            # operation_cancel_guard treats read-only/background waits as
+            # non-modal, so the main window can still be moved/closed while a
+            # bounded update request is running.
+            dialog.setProperty("lvBackgroundWait", True)
             self._lv_update_dialog = dialog
         return dialog
 
