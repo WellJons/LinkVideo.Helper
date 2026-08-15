@@ -6,6 +6,7 @@ ux = (ROOT / "linkvideo_vpn_helper/ui/background_ux_integration.py").read_text(e
 update_ux = (ROOT / "linkvideo_vpn_helper/ui/update_ux_integration.py").read_text(encoding="utf-8")
 update_service = (ROOT / "linkvideo_vpn_helper/services/update_service.py").read_text(encoding="utf-8")
 silent = (ROOT / "linkvideo_vpn_helper/ui/silent_update_integration.py").read_text(encoding="utf-8")
+cancel_guard = (ROOT / "linkvideo_vpn_helper/ui/operation_cancel_guard.py").read_text(encoding="utf-8")
 updater = (ROOT / "silent_updater/main_windows.go").read_text(encoding="utf-8")
 backend = (ROOT / "installer_next/backend_windows.go").read_text(encoding="utf-8")
 patcher = (ROOT / "patcher/main_windows.go").read_text(encoding="utf-8")
@@ -23,6 +24,12 @@ assert "bridge.progress.emit" in update_ux
 assert "_lv_silent_patch_progress" in update_ux
 assert "_lv_silent_patch_finished" in update_ux
 assert "progress_callback=progress" in silent
+
+# The visible update indicator is informational, not a trap: the operator may
+# still move/close Helper while the bounded request finishes in the background.
+assert 'dialog.setProperty("lvBackgroundWait", True)' in update_ux
+assert 'dialog.property("lvBackgroundWait")' in cancel_guard
+assert "Qt.WindowModality.NonModal" in cancel_guard
 
 # UpdateService exposes determinate progress and no longer creates an
 # intermediate cmd window to start Setup.
