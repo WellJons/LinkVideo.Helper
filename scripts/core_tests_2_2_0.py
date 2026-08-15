@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import py_compile
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -35,7 +36,7 @@ for rel in (
     assert 'build_page_scaffold' in txt, rel
 
 # VPN infrastructure navigation is deliberately at the bottom of the work list.
-assert main.index('("inactive", "⌛", "VPN-клиенты"') < main.index('("vpn_servers", "▦", "VPN-серверы"')
+assert main.index('(\"inactive\", \"⌛\", \"VPN-клиенты\"') < main.index('(\"vpn_servers\", \"▦\", \"VPN-серверы\"')
 
 # Search/client page must update itself after mutations and surface newly created ports.
 for token in (
@@ -45,8 +46,8 @@ for token in (
     assert token in search, token
 
 # Sorting wording must be unambiguous to operators.
-assert '"Старые"' in inactive
-assert '"Новые"' in inactive
+assert '\"Старые\"' in inactive
+assert '\"Новые\"' in inactive
 assert 'Без достоверной даты — всегда в конце' in inactive
 
 # VPN dashboard no longer packs all controls and lifecycle text into an 11-column table.
@@ -62,9 +63,13 @@ assert 'QTableWidget {' in theme and 'QHeaderView::section' in theme
 print('CORE TESTS 2.2.0 UI/AUTO-REFRESH OK')
 
 
-# Startup regression: app imports APP_NAME and APP_VERSION from version.py.
+# Startup regression: app imports stable metadata constants from version.py.
+# Do not pin this legacy regression test to a specific release number, otherwise
+# every valid version bump breaks the release build before PyInstaller starts.
 version_text = (ROOT / "linkvideo_vpn_helper" / "version.py").read_text(encoding="utf-8")
-for required in ('APP_NAME = "LinkVideo.Helper"', 'APP_VERSION = "3.0.7"', 'APP_PUBLISHER = "LinkVideo"'):
+for required in ('APP_NAME = "LinkVideo.Helper"', 'APP_PUBLISHER = "LinkVideo"'):
     assert required in version_text, f"startup version constant missing: {required}"
+match = re.search(r'^APP_VERSION\s*=\s*"(\d+(?:\.\d+){1,3})"\s*$', version_text, re.MULTILINE)
+assert match, "startup APP_VERSION constant missing or invalid"
 app_text = (ROOT / "linkvideo_vpn_helper" / "app.py").read_text(encoding="utf-8")
 assert "from linkvideo_vpn_helper.version import APP_NAME, APP_VERSION" in app_text

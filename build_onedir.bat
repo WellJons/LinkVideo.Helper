@@ -40,6 +40,8 @@ if errorlevel 1 exit /b 1
 if errorlevel 1 exit /b 1
 %PY% scripts\core_tests_3_0_7.py
 if errorlevel 1 exit /b 1
+%PY% scripts\core_tests_3_0_8.py
+if errorlevel 1 exit /b 1
 pip install -r requirements.txt pyinstaller
 if errorlevel 1 exit /b 1
 %PY% -m PyInstaller --noconfirm --clean LinkVideo.Helper.spec
