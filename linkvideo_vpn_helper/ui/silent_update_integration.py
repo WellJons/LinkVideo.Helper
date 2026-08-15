@@ -41,33 +41,46 @@ def install_silent_patch_updates() -> None:
                 return
             self._update_check_busy = False
             self._silent_patch_download_busy = True
+            latest = str(getattr(info, "latest_version", ""))
+
+            def progress(value: int) -> None:
+                hook = getattr(self, "_lv_silent_patch_progress", None)
+                if callable(hook):
+                    hook(int(value), latest, startup)
 
             def worker() -> None:
+                worker_error = None
                 try:
                     path = self.updater.download_setup(
                         info.setup_url,
+                        progress_callback=progress,
                         expected_sha256=getattr(info, "sha256", ""),
-                        expected_version=info.latest_version,
+                        expected_version=latest,
                         artifact_kind="patch",
                     )
                     stage_patch(
                         path,
-                        to_version=info.latest_version,
+                        to_version=latest,
                         sha256=getattr(info, "sha256", ""),
                     )
                     self._silent_patch_staged = True
+                    self._silent_patch_error = ""
                 except Exception as exc:
-                    # A background patch must never manipulate Qt widgets from
-                    # its worker thread. Keep the error for diagnostics and let
-                    # the next normal update check retry.
+                    # Never manipulate Qt widgets from the worker thread. The UX
+                    # hook below emits a Qt signal and the next startup check may
+                    # retry if staging failed.
+                    worker_error = exc
                     self._silent_patch_error = str(exc)
                 finally:
                     self._silent_patch_download_busy = False
+                    hook = getattr(self, "_lv_silent_patch_finished", None)
+                    if callable(hook):
+                        hook(latest, worker_error, startup)
 
             threading.Thread(
                 target=worker,
                 daemon=True,
-                name=f"lv-silent-patch:{getattr(info, 'latest_version', '')}",
+                name=f"lv-silent-patch:{latest}",
             ).start()
             return
 
@@ -84,4 +97,13 @@ def install_silent_patch_updates() -> None:
 
     MainWindow._on_update_ready = patched_ready
     MainWindow.closeEvent = patched_close
+
+    # Install these wrappers after the silent-patch handler so the manual update
+    # UX can sit outside it and expose real patch download progress. The process
+    # guard is global and also protects FFmpeg/PowerShell subprocesses.
+    from linkvideo_vpn_helper.ui.update_ux_integration import install_update_ux
+    from linkvideo_vpn_helper.ui.background_ux_integration import install_background_ux
+
+    install_update_ux()
+    install_background_ux()
     _INSTALLED = True
