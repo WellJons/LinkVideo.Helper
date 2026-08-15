@@ -2,9 +2,9 @@ from __future__ import annotations
 
 """Interactive multi-VPN search with a true UI deadline.
 
-RouterOS calls are deliberately executed in daemon threads here.  Python's
+RouterOS calls are deliberately executed in daemon threads here. Python's
 ThreadPoolExecutor uses non-daemon worker threads and a stuck socket can keep the
-whole Helper process alive even after the UI operation has timed out.  Search is
+whole Helper process alive even after the UI operation has timed out. Search is
 interactive, so a broken VPN must never own the application lifetime.
 """
 
@@ -23,10 +23,8 @@ class FastSearchService(_CoreFastSearchService):
     def _interactive_deadline_seconds(creds: SessionCredentials, server_count: int) -> float:
         """Total wall-clock budget for one interactive all-server operation."""
         socket_timeout = max(1.0, float(getattr(creds, "timeout", 4.5) or 4.5))
-        # A dead RouterOS normally reaches its socket timeout before this.  The
-        # small margin is for authentication and result delivery, not a second
-        # sequential wait.  Number of servers does not multiply the budget because
-        # they are checked concurrently.
+        # All VPNs are checked concurrently; server_count must not multiply the
+        # amount of time for which an operator-facing search can block the UI.
         return min(10.0, max(6.5, socket_timeout + 2.5))
 
     def _daemon_server_calls(
@@ -41,10 +39,9 @@ class FastSearchService(_CoreFastSearchService):
     ) -> tuple[list[tuple[str, object]], list[ServerSearchError], int]:
         """Run every server independently without creating non-daemon workers.
 
-        There is intentionally one daemon thread per configured VPN.  The current
-        LinkVideo registry is small (roughly a dozen servers), and this guarantees
-        that one permanently blocked socket cannot occupy a worker slot and prevent
-        another VPN from even being attempted.
+        The configured VPN fleet is intentionally small. One daemon thread per
+        server is preferable here to a pool: a permanently blocked socket cannot
+        occupy a worker slot, delay another server, or keep Python alive on exit.
         """
         ordered = [str(x).strip() for x in servers if str(x).strip()]
         total = len(ordered)
@@ -62,7 +59,7 @@ class FastSearchService(_CoreFastSearchService):
         def run_one(server: str) -> None:
             try:
                 completed.put((server, True, worker(server)))
-            except BaseException as exc:  # keep a broken connector isolated to its server
+            except BaseException as exc:
                 completed.put((server, False, exc))
 
         for server in ordered:
@@ -100,8 +97,6 @@ class FastSearchService(_CoreFastSearchService):
                 progress(checked, total, server)
 
         if cancel_event is None or not cancel_event.is_set():
-            # Results are useful even when one or more VPNs did not answer.  Mark
-            # those servers explicitly and complete the UI operation immediately.
             for server in ordered:
                 if server not in pending:
                     continue
@@ -122,11 +117,11 @@ class FastSearchService(_CoreFastSearchService):
         cancel_event=None,
         deadline_seconds: float | None = None,
     ) -> SearchReport:
-        """Search and hydrate each VPN in the same bounded server operation.
+        """Search and hydrate each VPN in one bounded server operation.
 
-        Older builds first reported all servers as checked and only then started a
-        second pool to build client cards.  That produced the visible 95% hang.
-        A server is now counted as checked only after its matching cards are ready.
+        A server is counted as checked only after its matching client cards are
+        hydrated. This removes the old second phase that left the dialog at 95%
+        after it already said all servers had been checked.
         """
         value = str(query or "").strip()
         report = SearchReport(total=len(servers))
@@ -138,12 +133,7 @@ class FastSearchService(_CoreFastSearchService):
             for login in self._server_matching_logins(server, creds, value):
                 if cancel_event is not None and cancel_event.is_set():
                     break
-                client = self.vpn_service.get_client(
-                    server,
-                    creds,
-                    login,
-                    include_port_conflicts=True,
-                )
+                client = self.vpn_service.get_client(server, creds, login, True)
                 if client is not None:
                     matches.append(client)
             return matches
@@ -230,10 +220,13 @@ class FastSearchService(_CoreFastSearchService):
         value = int(port or 0)
         if value <= 0:
             return report
+        # Deliberately dispatch through self.search_port rather than the base
+        # implementation. Besides preserving the service contract for tests and
+        # extensions, this keeps one-server port behavior consistent everywhere.
         results, errors, checked = self._bounded_all_server_calls(
             servers,
             creds,
-            lambda server: super(FastSearchService, self).search_port(server, creds, value),
+            lambda server: self.search_port(server, creds, value),
             progress=progress,
             cancel_event=cancel_event,
             deadline_seconds=deadline_seconds,
@@ -253,7 +246,7 @@ class FastSearchService(_CoreFastSearchService):
         report = SearchReport(total=1, checked=1)
         try:
             for login in self._server_remote_hint(server, creds, remote):
-                client = self.vpn_service.get_client(server, creds, login, include_port_conflicts=True)
+                client = self.vpn_service.get_client(server, creds, login, True)
                 if client and client.remote_address == remote:
                     if not any(x.login == client.login for x in report.matches):
                         report.matches.append(client)
