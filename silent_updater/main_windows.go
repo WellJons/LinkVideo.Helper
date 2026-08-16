@@ -3,6 +3,7 @@
 package main
 
 import (
+    "context"
     "crypto/sha256"
     "encoding/hex"
     "encoding/json"
@@ -90,9 +91,6 @@ func launchProtectedWorker() error {
         return err
     }
     workerDir := filepath.Join(installDir(), ".updater-worker")
-    // A previous sidecar is no longer running once the scheduled task can start
-    // this invocation. Cleaning it here guarantees the worker always matches the
-    // currently installed updater binary.
     _ = os.RemoveAll(workerDir)
     if err := os.MkdirAll(workerDir, 0o700); err != nil {
         return fmt.Errorf("не удалось создать защищённый каталог updater: %w", err)
@@ -154,8 +152,14 @@ func runScheduled() error {
     stateDir := programDataStateDir()
     requestPath := filepath.Join(stateDir, "pending.json")
     raw, err := os.ReadFile(requestPath)
+    if os.IsNotExist(err) {
+        // The task also has a harmless ONLOGON trigger so it can be registered
+        // without locale-dependent dates. Most logons have no pending patch.
+        // That is a normal idle state, not an update failure.
+        return nil
+    }
     if err != nil {
-        return fmt.Errorf("pending request не найден: %w", err)
+        return fmt.Errorf("не удалось прочитать pending request: %w", err)
     }
     var req pendingRequest
     if err := json.Unmarshal(raw, &req); err != nil {
@@ -219,17 +223,24 @@ func runScheduled() error {
         return errors.New("подготовленный файл не является Windows EXE")
     }
 
-    // Never execute directly from the user-writable staging directory. Copy to
-    // Program Files and verify the official hash again there before CreateProcess.
     trustedPatch, cleanupTrustedPatch, err := prepareTrustedPatch(patchPath, expectedHash)
     if err != nil {
         return err
     }
     defer cleanupTrustedPatch()
 
-    cmd := exec.Command(trustedPatch, "--silent")
+    // The patcher itself uses bounded Windows helper calls and rollback. This
+    // outer watchdog is intentionally generous and exists only to prevent a
+    // broken child process from leaving SYSTEM updater alive forever.
+    patchCtx, patchCancel := context.WithTimeout(context.Background(), 8*time.Minute)
+    defer patchCancel()
+    cmd := exec.CommandContext(patchCtx, trustedPatch, "--silent")
     cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
-    if out, err := cmd.CombinedOutput(); err != nil {
+    out, err := cmd.CombinedOutput()
+    if errors.Is(patchCtx.Err(), context.DeadlineExceeded) {
+        return errors.New("patch не завершился за 8 минут")
+    }
+    if err != nil {
         detail := strings.TrimSpace(string(out))
         if detail != "" {
             return fmt.Errorf("patch завершился ошибкой: %w (%s)", err, detail)
@@ -353,12 +364,18 @@ func productVersion(path string) (string, error) {
         return "", fmt.Errorf("не найден установленный %s", filepath.Base(path))
     }
     script := `$ErrorActionPreference='Stop';[Console]::Out.Write([string](Get-Item -LiteralPath $args[0]).VersionInfo.ProductVersion)`
-    cmd := exec.Command(
+    ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+    defer cancel()
+    cmd := exec.CommandContext(
+        ctx,
         "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-Command", script, path,
     )
     cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
     out, err := cmd.CombinedOutput()
+    if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+        return "", errors.New("Windows не ответила при проверке ProductVersion за 8 секунд")
+    }
     if err != nil {
         return "", fmt.Errorf("не удалось определить установленную версию: %s", strings.TrimSpace(string(out)))
     }
