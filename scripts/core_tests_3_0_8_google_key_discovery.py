@@ -56,8 +56,8 @@ with tempfile.TemporaryDirectory() as temp:
 
 
 ui_text = (root / "linkvideo_vpn_helper/ui/nat_counter_integration.py").read_text(encoding="utf-8")
-assert "NAT-трафик" in ui_text
-assert "Пакеты" in ui_text
+assert "NAT-трафик" not in ui_text
+assert "Пакеты" not in ui_text
 assert "Включён" in ui_text and "Отключён" in ui_text
 assert "Конфликт" in ui_text
 assert "install_vpn_sheets_key_ui" in ui_text
@@ -72,4 +72,4 @@ agent_text = (root / "scripts/vpn_sync_agent.py").read_text(encoding="utf-8")
 assert "install_google_key_discovery" in agent_text
 assert "GoogleSheetsBackend.from_settings(None)" in agent_text
 
-print("CORE TESTS 3.0.8 GOOGLE KEY DISCOVERY + KEY PICKER + PORT ROWS OK")
+print("CORE TESTS 3.0.8 GOOGLE KEY DISCOVERY + KEY PICKER + COMPACT PORT ROWS OK")
