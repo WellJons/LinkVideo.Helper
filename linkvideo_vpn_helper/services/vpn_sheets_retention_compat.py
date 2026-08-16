@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from linkvideo_vpn_helper.services.app_logging import event
-from linkvideo_vpn_helper.services.vpn_retention_policy import parse_extended_comment
+from linkvideo_vpn_helper.services.vpn_retention_policy import DAY_NS, parse_extended_comment
 
 
 _INSTALLED = False
@@ -59,6 +59,18 @@ def _deleted_reason(old: dict[str, str], source: str, now: datetime) -> str:
     low_source = str(source or "").lower()
     if "helper" in low_source and "удален" in low_source:
         return "Удалена вручную через Helper"
+
+    # Prefer the LV marker because it is the exact reference used by LV-Aging.
+    meta = parse_extended_comment(str(old.get("Комментарий RouterOS", "") or ""))
+    now_ns = int(now.timestamp() * 1_000_000_000)
+    if meta.last_ns > 0:
+        days = max(0, int((now_ns - meta.last_ns) // DAY_NS))
+        if days >= 365:
+            return f"Удалена автоматически: {days} дн. без активности"
+    if meta.last_ns <= 0 and meta.created_ns > 0:
+        days = max(0, int((now_ns - meta.created_ns) // DAY_NS))
+        if days >= 365:
+            return f"Удалена автоматически: {days} дн. без единой активности"
 
     last_dt = _parse_dt(old.get("Последняя активность", ""))
     first_dt = _parse_dt(old.get("Первое обнаружение", ""))
@@ -164,8 +176,7 @@ def install_vpn_sheets_retention_compat() -> None:
                 continue
             login = str(history_row[2] or "").strip()
             if login in newly_deleted:
-                reason_text = newly_deleted[login]
-                history_row[3] = reason_text
+                history_row[3] = newly_deleted[login]
                 continue
 
             item = current_by_login.get(login)
