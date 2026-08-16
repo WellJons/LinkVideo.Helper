@@ -1,7 +1,7 @@
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(3, 0, 2, 0),
-    prodvers=(3, 0, 2, 0),
+    filevers=(3, 0, 10, 0),
+    prodvers=(3, 0, 10, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -16,11 +16,11 @@ VSVersionInfo(
         [
           StringStruct('CompanyName', 'LinkVideo'),
           StringStruct('FileDescription', 'LinkVideo.Helper'),
-          StringStruct('FileVersion', '3.0.3'),
+          StringStruct('FileVersion', '3.0.10'),
           StringStruct('InternalName', 'LinkVideo.Helper'),
           StringStruct('OriginalFilename', 'LinkVideo.Helper.exe'),
           StringStruct('ProductName', 'LinkVideo.Helper'),
-          StringStruct('ProductVersion', '3.0.3')
+          StringStruct('ProductVersion', '3.0.10')
         ]
       )
     ]),
