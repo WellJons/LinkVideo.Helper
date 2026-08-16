@@ -193,8 +193,63 @@ def install_vpn_sheets_retention_compat() -> None:
     sheets.build_current_clients = build_current_clients
     sheets.reconcile_records = reconcile_records
 
+    def ensure_sheet_columns(self, sheet: str, minimum: int = 20) -> None:
+        """Grow legacy A:S server tabs before any A:T read/write.
+
+        Existing LinkVideo sheets were created with exactly 19 columns. 3.0.10
+        adds the twentieth ``Причина`` column, and the Sheets Values API refuses
+        an A:T range until the underlying grid itself has been expanded.
+        """
+        minimum = max(1, int(minimum))
+        cache = getattr(self, "_lv_min_columns_ready", None)
+        if cache is None:
+            cache = set()
+            setattr(self, "_lv_min_columns_ready", cache)
+        cache_key = (str(sheet), minimum)
+        if cache_key in cache:
+            return
+
+        base_url = f"https://sheets.googleapis.com/v4/spreadsheets/{self.spreadsheet_id}"
+        metadata = self._request(
+            "GET",
+            base_url,
+            params={"fields": "sheets(properties(sheetId,title,gridProperties(columnCount)))"},
+        )
+        properties = None
+        for item in list(metadata.get("sheets") or []):
+            candidate = dict(item.get("properties") or {})
+            if str(candidate.get("title", "")) == str(sheet):
+                properties = candidate
+                break
+        if properties is None:
+            # Keep the normal Values API error for an actually missing tab.
+            return
+
+        grid = dict(properties.get("gridProperties") or {})
+        current = int(grid.get("columnCount", 0) or 0)
+        if current < minimum:
+            sheet_id = properties.get("sheetId")
+            if sheet_id is None:
+                raise RuntimeError(f"Google Sheets: у листа {sheet} отсутствует sheetId")
+            self._request(
+                "POST",
+                f"{base_url}:batchUpdate",
+                payload={
+                    "requests": [{
+                        "appendDimension": {
+                            "sheetId": int(sheet_id),
+                            "dimension": "COLUMNS",
+                            "length": minimum - current,
+                        }
+                    }]
+                },
+            )
+            event("SHEETS", "Расширен лист VPN", f"{sheet}: {current} → {minimum} столбцов")
+        cache.add(cache_key)
+
     def read_server_rows(self, server: str):
         sheet = sheets.sheet_for_server(server)
+        self.ensure_sheet_columns(sheet, len(sheets.SERVER_COLUMNS))
         values = self.get_values(f"'{sheet}'!A2:T1500")
         result = []
         for row in values:
@@ -207,6 +262,7 @@ def install_vpn_sheets_retention_compat() -> None:
         if len(rows) > sheets.MAX_SERVER_ROWS:
             raise RuntimeError(f"{server}: в лист не помещается {len(rows)} строк")
         sheet = sheets.sheet_for_server(server)
+        self.ensure_sheet_columns(sheet, len(sheets.SERVER_COLUMNS))
         self.put_values(f"'{sheet}'!T1", [["Причина"]])
         encoded_rows = [sheets._dict_to_row(row) for row in rows]
         write_count = max(len(encoded_rows), int(previous_count))
@@ -216,6 +272,7 @@ def install_vpn_sheets_retention_compat() -> None:
             encoded_rows.append([""] * len(sheets.SERVER_COLUMNS))
         self.put_values(f"'{sheet}'!A2:T{write_count + 1}", encoded_rows)
 
+    sheets.GoogleSheetsBackend.ensure_sheet_columns = ensure_sheet_columns
     sheets.GoogleSheetsBackend.read_server_rows = read_server_rows
     sheets.GoogleSheetsBackend.write_server_rows = write_server_rows
     _INSTALLED = True
