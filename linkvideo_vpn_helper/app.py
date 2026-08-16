@@ -141,6 +141,10 @@ def main() -> int:
     # sources, LV2 metadata migration and immediate postcondition verification.
     from linkvideo_vpn_helper.services.vpn_retention_policy import install_retention_policy
     install_retention_policy()
+    # The legacy seed routine only understands state/last and would drop the LV2
+    # creation/reference day. Replace that one entry point after policy install.
+    from linkvideo_vpn_helper.services.vpn_retention_seed_guard import install_retention_seed_guard
+    install_retention_seed_guard()
     from linkvideo_vpn_helper.services.vpn_sheets_retention_compat import install_vpn_sheets_retention_compat
     install_vpn_sheets_retention_compat()
     from linkvideo_vpn_helper.ui.background_ux_integration import install_background_ux
