@@ -26,7 +26,7 @@ def _refresh_automation_cells(page) -> None:
         if auto.installed and not auto.paused:
             status_item.setToolTip(
                 "LV-Aging запускается раз в сутки в 03:20: 30+ дней — спящая, "
-                "90+ — карантин, 365+ — автоматическое удаление учётки и её NAT."
+                "90+ — PPP Secret отключается, 365+ — удаляются PPP Secret, его NAT и отдельный неиспользуемый профиль."
                 if auto.aging_enabled
                 else
                 "LV-Aging выключен. Карантин и автоматическое удаление не выполняются."
@@ -53,9 +53,11 @@ def install_vpn_servers_status_ui() -> None:
         for label in self.findChildren(QLabel):
             text = label.text()
             if "Кандидат в архив — 365+ дней" in text:
-                label.setText("<b>Автоудаление — 365+ дней</b> — удаляется PPP-учётка, её NAT и отдельный профиль")
+                label.setText("<b>Автоудаление — 365+ дней</b> — удаляется PPP-учётка, её NAT и отдельный неиспользуемый профиль")
             elif "Активность неизвестна" in text and "автоматика не отключает" in text:
-                label.setText("<b>Активность неизвестна</b> — годовой отсчёт начинается с установки/создания LV-метки")
+                label.setText("<b>Активность неизвестна</b> — для never-active годовой отсчёт идёт от даты создания/первой LV-метки")
+            elif "Отключена вручную" in text and "автовосстановление запрещено" in text:
+                label.setText("<b>Отключена вручную</b> — автовосстановление запрещено; автоудаление после 365 дней без активности сохраняется")
 
     def patched_inactive_build(self):
         original_inactive_build(self)
@@ -64,7 +66,7 @@ def install_vpn_servers_status_ui() -> None:
             if "кандидаты в архив 365+" in text:
                 label.setText(
                     "Состояния VPN-учёток: активные, спящие 30+ дней, автоматический карантин 90+, "
-                    "автоудаление 365+, ручные отключения и записи с неизвестной последней активностью."
+                    "автоудаление 365+, ручные отключения и записи без подтверждённой активности."
                 )
 
     def patched_on_stats(self, rows):
