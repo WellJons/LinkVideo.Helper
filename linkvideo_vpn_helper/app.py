@@ -89,6 +89,8 @@ def main() -> int:
     install_linkvideo_brand_theme()
     from linkvideo_vpn_helper.ui.visual_density import install_visual_density
     install_visual_density()
+    from linkvideo_vpn_helper.ui.components_compat import install_components_compat
+    install_components_compat()
 
     from linkvideo_vpn_helper.theme import get_theme_style
     theme_style = get_theme_style(str(settings.value("ui/theme_v2", "linkvideo_2026", str) or "linkvideo_2026"))
@@ -127,8 +129,6 @@ def main() -> int:
     install_vpn_automation_resilience()
     from linkvideo_vpn_helper.ui.background_ux_integration import install_background_ux
     install_background_ux()
-    # Must be installed after background_ux because it wraps the final manual
-    # scan method rather than the original page implementation.
     from linkvideo_vpn_helper.ui.manual_scan_feedback import install_manual_scan_feedback
     install_manual_scan_feedback()
     from linkvideo_vpn_helper.ui.archive_download_ux import install_archive_download_ux
