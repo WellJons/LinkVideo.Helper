@@ -14,7 +14,8 @@ assert '"/Delete"' in source
 assert '"/RU", "SYSTEM"' in source
 assert '"/RL", "HIGHEST"' in source
 assert '"/SC", "ONLOGON"' in source
-assert '"--scheduled"' in source
+assert "--scheduled" in source
+assert "silentUpdateTaskCommand(updaterPath)" in source
 assert "4*time.Second" in source
 assert "6*time.Second" in source
 assert "runHiddenTimeout(" in source
