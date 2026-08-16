@@ -37,8 +37,6 @@ assert hosts[:3] == [
     "stale-global.video.goodline.info",
 ], hosts
 
-# A full-coverage result must return immediately instead of waiting for the
-# remaining slow fallback workers to unwind.
 service.DEEP_FALLBACK_DEADLINE_SECONDS = 0.15
 service.DEEP_FALLBACK_MAX_WORKERS = 2
 service._deep_candidate_hosts = lambda *args, **kwargs: [
@@ -78,8 +76,6 @@ assert found and found[0].host == "good.video.goodline.info"
 assert count >= 1
 assert "good.video.goodline.info" in checked
 
-# Public archive discovery must never use ThreadPoolExecutor: those workers are
-# non-daemon and can hold Helper open even after a UI deadline/cancel.
 source = (ROOT / "linkvideo_vpn_helper/services/archive_service.py").read_text(encoding="utf-8")
 assert "ThreadPoolExecutor(" not in source
 assert "from concurrent.futures" not in source
@@ -88,5 +84,8 @@ assert "threading.Semaphore" in source
 assert "daemon=True" in source
 assert "stop_when=deep_covers_interval" in source
 assert "stop_when=reserve_covers_interval" in source
+# Preserve the real ArchiveCamera API while overriding discover().
+assert "camera.timezone_offset" in source
+assert "camera.utc_offset_hours" not in source
 
 print("CORE TESTS 3.0.8 ARCHIVE BOUNDED FALLBACK OK")
