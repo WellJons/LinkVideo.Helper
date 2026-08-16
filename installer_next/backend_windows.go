@@ -5,6 +5,7 @@ package main
 import (
     "archive/zip"
     "bytes"
+    "context"
     "encoding/base64"
     "encoding/binary"
     "errors"
@@ -29,6 +30,7 @@ const (
     legacyInnoWowKey = `HKLM\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{8D39F3B2-8D87-4D9F-B5F6-2D7B65F08C21}_is1`
     createNoWindowFlag = 0x08000000
     moveFileDelayUntilReboot = 0x00000004
+    defaultHelperProcessTimeout = 12 * time.Second
 )
 
 var version = "0.0.0-dev"
@@ -139,17 +141,34 @@ func ensureUninstallerRunsFromTemp() (bool, error) {
     return false, nil
 }
 
-func runHidden(name string, args ...string) error {
-    cmd := exec.Command(name, args...)
+// Every external Windows helper is deadline-bounded. A broken Scheduled Tasks
+// service, WMI/PowerShell host, registry helper or taskkill must never keep the
+// installer/uninstaller frozen indefinitely.
+func runHiddenTimeout(timeout time.Duration, name string, args ...string) error {
+    if timeout <= 0 {
+        timeout = defaultHelperProcessTimeout
+    }
+    ctx, cancel := context.WithTimeout(context.Background(), timeout)
+    defer cancel()
+
+    cmd := exec.CommandContext(ctx, name, args...)
     cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindowFlag}
-    if out, err := cmd.CombinedOutput(); err != nil {
+    out, err := cmd.CombinedOutput()
+    if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+        return fmt.Errorf("%s не ответил за %s", name, timeout.Round(time.Second))
+    }
+    if err != nil {
         return fmt.Errorf("%s: %w (%s)", name, err, strings.TrimSpace(string(out)))
     }
     return nil
 }
 
+func runHidden(name string, args ...string) error {
+    return runHiddenTimeout(defaultHelperProcessTimeout, name, args...)
+}
+
 func runCleanup(name string, args ...string) {
-    _ = runHidden(name, args...)
+    _ = runHiddenTimeout(6*time.Second, name, args...)
 }
 
 func stopHelperProcesses() {
@@ -238,7 +257,7 @@ func runPowerShell(script string) error {
         binary.LittleEndian.PutUint16(buf[i*2:], r)
     }
     encoded := base64.StdEncoding.EncodeToString(buf)
-    return runHidden("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded)
+    return runHiddenTimeout(12*time.Second, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded)
 }
 
 func createShortcuts(appPath, dest string, desktop bool) error {
@@ -299,7 +318,7 @@ func registerUninstall(appPath, dest string) error {
     for _, args := range values {
         full := append([]string{"add", uninstallKey}, args...)
         full = append(full, "/f")
-        if err := runHidden("reg.exe", full...); err != nil {
+        if err := runHiddenTimeout(8*time.Second, "reg.exe", full...); err != nil {
             return err
         }
     }
@@ -331,12 +350,24 @@ func installProduct(opts installOptions, progress progressFunc) (string, error) 
     if err := registerUninstall(appPath, dest); err != nil {
         return "", fmt.Errorf("не удалось зарегистрировать удаление: %w", err)
     }
+
+    // Silent differential patches are an update convenience, not a prerequisite
+    // for using Helper. Corporate policy, a disabled Task Scheduler service or
+    // a broken Windows component must not roll back/brick an otherwise complete
+    // application installation. When provisioning fails, Helper simply falls
+    // back to its visible full-Setup update path.
     progress(95, "Настройка фоновых патчей…")
+    var silentErr error
     if err := registerSilentUpdateTask(dest); err != nil {
-        return "", err
+        silentErr = err
+    } else if err := verifySilentUpdateTask(dest); err != nil {
+        silentErr = err
+        removeSilentUpdateTask()
     }
-    if err := verifySilentUpdateTask(dest); err != nil {
-        return "", err
+    recordSilentUpdateWarning(silentErr)
+
+    if silentErr != nil {
+        progress(99, "Программа установлена · фоновые патчи недоступны, будет использоваться обычное обновление")
     }
     progress(100, "LinkVideo.Helper установлен")
     return appPath, nil
