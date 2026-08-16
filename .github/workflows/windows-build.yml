@@ -60,8 +60,8 @@ jobs:
         shell: cmd
         run: build_setup.bat
 
-      # 3.0.8 develops the replacement installer in parallel. It is intentionally
-      # NOT used by the public update workflow until it passes real-machine tests.
+      # The replacement installer is built in parallel and remains a test asset
+      # until it is explicitly selected for the public update channel.
       - name: Build next LinkVideo installer and uninstaller
         shell: pwsh
         run: ./scripts/build_next_installer.ps1
@@ -90,8 +90,7 @@ jobs:
             release_payload/LinkVideo.Helper_Payload_*.json
           if-no-files-found: error
 
-      # Only a version tag may create/update the current private draft release.
-      # The experimental installer above is never published by this step.
+      # Only a version tag may create/update the private draft release.
       - name: Create or update private draft Release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
@@ -99,11 +98,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "${{ github.ref_name }}"
+          $version = $tag.TrimStart('v')
           $asset = "release_upload/LinkVideo_VPN_Helper_Setup.exe"
-          $notes = "RELEASE_3.0.8_RU.txt"
+          $notes = "RELEASE_${version}_RU.txt"
+          if (-not (Test-Path $notes)) { throw "Release notes not found: $notes" }
           gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag $asset --repo $env:GITHUB_REPOSITORY --clobber
           } else {
-            gh release create $tag $asset --repo $env:GITHUB_REPOSITORY --draft --title "LinkVideo.Helper $($tag.TrimStart('v'))" --notes-file $notes
+            gh release create $tag $asset --repo $env:GITHUB_REPOSITORY --draft --title "LinkVideo.Helper $version" --notes-file $notes
           }
