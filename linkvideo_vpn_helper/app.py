@@ -137,6 +137,10 @@ def main() -> int:
     install_archive_process_hardening()
     from linkvideo_vpn_helper.services.vpn_automation_resilience import install_vpn_automation_resilience
     install_vpn_automation_resilience()
+    from linkvideo_vpn_helper.services.vpn_retention_policy import install_retention_policy
+    install_retention_policy()
+    from linkvideo_vpn_helper.services.vpn_sheets_retention_compat import install_vpn_sheets_retention_compat
+    install_vpn_sheets_retention_compat()
     from linkvideo_vpn_helper.ui.background_ux_integration import install_background_ux
     install_background_ux()
     from linkvideo_vpn_helper.ui.manual_scan_feedback import install_manual_scan_feedback
@@ -151,8 +155,16 @@ def main() -> int:
     install_update_ux()
     from linkvideo_vpn_helper.ui.runtime_log_integration import install_runtime_log_ui
     install_runtime_log_ui()
+    from linkvideo_vpn_helper.ui.nat_counter_integration import install_nat_counter_ui
+    install_nat_counter_ui()
     from linkvideo_vpn_helper.ui.vpn_servers_status_ui import install_vpn_servers_status_ui
     install_vpn_servers_status_ui()
+    from linkvideo_vpn_helper.ui.vpn_servers_manual_refresh import install_vpn_servers_manual_refresh
+    install_vpn_servers_manual_refresh()
+    from linkvideo_vpn_helper.ui.search_escape_compat import install_search_escape_compat
+    install_search_escape_compat()
+    from linkvideo_vpn_helper.ui.nested_scroll_guard import install_nested_scroll_guard
+    install_nested_scroll_guard()
 
     from linkvideo_vpn_helper.ui.main_window import MainWindow
     splash.set_status("Открываю интерфейс…")
