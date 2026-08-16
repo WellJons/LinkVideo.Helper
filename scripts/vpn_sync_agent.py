@@ -14,6 +14,7 @@ from linkvideo_vpn_helper.services.google_key_discovery_compat import (
     discover_service_account_file,
     install_google_key_discovery,
 )
+from linkvideo_vpn_helper.services.vpn_sheets_retention_compat import install_vpn_sheets_retention_compat
 from linkvideo_vpn_helper.services.vpn_sheets_sync import GoogleSheetsBackend, VPNSheetsSyncService
 from linkvideo_vpn_helper.services.vpn_service import SessionCredentials, VPNService
 
@@ -72,6 +73,8 @@ def main() -> int:
     servers_env = str(os.getenv("LINKVIDEO_VPN_SERVERS", "") or "").strip()
     servers = [x.strip() for x in servers_env.split(",") if x.strip()] if servers_env else list(DEFAULT_SERVERS)
 
+    # Keep the same A:T schema/reason inference as the desktop Helper.
+    install_vpn_sheets_retention_compat()
     backend = _load_backend()
     vpn = VPNService()
     sync = VPNSheetsSyncService(vpn, backend)
