@@ -4,19 +4,29 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 source = (ROOT / "installer_next/silent_update_task_windows.go").read_text(encoding="utf-8")
+backend = (ROOT / "installer_next/backend_windows.go").read_text(encoding="utf-8")
 
-# Task Scheduler may localize/canonicalize SYSTEM and normalize an action path.
-# The installer must verify the security identity by SID and paths
-# case-insensitively instead of comparing display strings literally.
-assert "S-1-5-18" in source
-assert "System.Security.Principal.NTAccount" in source
-assert "System.Security.Principal.SecurityIdentifier" in source
-assert "ExpandEnvironmentVariables" in source
-assert "GetFullPath" in source
-assert "System.StringComparison]::OrdinalIgnoreCase" in source
-assert ".Trim().Trim('\\\"')" not in source  # guard a malformed escaped literal
-assert "task principal is not SYSTEM" in source
-assert "task action mismatch" in source
-assert "task arguments mismatch" in source
+# ScheduledTasks PowerShell cmdlets caused real 30-60 second stalls on a Windows
+# workstation. Provisioning/removal now uses the native scheduler CLI and every
+# invocation has a hard deadline.
+assert '"schtasks.exe"' in source
+assert '"/Create"' in source
+assert '"/Query"' in source
+assert '"/Delete"' in source
+assert '"/RU", "SYSTEM"' in source
+assert '"/RL", "HIGHEST"' in source
+assert '"/SC", "ONLOGON"' in source
+assert '"--scheduled"' in source
+assert "runHiddenTimeout(" in source
+assert "Register-ScheduledTask" not in source
+assert "Get-ScheduledTask" not in source
+assert "Unregister-ScheduledTask" not in source
 
-print("CORE TESTS 3.0.8 SILENT TASK NORMALIZATION OK")
+# Failure to provision the optional silent-patch convenience may never roll back
+# a complete Helper installation. The normal visible Setup path remains usable.
+assert "recordSilentUpdateWarning(silentErr)" in backend
+assert "if silentErr != nil" in backend
+assert 'progress(100, "LinkVideo.Helper установлен")' in backend
+assert "return appPath, nil" in backend
+
+print("CORE TESTS 3.0.8 BOUNDED SILENT TASK OK")
