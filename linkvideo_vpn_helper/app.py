@@ -85,8 +85,10 @@ def main() -> int:
     from linkvideo_vpn_helper.ui.operation_cancel_guard import install_operation_cancel_guard
     install_operation_cancel_guard()
 
-    from linkvideo_vpn_helper.ui.port_traffic_inline import install_inline_port_traffic
-    install_inline_port_traffic()
+    # Per-port conntrack traffic was removed from the product after real VPN
+    # servers repeatedly returned no usable port-level data. Keep NAT ports,
+    # enabled/disabled state and conflict detection only; do not display a
+    # misleading "нет соединения" status.
 
     from linkvideo_vpn_helper.ui.search_visual_fixes import install_search_visual_fixes
     install_search_visual_fixes()
@@ -97,9 +99,6 @@ def main() -> int:
     from linkvideo_vpn_helper.services.runtime_hardening import install_service_runtime_hardening
     install_service_runtime_hardening()
 
-    # FFmpeg archive jobs already run outside the Qt thread and expose progress
-    # and Esc cancellation. Give HTTP/HLS reads a fixed stall timeout as well so
-    # a half-open media connection cannot trap readline() forever.
     from linkvideo_vpn_helper.services.archive_process_hardening import install_archive_process_hardening
     install_archive_process_hardening()
 
@@ -109,8 +108,6 @@ def main() -> int:
     from linkvideo_vpn_helper.brand_theme import install_linkvideo_brand_theme
     install_linkvideo_brand_theme()
 
-    # Keep the current page/layout geometry, but restore stronger desktop visual
-    # hierarchy (cards, table headers, selected ports and status chips).
     from linkvideo_vpn_helper.ui.visual_density import install_visual_density
     install_visual_density()
 
@@ -118,32 +115,16 @@ def main() -> int:
     theme_style = get_theme_style(str(settings.value("ui/theme_v2", "linkvideo_2026", str) or "linkvideo_2026"))
     app.setStyleSheet(theme_style)
 
-    saved_username = str(settings.value("username", "", str) or "").strip()
-    saved_password = str(settings.value("password", "", str) or "")
-    remember = bool(settings.value("remember", True, bool))
-
-    if remember and saved_username and saved_password:
-        credential_values = (saved_username, saved_password)
-    else:
-        from linkvideo_vpn_helper.ui.login_window import LoginWindow
-        login = LoginWindow(settings)
-        if login.exec() != QDialog.DialogCode.Accepted or login.payload is None:
-            return 0
-        credential_values = (login.payload.username, login.payload.password)
-
     splash = StartupSplash(theme_style)
     splash.show()
-    splash.set_status("Загружаю ядро…")
+    splash.raise_()
+    app.processEvents()
 
-    from linkvideo_vpn_helper.services.vpn_service import SessionCredentials, VPNService
-    credentials = SessionCredentials(credential_values[0], credential_values[1], 8728, 4.5)
-    service = VPNService()
-
-    splash.set_status("Открываю интерфейс…")
     from linkvideo_vpn_helper.ui.main_window import MainWindow
-    window = MainWindow(service, credentials, settings)
-    window.show()
+    splash.set_status("Загружаю интерфейс…")
+    window = MainWindow(settings)
     splash.close()
+    window.show()
     return app.exec()
 
 
