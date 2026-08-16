@@ -85,6 +85,10 @@ def main() -> int:
     settings = QSettings("LinkVideo", "LinkVideo.Helper")
     _migrate_settings(settings)
 
+    from linkvideo_vpn_helper.services.app_logging import event, install_runtime_logging
+    install_runtime_logging()
+    event("APP", "Запуск Helper", f"версия {APP_VERSION}")
+
     from linkvideo_vpn_helper.brand_theme import install_linkvideo_brand_theme
     install_linkvideo_brand_theme()
     from linkvideo_vpn_helper.ui.visual_density import install_visual_density
@@ -105,8 +109,10 @@ def main() -> int:
         from linkvideo_vpn_helper.ui.login_window import LoginWindow
         login = LoginWindow(settings)
         if login.exec() != QDialog.DialogCode.Accepted or login.payload is None:
+            event("APP", "Авторизация отменена")
             return 0
         credential_values = (login.payload.username, login.payload.password)
+    event("APP", "Авторизация RouterOS", credential_values[0])
 
     splash = StartupSplash(theme_style)
     splash.show()
@@ -141,6 +147,8 @@ def main() -> int:
     install_access_policy()
     from linkvideo_vpn_helper.ui.update_ux_integration import install_update_ux
     install_update_ux()
+    from linkvideo_vpn_helper.ui.runtime_log_integration import install_runtime_log_ui
+    install_runtime_log_ui()
 
     from linkvideo_vpn_helper.ui.main_window import MainWindow
     splash.set_status("Открываю интерфейс…")
@@ -152,6 +160,7 @@ def main() -> int:
     attach_vpn_sheets_sync(window, service, credentials, settings)
     splash.close()
     window.show()
+    event("APP", "Интерфейс открыт")
     return app.exec()
 
 
