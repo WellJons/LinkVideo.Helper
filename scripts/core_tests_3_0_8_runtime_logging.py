@@ -12,6 +12,7 @@ if str(root) not in sys.path:
 
 with tempfile.TemporaryDirectory() as temp:
     old_local = os.environ.get("LOCALAPPDATA")
+    app_logging = None
     try:
         os.environ["LOCALAPPDATA"] = temp
         from linkvideo_vpn_helper.services import app_logging
@@ -24,11 +25,14 @@ with tempfile.TemporaryDirectory() as temp:
         assert "access_token=abc" not in text
         assert "***" in text
         assert app_logging.log_file().is_file()
+        app_logging.clear_logs()
+        assert "Журнал очищен" in app_logging.read_recent(100)
     finally:
-        try:
-            app_logging.clear_logs()
-        except Exception:
-            pass
+        if app_logging is not None:
+            try:
+                app_logging.shutdown_runtime_logging()
+            except Exception:
+                pass
         if old_local is None:
             os.environ.pop("LOCALAPPDATA", None)
         else:
@@ -48,6 +52,7 @@ for marker in ("Журнал работы", "Обновить", "Скопиро�
 app_text = (root / "linkvideo_vpn_helper/app.py").read_text(encoding="utf-8")
 assert "install_runtime_logging" in app_text
 assert "install_runtime_log_ui" in app_text
+assert "aboutToQuit.connect(shutdown_runtime_logging)" in app_text
 
 sheets = (root / "linkvideo_vpn_helper/ui/vpn_sheets_sync_integration.py").read_text(encoding="utf-8")
 assert "last_failures" in sheets
