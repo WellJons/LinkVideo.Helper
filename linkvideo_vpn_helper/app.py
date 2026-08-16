@@ -109,6 +109,11 @@ def main() -> int:
     from linkvideo_vpn_helper.brand_theme import install_linkvideo_brand_theme
     install_linkvideo_brand_theme()
 
+    # Keep the current page/layout geometry, but restore stronger desktop visual
+    # hierarchy (cards, table headers, selected ports and status chips).
+    from linkvideo_vpn_helper.ui.visual_density import install_visual_density
+    install_visual_density()
+
     from linkvideo_vpn_helper.theme import get_theme_style
     theme_style = get_theme_style(str(settings.value("ui/theme_v2", "linkvideo_2026", str) or "linkvideo_2026"))
     app.setStyleSheet(theme_style)
