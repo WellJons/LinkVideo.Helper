@@ -53,22 +53,17 @@ class FakeRouterOSAPIClient:
         params = params or {}
         has_query = any(str(key).startswith("?") for key in params)
         if path == "/ppp/secret":
-            # Exact query is allowed to work here.
             if has_query:
                 wanted = next((str(value) for key, value in params.items() if str(key).startswith("?name")), "")
                 return [dict(row) for row in self.secrets if not wanted or row["name"] == wanted]
             return [dict(row) for row in self.secrets]
         if path == "/ppp/profile":
-            # Simulate a RouterOS exact-query quirk: empty query response, full
-            # menu still contains the actual profile whose name != login.
             if has_query:
                 return []
             return [dict(row) for row in self.profiles]
         if path == "/ppp/active":
             return []
         if path == "/ip/firewall/nat":
-            # Critical behavior: ?dst-port exact query may return empty.  A full
-            # lightweight print remains authoritative.
             if has_query:
                 return []
             return [dict(row) for row in self.nat_rows]
@@ -84,28 +79,20 @@ compat.install_nat_inventory_compat()
 service = VPNService()
 creds = SessionCredentials("AdminChats", "x")
 
-# Search by login/card hydration must include every NAT pointing to the actual
-# PPP Profile remote address, not only the one carrying comment=login.
 client = service.get_client("vpn06.linkvideo.ru", creds, FakeRouterOSAPIClient.login)
 assert client is not None
 assert client.remote_address == FakeRouterOSAPIClient.remote, client.remote_address
 assert client.ports == [13510, 13511, 13512, 13513], client.ports
 assert len(client.nat_rule_ids) == 4, client.nat_rule_ids
 
-# WinBox-style firewall rule counters are preserved per external port.  These
-# are cumulative NAT counters, not live connection state.
 assert client.port_nat_bytes[13513] == 603853, client.port_nat_bytes
 assert client.port_nat_packets[13513] == 10026, client.port_nat_packets
 assert client.port_nat_packets[13511] == 9959, client.port_nat_packets
 
-# Range occupancy must be detected even when ?dst-port=12002 returns empty.
 with FakeRouterOSAPIClient() as api:
     rows = service._api_print_exact(api, "/ip/firewall/nat", "dst-port", "12002", ".id,dst-port")
 assert any(row.get(".id") == "*RANGE" for row in rows), rows
 
-# New-account planning reads the complete NAT snapshot and therefore treats
-# every existing/ranged RouterOS port as occupied.  The wrapper additionally
-# performs an authoritative post-create readback and rolls back on mismatch.
 used = service._collect_used_ports({"nat_rules": FakeRouterOSAPIClient.nat_rows})
 for occupied in (12000, 12001, 12002, 12003, 13510, 13511, 13512, 13513):
     assert occupied in used, (occupied, sorted(used))
@@ -117,7 +104,9 @@ assert "expected_ports - actual_ports" in source
 assert "self._rollback_create" in source
 
 ui_source = (root / "linkvideo_vpn_helper/ui/nat_counter_integration.py").read_text(encoding="utf-8")
-assert "NAT:" in ui_source
-assert "Это не текущая скорость" in ui_source
+assert "NAT-трафик" in ui_source
+assert "Пакеты" in ui_source
+assert 'item.setText("")' in ui_source
+assert 'item.setToolTip("")' in ui_source
 
 print("CORE TESTS 3.0.8 COMPLETE NAT INVENTORY OK")
