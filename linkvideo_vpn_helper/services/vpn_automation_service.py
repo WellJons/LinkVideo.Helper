@@ -17,6 +17,17 @@ from linkvideo_vpn_helper.services.vpn_automation_service_core import (
 
 _T = TypeVar("_T")
 
+# RouterOS logging action names are stricter than script/scheduler names on the
+# deployed VPN routers: action names may contain only ASCII letters and digits.
+# The old core constant ("LV-Auth") therefore caused install/update to stop
+# after the scripts were created, leaving every server partially installed.
+# Keep the core module and this public facade on one canonical value because
+# inherited methods and restore_script_source() resolve the core global at run
+# time.
+LEGACY_LV_LOG_ACTION = str(getattr(_core, "LV_LOG_ACTION", "LV-Auth") or "LV-Auth")
+LV_LOG_ACTION = "LVAuth"
+_core.LV_LOG_ACTION = LV_LOG_ACTION
+
 
 class VPNAutomationService(_CoreVPNAutomationService):
     """LV automation with tolerant RouterOS component installation.
