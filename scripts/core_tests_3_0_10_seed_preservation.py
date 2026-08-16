@@ -57,8 +57,6 @@ real_module_api = api_module.RouterOSAPIClient
 policy.RouterOSAPIClient = FakeAPI
 api_module.RouterOSAPIClient = FakeAPI
 try:
-    # Install the real policy first, then the preservation adapter in the same
-    # order used by app.py.
     policy._INSTALLED = False
     policy.install_retention_policy()
     from linkvideo_vpn_helper.services import vpn_retention_seed_guard as guard
@@ -68,10 +66,11 @@ try:
     service = public.VPNAutomationService()
     result = service.seed_lifecycle("vpn-test", SessionCredentials("u", "p"))
     assert result.total == 1
-    # Seed is non-destructive: a 250-day never-active account is classified as
-    # a quarantine candidate, but PPP disabled is not changed until LV-Aging is
-    # explicitly enabled/applied.
-    assert result.quarantine == 1
+    # Initialization is non-destructive and state Q is reserved for a PPP Secret
+    # that is really disabled. Old enabled candidates stay sleeping until LV-Aging
+    # is explicitly enabled and applies the policy.
+    assert result.sleeping == 1
+    assert result.quarantine == 0
     assert FakeAPI.secrets[0]["disabled"] == "no"
 
     final = FakeAPI.secrets[0]["comment"]
@@ -80,8 +79,8 @@ try:
     actual_created_day = meta.created_ns // policy.DAY_NS
     assert actual_created_day == expected_created_day, (actual_created_day, expected_created_day, final)
     assert meta.base_comment == "operator note"
-    assert meta.state == "Q" and meta.reason == "inactive_90"
-    assert "|LV2|" in final and "|c=" in final and "|r=q|" in final
+    assert meta.state == "S" and meta.reason == "inactive_30"
+    assert "|LV2|" in final and "|c=" in final and "|r=s|" in final
 finally:
     policy.RouterOSAPIClient = real_policy_api
     api_module.RouterOSAPIClient = real_module_api
