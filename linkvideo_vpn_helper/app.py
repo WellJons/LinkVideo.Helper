@@ -82,32 +82,13 @@ def main() -> int:
     app.setOrganizationName("LinkVideo")
     app.setQuitOnLastWindowClosed(True)
 
-    from linkvideo_vpn_helper.ui.operation_cancel_guard import install_operation_cancel_guard
-    install_operation_cancel_guard()
-
-    # Per-port conntrack traffic was removed from the product after real VPN
-    # servers repeatedly returned no usable port-level data. Keep NAT ports,
-    # enabled/disabled state and conflict detection only; do not display a
-    # misleading "нет соединения" status.
-
-    from linkvideo_vpn_helper.ui.search_visual_fixes import install_search_visual_fixes
-    install_search_visual_fixes()
-
-    from linkvideo_vpn_helper.ui.silent_update_integration import install_silent_patch_updates
-    install_silent_patch_updates()
-
-    from linkvideo_vpn_helper.services.runtime_hardening import install_service_runtime_hardening
-    install_service_runtime_hardening()
-
-    from linkvideo_vpn_helper.services.archive_process_hardening import install_archive_process_hardening
-    install_archive_process_hardening()
-
     settings = QSettings("LinkVideo", "LinkVideo.Helper")
     _migrate_settings(settings)
 
+    # Theme extensions must be installed before LoginWindow imports
+    # get_theme_style by value, otherwise the login screen can use stale QSS.
     from linkvideo_vpn_helper.brand_theme import install_linkvideo_brand_theme
     install_linkvideo_brand_theme()
-
     from linkvideo_vpn_helper.ui.visual_density import install_visual_density
     install_visual_density()
 
@@ -115,14 +96,51 @@ def main() -> int:
     theme_style = get_theme_style(str(settings.value("ui/theme_v2", "linkvideo_2026", str) or "linkvideo_2026"))
     app.setStyleSheet(theme_style)
 
+    # Restore the real authentication path. AdminChats is identified from the
+    # username entered here; personal RouterOS usernames are system admins.
+    saved_username = str(settings.value("username", "", str) or "").strip()
+    saved_password = str(settings.value("password", "", str) or "")
+    remember = bool(settings.value("remember", True, bool))
+    if remember and saved_username and saved_password:
+        credential_values = (saved_username, saved_password)
+    else:
+        from linkvideo_vpn_helper.ui.login_window import LoginWindow
+        login = LoginWindow(settings)
+        if login.exec() != QDialog.DialogCode.Accepted or login.payload is None:
+            return 0
+        credential_values = (login.payload.username, login.payload.password)
+
     splash = StartupSplash(theme_style)
     splash.show()
     splash.raise_()
-    app.processEvents()
+    splash.set_status("Загружаю ядро…")
+
+    from linkvideo_vpn_helper.services.vpn_service import SessionCredentials, VPNService
+    credentials = SessionCredentials(credential_values[0], credential_values[1], 8728, 4.5)
+    service = VPNService()
+
+    # Runtime integrations are explicit here so the packaged EXE has one
+    # deterministic startup order instead of relying on import side effects.
+    from linkvideo_vpn_helper.ui.operation_cancel_guard import install_operation_cancel_guard
+    install_operation_cancel_guard()
+    from linkvideo_vpn_helper.ui.search_visual_fixes import install_search_visual_fixes
+    install_search_visual_fixes()
+    from linkvideo_vpn_helper.services.runtime_hardening import install_service_runtime_hardening
+    install_service_runtime_hardening()
+    from linkvideo_vpn_helper.services.archive_process_hardening import install_archive_process_hardening
+    install_archive_process_hardening()
+    from linkvideo_vpn_helper.ui.background_ux_integration import install_background_ux
+    install_background_ux()
+    from linkvideo_vpn_helper.ui.silent_update_integration import install_silent_patch_updates
+    install_silent_patch_updates()
+    from linkvideo_vpn_helper.ui.access_policy_integration import install_access_policy
+    install_access_policy()
+    from linkvideo_vpn_helper.ui.update_ux_integration import install_update_ux
+    install_update_ux()
 
     from linkvideo_vpn_helper.ui.main_window import MainWindow
-    splash.set_status("Загружаю интерфейс…")
-    window = MainWindow(settings)
+    splash.set_status("Открываю интерфейс…")
+    window = MainWindow(service, credentials, settings)
     splash.close()
     window.show()
     return app.exec()
