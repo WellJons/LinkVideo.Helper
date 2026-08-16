@@ -137,6 +137,8 @@ def main() -> int:
     install_archive_process_hardening()
     from linkvideo_vpn_helper.services.vpn_automation_resilience import install_vpn_automation_resilience
     install_vpn_automation_resilience()
+    from linkvideo_vpn_helper.services.update_version_probe_compat import install_update_version_probe_compat
+    install_update_version_probe_compat()
     # 3.0.10 uses one authoritative retention implementation. It owns script
     # sources, LV2 metadata migration and immediate postcondition verification.
     from linkvideo_vpn_helper.services.vpn_retention_policy import install_retention_policy
