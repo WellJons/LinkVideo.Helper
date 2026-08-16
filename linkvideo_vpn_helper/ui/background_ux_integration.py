@@ -15,10 +15,8 @@ _INSTALLED = False
 
 
 def _install_no_console_process_guard() -> None:
-    """Prevent console helpers (FFmpeg/PowerShell/taskkill/etc.) flashing windows."""
     if os.name != "nt" or getattr(subprocess.Popen, "_lv_no_console_guard", False):
         return
-
     original = subprocess.Popen
     no_window = int(getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
     new_console = int(getattr(subprocess, "CREATE_NEW_CONSOLE", 0x00000010))
@@ -35,20 +33,7 @@ def _install_no_console_process_guard() -> None:
     subprocess.Popen = HiddenPopen
 
 
-def _start_daemon_batch(
-    hosts: list[str],
-    worker,
-    *,
-    max_workers: int,
-    thread_prefix: str,
-):
-    """Start bounded-concurrency daemon workers and return their result queue.
-
-    Python ThreadPoolExecutor workers are non-daemon. ``shutdown(wait=False)``
-    releases the caller but a platform socket that ignores its timeout may still
-    own process lifetime. Background/read-only refreshes must never have that
-    property, so they use daemon threads just like interactive search.
-    """
+def _start_daemon_batch(hosts: list[str], worker, *, max_workers: int, thread_prefix: str):
     semaphore = threading.Semaphore(max(1, min(int(max_workers), max(1, len(hosts)))))
     output: queue.Queue[tuple[str, object | None, BaseException | None]] = queue.Queue()
 
@@ -70,7 +55,7 @@ def _start_daemon_batch(
 
 
 def _install_inactive_clients_auto_refresh() -> None:
-    """Keep lifecycle data current with a hard deadline and daemon-only I/O."""
+    """Keep lifecycle data current without a blocking tab-entry scan."""
     from linkvideo_vpn_helper.ui.pages.inactive_clients_page import InactiveClientsPage
 
     if getattr(InactiveClientsPage, "_lv_auto_refresh_installed", False):
@@ -106,9 +91,9 @@ def _install_inactive_clients_auto_refresh() -> None:
 
         cancel_event = threading.Event()
         self._cancel_event = cancel_event
-        self._busy_kind = "scan"
-        self._set_busy(True)
+        self._busy_kind = "background-scan" if background else "scan"
         if not background:
+            self._set_busy(True)
             self.task.show()
             self.task.busy("Проверяю VPN-серверы", f"Проверено 0 из {len(servers)}", 0)
 
@@ -131,7 +116,7 @@ def _install_inactive_clients_auto_refresh() -> None:
                 thread_prefix="inactive-vpn",
             )
             checked = 0
-            deadline = time.monotonic() + 24.0
+            deadline = time.monotonic() + (14.0 if background else 18.0)
 
             while pending and not cancel_event.is_set():
                 remaining = deadline - time.monotonic()
@@ -156,15 +141,13 @@ def _install_inactive_clients_auto_refresh() -> None:
                 return
 
             for server in servers:
-                if server not in pending:
-                    continue
-                errors.append(
-                    (
-                        server,
-                        classify_exception(TimeoutError("VPN-сервер не завершил проверку до общего deadline")),
+                if server in pending:
+                    errors.append(
+                        (
+                            server,
+                            classify_exception(TimeoutError("VPN-сервер не завершил проверку до общего deadline")),
+                        )
                     )
-                )
-
             if self._cancel_event is cancel_event:
                 self.scanReady.emit(records, errors)
 
@@ -174,7 +157,7 @@ def _install_inactive_clients_auto_refresh() -> None:
         if (
             self._lv_auto_refresh_running
             or getattr(self, "_cancel_event", None) is not None
-            or getattr(self, "_busy_kind", "")
+            or (getattr(self, "_busy_kind", "") and getattr(self, "_busy_kind", "") != "background-scan")
             or not self.isVisible()
             or not self.registry.hosts()
         ):
@@ -189,10 +172,35 @@ def _install_inactive_clients_auto_refresh() -> None:
         was_background = bool(getattr(self, "_lv_auto_refresh_running", False))
         old_selection = set(getattr(self, "_lv_auto_refresh_selection", set()))
         old_current = getattr(self, "_lv_auto_refresh_current", None)
-        original_on_scan(self, records, errors)
-        if not was_background:
+        incoming = list(records or [])
+
+        # The 1k+ lifecycle list is expensive to rebuild. If a minute refresh
+        # returned byte-for-byte equivalent dataclass records, only finish the
+        # background operation and keep the existing widgets intact.
+        if was_background and incoming == list(getattr(self, "_records", [])):
+            self._cancel_event = None
+            self._busy_kind = ""
+            self._lv_auto_refresh_running = False
+            if errors:
+                self.scan_summary.setText(
+                    f"Найдено: {len(incoming)} · серверов с ошибкой: {len(errors)} · автообновление"
+                )
+            else:
+                self.scan_summary.setText(f"Найдено учётных записей: {len(incoming)} · автообновление")
             return
 
+        list_widget = getattr(self, "list", None)
+        if list_widget is not None:
+            list_widget.setUpdatesEnabled(False)
+        try:
+            original_on_scan(self, incoming, errors)
+        finally:
+            if list_widget is not None:
+                list_widget.setUpdatesEnabled(True)
+                list_widget.viewport().update()
+
+        if not was_background:
+            return
         self._lv_auto_refresh_running = False
         valid = {self._key(record) for record in getattr(self, "_records", [])}
         self._selected_keys = old_selection & valid
@@ -213,8 +221,10 @@ def _install_inactive_clients_auto_refresh() -> None:
         if callable(original_activated):
             original_activated(self)
         self._lv_refresh_timer.start()
-        if not getattr(self, "_records", None) and getattr(self, "_cancel_event", None) is None:
-            QTimer.singleShot(180, self._scan)
+        # Opening the page must never show a blocking scan dialog. Empty/stale
+        # data are refreshed silently after the page is already interactive.
+        if getattr(self, "_cancel_event", None) is None:
+            QTimer.singleShot(350, lambda: _background_scan(self))
 
     def patched_deactivated(self):
         self._lv_refresh_timer.stop()
@@ -226,7 +236,7 @@ def _install_inactive_clients_auto_refresh() -> None:
             original_refresh_servers(self)
         finally:
             if self.isVisible() and getattr(self, "_cancel_event", None) is None:
-                QTimer.singleShot(120, lambda: _background_scan(self))
+                QTimer.singleShot(250, lambda: _background_scan(self))
 
     InactiveClientsPage.__init__ = patched_init
     InactiveClientsPage._scan = patched_scan
@@ -238,12 +248,10 @@ def _install_inactive_clients_auto_refresh() -> None:
 
 
 def _install_vpn_server_refresh_deadline() -> None:
-    """Make the automatic VPN dashboard refresh deadline-bounded and daemon-only."""
     from linkvideo_vpn_helper.ui.pages.vpn_servers_page import VPNServersPage
 
     if getattr(VPNServersPage, "_lv_deadline_refresh_installed", False):
         return
-
     original_on_stats = VPNServersPage._on_stats
 
     def patched_refresh(self, silent: bool = False):
@@ -278,7 +286,6 @@ def _install_vpn_server_refresh_deadline() -> None:
                 thread_prefix="vpn-dashboard",
             )
             deadline = time.monotonic() + 20.0
-
             while pending and not cancel_event.is_set():
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -295,14 +302,11 @@ def _install_vpn_server_refresh_deadline() -> None:
                     rows.append((host, stat, auto, None))
                 else:
                     rows.append((host, None, None, classify_exception(exc).message))
-
             if cancel_event.is_set():
                 return
-
             for host in servers:
                 if host in pending:
                     rows.append((host, None, None, "Сервер не ответил до общего deadline"))
-
             if self._cancel_event is cancel_event:
                 self.statsReady.emit(rows)
 
