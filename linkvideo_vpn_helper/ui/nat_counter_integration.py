@@ -2,9 +2,9 @@ from __future__ import annotations
 
 """Present RouterOS NAT ports as compact operational rows.
 
-The counters shown here are cumulative firewall-rule statistics from RouterOS.
-They are useful evidence that a NAT rule has actually matched traffic, but they
-are deliberately not described as a live connection / current port status.
+Per-port traffic counters are intentionally not shown in the client card. On the
+RouterOS fleet they are cumulative firewall-rule counters rather than a reliable
+live status, and they make the compact port rows unnecessarily crowded.
 """
 
 from PySide6.QtCore import QSize, Qt
@@ -12,44 +12,6 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 
 _INSTALLED = False
-
-
-def _fmt_bytes(value: int) -> str:
-    number = float(max(0, int(value or 0)))
-    units = ("B", "KiB", "MiB", "GiB", "TiB")
-    for unit in units:
-        if number < 1024.0 or unit == units[-1]:
-            if unit == "B":
-                return f"{int(number)} {unit}"
-            return f"{number:.1f} {unit}"
-        number /= 1024.0
-    return f"{int(number)} B"
-
-
-def _fmt_packets(value: int) -> str:
-    try:
-        number = max(0, int(value or 0))
-    except Exception:
-        number = 0
-    return f"{number:,}".replace(",", " ")
-
-
-def _metric(title: str, value: str) -> QWidget:
-    host = QWidget()
-    host.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-    layout = QVBoxLayout(host)
-    layout.setContentsMargins(0, 2, 0, 2)
-    layout.setSpacing(2)
-    caption = QLabel(title)
-    caption.setObjectName("TinyMuted")
-    caption.setMinimumHeight(16)
-    data = QLabel(value)
-    data.setObjectName("Value")
-    data.setMinimumHeight(22)
-    data.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-    layout.addWidget(caption, 0, Qt.AlignmentFlag.AlignRight)
-    layout.addWidget(data, 0, Qt.AlignmentFlag.AlignRight)
-    return host
 
 
 def install_nat_counter_ui() -> None:
@@ -77,15 +39,13 @@ def install_nat_counter_ui() -> None:
         if client is None or port_list is None or not client.ports:
             return
 
-        bytes_by_port = dict(getattr(client, "port_nat_bytes", {}) or {})
-        packets_by_port = dict(getattr(client, "port_nat_packets", {}) or {})
         disabled = {int(value) for value in (getattr(client, "disabled_ports", []) or [])}
         conflicts = dict(getattr(client, "port_conflicts", {}) or {})
         recent = {int(value) for value in (getattr(self, "_recent_new_ports", set()) or set())}
 
-        port_list.setSpacing(7)
-        port_list.setMinimumHeight(min(360, max(185, len(client.ports) * 78 + 10)))
-        port_list.setMaximumHeight(390)
+        port_list.setSpacing(6)
+        port_list.setMinimumHeight(min(320, max(160, len(client.ports) * 62 + 10)))
+        port_list.setMaximumHeight(350)
 
         for index in range(port_list.count()):
             item = port_list.item(index)
@@ -95,8 +55,6 @@ def install_nat_counter_ui() -> None:
             except Exception:
                 continue
 
-            rule_bytes = int(bytes_by_port.get(port, 0) or 0)
-            rule_packets = int(packets_by_port.get(port, 0) or 0)
             conflict_rows = list(conflicts.get(port, []) or [])
 
             # QListWidget paints its own item text underneath setItemWidget().
@@ -113,15 +71,15 @@ def install_nat_counter_ui() -> None:
             # presentation only and must not swallow the click.
             row.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             layout = QHBoxLayout(row)
-            layout.setContentsMargins(14, 9, 14, 9)
-            layout.setSpacing(14)
+            layout.setContentsMargins(14, 7, 14, 7)
+            layout.setSpacing(10)
 
             identity = QVBoxLayout()
             identity.setContentsMargins(0, 0, 0, 0)
-            identity.setSpacing(3)
+            identity.setSpacing(2)
             number = QLabel(f"Порт {port}")
             number.setObjectName("Value")
-            number.setMinimumHeight(23)
+            number.setMinimumHeight(21)
             identity.addWidget(number)
 
             detail_parts = ["TCP · dst-nat"]
@@ -138,7 +96,8 @@ def install_nat_counter_ui() -> None:
                     detail_parts.append("также: " + ", ".join(owners[:2]))
             detail = QLabel(" · ".join(detail_parts))
             detail.setObjectName("TinyMuted")
-            detail.setMinimumHeight(18)
+            detail.setMinimumHeight(17)
+            detail.setWordWrap(False)
             identity.addWidget(detail)
             layout.addLayout(identity, 1)
 
@@ -152,10 +111,7 @@ def install_nat_counter_ui() -> None:
             if conflict_rows:
                 layout.addWidget(StatusPill("Конфликт", "danger"), 0, Qt.AlignmentFlag.AlignVCenter)
 
-            layout.addWidget(_metric("NAT-трафик", _fmt_bytes(rule_bytes)), 0)
-            layout.addWidget(_metric("Пакеты", _fmt_packets(rule_packets)), 0)
-
-            item.setSizeHint(QSize(0, 72))
+            item.setSizeHint(QSize(0, 58))
             port_list.setItemWidget(item, row)
 
     SearchManagePage._render_client = patched_render
