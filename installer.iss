@@ -1,5 +1,5 @@
 #define MyAppName "LinkVideo.Helper"
-#define MyAppVersion "3.0.8"
+#define MyAppVersion "3.0.10"
 #define MyAppPublisher "LinkVideo"
 #define MyAppExeName "LinkVideo.Helper.exe"
 
@@ -28,11 +28,11 @@ ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=force
 RestartApplications=no
 AppMutex=LinkVideoHelperMutex
-VersionInfoVersion=3.0.8.0
+VersionInfoVersion=3.0.10.0
 VersionInfoCompany=LinkVideo
 VersionInfoDescription=LinkVideo.Helper Setup
 VersionInfoProductName=LinkVideo.Helper
-VersionInfoProductVersion=3.0.8
+VersionInfoProductVersion=3.0.10
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
