@@ -68,7 +68,11 @@ try:
     service = public.VPNAutomationService()
     result = service.seed_lifecycle("vpn-test", SessionCredentials("u", "p"))
     assert result.total == 1
-    assert result.unknown == 1
+    # Seed is non-destructive: a 250-day never-active account is classified as
+    # a quarantine candidate, but PPP disabled is not changed until LV-Aging is
+    # explicitly enabled/applied.
+    assert result.quarantine == 1
+    assert FakeAPI.secrets[0]["disabled"] == "no"
 
     final = FakeAPI.secrets[0]["comment"]
     meta = policy.parse_extended_comment(final)
@@ -76,7 +80,8 @@ try:
     actual_created_day = meta.created_ns // policy.DAY_NS
     assert actual_created_day == expected_created_day, (actual_created_day, expected_created_day, final)
     assert meta.base_comment == "operator note"
-    assert "|LV2|" in final and "|c=" in final and "|r=c|" in final
+    assert meta.state == "Q" and meta.reason == "inactive_90"
+    assert "|LV2|" in final and "|c=" in final and "|r=q|" in final
 finally:
     policy.RouterOSAPIClient = real_policy_api
     api_module.RouterOSAPIClient = real_module_api
