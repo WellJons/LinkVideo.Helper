@@ -27,11 +27,11 @@ def _refresh_automation_cells(page) -> None:
         status_item.setText(auto.state_text)
         if auto.installed and not auto.paused:
             status_item.setToolTip(
-                "LV-Aging включён и запускается раз в сутки в 03:20. "
-                "Счётчики карантина/архива меняются после запуска LV-Aging."
+                "LV-Aging запускается раз в сутки в 03:20: 30+ дней — спящая, "
+                "90+ — карантин, 365+ — автоматическое удаление учётки и её NAT."
                 if auto.aging_enabled
                 else
-                "LV-Aging выключен. Новые учётки автоматически в карантин не переводятся."
+                "LV-Aging выключен. Карантин и автоматическое удаление не выполняются."
             )
         else:
             status_item.setToolTip("")
@@ -42,13 +42,25 @@ def install_vpn_servers_status_ui() -> None:
     if _INSTALLED:
         return
 
+    from PySide6.QtWidgets import QLabel
     from linkvideo_vpn_helper.ui.pages.vpn_servers_page import VPNServersPage
 
+    original_build = VPNServersPage._build
     original_on_stats = VPNServersPage._on_stats
+
+    def patched_build(self):
+        original_build(self)
+        for label in self.findChildren(QLabel):
+            text = label.text()
+            if "Кандидат в архив — 365+ дней" in text:
+                label.setText("<b>Автоудаление — 365+ дней</b> — удаляется PPP-учётка, её NAT и отдельный профиль")
+            elif "Активность неизвестна" in text and "автоматика не отключает" in text:
+                label.setText("<b>Активность неизвестна</b> — годовой отсчёт начинается с установки/создания LV-метки")
 
     def patched_on_stats(self, rows):
         original_on_stats(self, rows)
         _refresh_automation_cells(self)
 
+    VPNServersPage._build = patched_build
     VPNServersPage._on_stats = patched_on_stats
     _INSTALLED = True
