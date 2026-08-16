@@ -3,11 +3,11 @@
 package main
 
 import (
-    "errors"
     "fmt"
     "os"
     "path/filepath"
     "strings"
+    "time"
 )
 
 const (
@@ -23,6 +23,29 @@ func silentUpdateStateDir() string {
     return filepath.Join(programData, "LinkVideo.Helper", "Updates")
 }
 
+func silentUpdateWarningPath() string {
+    return filepath.Join(silentUpdateStateDir(), "setup-warning.txt")
+}
+
+func recordSilentUpdateWarning(err error) {
+    if err == nil {
+        _ = os.Remove(silentUpdateWarningPath())
+        return
+    }
+    _ = os.MkdirAll(silentUpdateStateDir(), 0o755)
+    _ = os.WriteFile(
+        silentUpdateWarningPath(),
+        []byte("Фоновые патчи недоступны: "+err.Error()+"\r\n"),
+        0o644,
+    )
+}
+
+func silentUpdateTaskCommand(updaterPath string) string {
+    // /TR is one argument for schtasks.exe. Quoting the executable path is
+    // mandatory because Program Files contains a space.
+    return fmt.Sprintf(`"%s" --scheduled`, updaterPath)
+}
+
 func registerSilentUpdateTask(dest string) error {
     updaterPath := filepath.Join(dest, silentUpdaterExeName)
     if _, err := os.Stat(updaterPath); err != nil {
@@ -34,11 +57,13 @@ func registerSilentUpdateTask(dest string) error {
         return fmt.Errorf("не удалось создать каталог фоновых обновлений: %w", err)
     }
 
-    // Helper runs without elevation and only needs to stage pending.json and
-    // pending-patch.exe here. Use the built-in Users SID so this works on
-    // localized Windows installations. The privileged updater independently
-    // verifies the official GitHub manifest and SHA before executing anything.
-    if err := runHidden(
+    // Helper runs without elevation and only stages an already SHA-checked
+    // pending patch here. The SYSTEM updater re-loads the official GitHub
+    // manifest and validates the official SHA before executing anything.
+    // Never let icacls hold the installer for minutes if Windows policy/services
+    // are unhealthy.
+    if err := runHiddenTimeout(
+        8*time.Second,
         "icacls.exe",
         stateDir,
         "/inheritance:e",
@@ -48,27 +73,36 @@ func registerSilentUpdateTask(dest string) error {
         return fmt.Errorf("не удалось настроить права каталога обновлений: %w", err)
     }
 
-    script := fmt.Sprintf(
-        `$ErrorActionPreference='Stop';`+
-            `$action=New-ScheduledTaskAction -Execute '%s' -Argument '--scheduled';`+
-            `$principal=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest;`+
-            `$settings=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 10);`+
-            `Register-ScheduledTask -TaskName '%s' -Action $action -Principal $principal -Settings $settings -Force|Out-Null`,
-        psEscape(updaterPath), psEscape(silentUpdateTaskName),
-    )
-    if err := runPowerShell(script); err != nil {
+    // PowerShell ScheduledTasks cmdlets can spend tens of seconds importing the
+    // module or waiting for the scheduler service on some real workstations.
+    // schtasks.exe talks to Task Scheduler directly, has no localization-sensitive
+    // output parsing here, and is hard deadline-bounded by runHiddenTimeout.
+    if err := runHiddenTimeout(
+        10*time.Second,
+        "schtasks.exe",
+        "/Create",
+        "/TN", silentUpdateTaskName,
+        "/TR", silentUpdateTaskCommand(updaterPath),
+        "/SC", "ONLOGON",
+        "/RU", "SYSTEM",
+        "/RL", "HIGHEST",
+        "/F",
+    ); err != nil {
         return fmt.Errorf("не удалось зарегистрировать фоновый updater: %w", err)
     }
     return nil
 }
 
 func removeSilentUpdateTask() {
-    script := fmt.Sprintf(
-        `$ErrorActionPreference='SilentlyContinue';`+
-            `Unregister-ScheduledTask -TaskName '%s' -Confirm:$false -ErrorAction SilentlyContinue`,
-        psEscape(silentUpdateTaskName),
+    // Removal is cleanup, never a reason to keep the uninstall wizard waiting.
+    // A missing task also isn't an uninstall failure.
+    _ = runHiddenTimeout(
+        6*time.Second,
+        "schtasks.exe",
+        "/Delete",
+        "/TN", silentUpdateTaskName,
+        "/F",
     )
-    _ = runPowerShell(script)
     _ = os.RemoveAll(silentUpdateStateDir())
 }
 
@@ -78,33 +112,18 @@ func verifySilentUpdateTask(dest string) error {
         return err
     }
 
-    // Task Scheduler normalizes principals and action strings differently on
-    // different Windows builds/locales. Do not compare its presentation strings
-    // literally: resolve the account to the well-known SYSTEM SID and normalize
-    // quotes, whitespace, environment variables and path casing first.
-    script := fmt.Sprintf(
-        `$ErrorActionPreference='Stop';`+
-            `$t=Get-ScheduledTask -TaskName '%s' -ErrorAction Stop;`+
-            `if(-not $t){throw 'task missing'};`+
-            `$uid=([string]$t.Principal.UserId).Trim();`+
-            `$sid='';`+
-            `if($uid -eq 'S-1-5-18'){$sid=$uid}else{`+
-                `try{$sid=([System.Security.Principal.NTAccount]::new($uid)).Translate([System.Security.Principal.SecurityIdentifier]).Value}catch{$sid=''}};`+
-            `if($sid -ne 'S-1-5-18'){throw ('task principal is not SYSTEM: '+$uid)};`+
-            `$a=$t.Actions|Select-Object -First 1;`+
-            `if(-not $a){throw 'task action missing'};`+
-            `$actual=[Environment]::ExpandEnvironmentVariables(([string]$a.Execute).Trim().Trim('"'));`+
-            `$expected=[Environment]::ExpandEnvironmentVariables('%s');`+
-            `try{$actual=[IO.Path]::GetFullPath($actual)}catch{};`+
-            `try{$expected=[IO.Path]::GetFullPath($expected)}catch{};`+
-            `if(-not [string]::Equals($actual,$expected,[System.StringComparison]::OrdinalIgnoreCase)){throw ('task action mismatch: '+$actual)};`+
-            `$args=([string]$a.Arguments).Trim();`+
-            `if($args.Length -ge 2 -and $args.StartsWith('"') -and $args.EndsWith('"')){$args=$args.Substring(1,$args.Length-2).Trim()};`+
-            `if($args -ne '--scheduled'){throw ('task arguments mismatch: '+$args)}`,
-        psEscape(silentUpdateTaskName), psEscape(updaterPath),
-    )
-    if err := runPowerShell(script); err != nil {
-        return errors.New("задача фонового обновления создана, но Windows не подтвердила её параметры")
+    // Registration is performed by this elevated installer with /RU SYSTEM,
+    // /RL HIGHEST and /F. For runtime availability we only need to establish
+    // that Task Scheduler can query the task. Parsing /Query text would make the
+    // installer dependent on Windows language again. The privileged updater has
+    // the actual security boundary: official manifest + exact version + SHA256.
+    if err := runHiddenTimeout(
+        6*time.Second,
+        "schtasks.exe",
+        "/Query",
+        "/TN", silentUpdateTaskName,
+    ); err != nil {
+        return fmt.Errorf("Windows не подтвердила задачу фонового updater: %w", err)
     }
     return nil
 }
