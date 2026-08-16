@@ -33,25 +33,44 @@ class FakeAPI:
                 }
             ]
         if path == "/ip/firewall/connection":
-            # The service must use an exact dst-port query instead of dumping the
-            # entire conntrack table.
-            assert params.get("?dst-port=") == "11312", params
+            # Never dump the complete conntrack table. The preferred query is
+            # client-specific by translated Remote Address; a dst-port query is
+            # allowed only as the compatibility fallback when that batch did not
+            # contain the requested public port.
+            assert params.get("?reply-src-address=") == "172.16.1.10" or params.get("?dst-port=") == "11312", params
+            if params.get("?reply-src-address=") == "172.16.1.10":
+                return [
+                    {
+                        ".id": "*C1",
+                        "protocol": "tcp",
+                        "dst-port": "11312",
+                        "reply-src-address": "172.16.1.10",
+                        "reply-src-port": "554",
+                        "dstnat": "yes",
+                        "seen-reply": "yes",
+                        "orig-rate": "1200",
+                        "repl-rate": "4800000",
+                        "orig-bytes": "10000",
+                        "repl-bytes": "9000000",
+                    },
+                    # Historical Helper treated a port number appearing in an
+                    # arbitrary tuple field as active. Different dst-port must
+                    # still be ignored even in a client-filtered result.
+                    {
+                        ".id": "*C3",
+                        "protocol": "tcp",
+                        "src-port": "11312",
+                        "dst-port": "443",
+                        "reply-src-address": "172.16.1.10",
+                        "reply-src-port": "554",
+                        "dstnat": "yes",
+                        "seen-reply": "yes",
+                        "repl-rate": "777777",
+                    },
+                ]
             return [
-                {
-                    ".id": "*C1",
-                    "protocol": "tcp",
-                    "dst-port": "11312",
-                    "reply-src-address": "172.16.1.10",
-                    "reply-src-port": "554",
-                    "dstnat": "yes",
-                    "seen-reply": "yes",
-                    "orig-rate": "1200",
-                    "repl-rate": "4800000",
-                    "orig-bytes": "10000",
-                    "repl-bytes": "9000000",
-                },
                 # Same public port but another translated destination: must not
-                # be attributed to the selected LinkVideo client.
+                # be attributed to the selected LinkVideo client by fallback.
                 {
                     ".id": "*C2",
                     "protocol": "tcp",
@@ -64,19 +83,6 @@ class FakeAPI:
                     "repl-rate": "999999",
                     "orig-bytes": "999999",
                     "repl-bytes": "999999",
-                },
-                # Historical Helper treated a port number appearing in arbitrary
-                # fields as active. A different dst-port must be ignored.
-                {
-                    ".id": "*C3",
-                    "protocol": "tcp",
-                    "src-port": "11312",
-                    "dst-port": "443",
-                    "reply-src-address": "172.16.1.10",
-                    "reply-src-port": "554",
-                    "dstnat": "yes",
-                    "seen-reply": "yes",
-                    "repl-rate": "777777",
                 },
             ]
         raise AssertionError(path)
@@ -115,6 +121,10 @@ def main() -> None:
     assert "● соединение · без трафика" in ui
     assert "○ нет соединения" in ui
     assert "setContentsMargins(10, 0, 10, 0)" in ui
+
+    service_src = (root / "linkvideo_vpn_helper/services/port_traffic_service.py").read_text(encoding="utf-8")
+    assert '"?reply-src-address=": remote' in service_src
+    assert '"?dst-port=": str(port)' in service_src
 
     app = (root / "linkvideo_vpn_helper/app.py").read_text(encoding="utf-8")
     assert "install_inline_port_traffic()" in app
