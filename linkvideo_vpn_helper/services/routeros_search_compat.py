@@ -135,4 +135,17 @@ def install_routeros_search_compat() -> None:
     except Exception:
         pass
 
+    # Port search and the client card must use the same complete RouterOS NAT
+    # inventory.  This also installs safe create/read-back verification and the
+    # cumulative NAT byte/packet counters shown in the client card.
+    from linkvideo_vpn_helper.services.nat_inventory_compat import install_nat_inventory_compat
+    install_nat_inventory_compat()
+    try:
+        from linkvideo_vpn_helper.ui.nat_counter_integration import install_nat_counter_ui
+        install_nat_counter_ui()
+    except Exception:
+        # Service-side correctness is mandatory; UI enrichment must never block
+        # Helper startup if a future page import changes.
+        pass
+
     _INSTALLED = True
