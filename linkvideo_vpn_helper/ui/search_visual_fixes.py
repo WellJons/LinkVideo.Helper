@@ -32,8 +32,6 @@ def _enhance_result_rows(page) -> None:
             if client.server not in text and "портов:" not in text.lower():
                 continue
             label.setText(meta)
-            # Keep the theme-owned muted color but make operational metadata
-            # readable at a glance on both light and dark palettes.
             label.setStyleSheet("font-size: 12px; font-weight: 600;")
             label.setMinimumHeight(21)
             break
@@ -48,9 +46,6 @@ def _fix_inactive_row(page) -> None:
     if item is None or card is None:
         return
 
-    # The original sizeHint can be calculated before QSS gives both pills their
-    # final 25 px height. On Windows that clips the lower age pill against the
-    # card border. Reserve the final three-line height explicitly.
     card.setMinimumHeight(100)
     hinted = card.sizeHint()
     item.setSizeHint(QSize(hinted.width(), max(106, hinted.height() + 6)))
@@ -71,18 +66,13 @@ def install_search_visual_fixes() -> None:
 
     from linkvideo_vpn_helper.ui.pages.search_manage_page import SearchManagePage
     from linkvideo_vpn_helper.ui.pages.inactive_clients_page import InactiveClientsPage
-    import linkvideo_vpn_helper.ui.port_traffic_inline as port_traffic_inline
 
     original_on_search = SearchManagePage._on_search
     original_add_result = SearchManagePage._add_result
     original_live_refresh = getattr(SearchManagePage, "_on_live_refresh", None)
-    original_decorate = port_traffic_inline._decorate_port_rows
     original_add_inactive = InactiveClientsPage._add_record
 
     def patched_on_search(self, report):
-        # A successful search used to call TaskStatus.hide(). TaskStatus itself
-        # is already hidden while busy, so that did not close the separate
-        # BusyDialog and left "Ищу порт" floating over the finished card.
         if getattr(report, "matches", None):
             task = getattr(self, "task", None)
             close_busy = getattr(task, "_close_busy_dialog", None)
@@ -102,20 +92,6 @@ def install_search_visual_fixes() -> None:
         _enhance_result_rows(self)
         return result
 
-    def patched_decorate(page):
-        original_decorate(page)
-        port_list = getattr(page, "port_list", None)
-        if port_list is None:
-            return
-        for index in range(port_list.count()):
-            item = port_list.item(index)
-            if item is None or item.data(Qt.ItemDataRole.UserRole) is None:
-                continue
-            # setItemWidget() does not reliably suppress QListWidgetItem's own
-            # display text on Windows styles. The custom row already contains
-            # the port label, so keeping both produces doubled text.
-            item.setText("")
-
     def patched_add_inactive(self, record):
         result = original_add_inactive(self, record)
         _fix_inactive_row(self)
@@ -125,6 +101,5 @@ def install_search_visual_fixes() -> None:
     SearchManagePage._add_result = patched_add_result
     if callable(original_live_refresh):
         SearchManagePage._on_live_refresh = patched_live_refresh
-    port_traffic_inline._decorate_port_rows = patched_decorate
     InactiveClientsPage._add_record = patched_add_inactive
     _INSTALLED = True
