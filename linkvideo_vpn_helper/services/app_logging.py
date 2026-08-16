@@ -127,17 +127,37 @@ def read_recent(max_lines: int = 800) -> str:
     return "\n".join(lines[-max(50, int(max_lines)):]) if lines else "Журнал пока пуст."
 
 
+def _close_file_handler() -> None:
+    global _FILE_HANDLER
+    logger = logging.getLogger(LOGGER_NAME)
+    if _FILE_HANDLER is None:
+        return
+    try:
+        logger.removeHandler(_FILE_HANDLER)
+        _FILE_HANDLER.flush()
+        _FILE_HANDLER.close()
+    except Exception:
+        pass
+    _FILE_HANDLER = None
+
+
+def shutdown_runtime_logging() -> None:
+    """Flush and close the Windows log handle before Helper/process exit."""
+    with _LOCK:
+        logger = logging.getLogger(LOGGER_NAME)
+        try:
+            if _FILE_HANDLER is not None:
+                logger.info("APP | Завершение Helper")
+        except Exception:
+            pass
+        _close_file_handler()
+
+
 def clear_logs() -> None:
     global _FILE_HANDLER
     with _LOCK:
         logger = logging.getLogger(LOGGER_NAME)
-        if _FILE_HANDLER is not None:
-            try:
-                logger.removeHandler(_FILE_HANDLER)
-                _FILE_HANDLER.close()
-            except Exception:
-                pass
-            _FILE_HANDLER = None
+        _close_file_handler()
         folder = log_dir()
         folder.mkdir(parents=True, exist_ok=True)
         for candidate in folder.glob("LinkVideo.Helper.log*"):
