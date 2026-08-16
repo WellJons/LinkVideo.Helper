@@ -139,6 +139,8 @@ def main() -> int:
     install_vpn_automation_resilience()
     from linkvideo_vpn_helper.services.vpn_retention_policy import install_retention_policy
     install_retention_policy()
+    from linkvideo_vpn_helper.services.vpn_quarantine_runtime_fix import install_quarantine_runtime_fix
+    install_quarantine_runtime_fix()
     from linkvideo_vpn_helper.services.vpn_sheets_retention_compat import install_vpn_sheets_retention_compat
     install_vpn_sheets_retention_compat()
     from linkvideo_vpn_helper.ui.background_ux_integration import install_background_ux
@@ -157,6 +159,8 @@ def main() -> int:
     install_runtime_log_ui()
     from linkvideo_vpn_helper.ui.nat_counter_integration import install_nat_counter_ui
     install_nat_counter_ui()
+    from linkvideo_vpn_helper.ui.uptime_ru_compat import install_uptime_ru
+    install_uptime_ru()
     from linkvideo_vpn_helper.ui.vpn_servers_status_ui import install_vpn_servers_status_ui
     install_vpn_servers_status_ui()
     from linkvideo_vpn_helper.ui.vpn_servers_manual_refresh import install_vpn_servers_manual_refresh
