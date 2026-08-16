@@ -143,6 +143,11 @@ def main() -> int:
     from linkvideo_vpn_helper.ui.main_window import MainWindow
     splash.set_status("Открываю интерфейс…")
     window = MainWindow(service, credentials, settings)
+    # Google Sheets — вторичное зеркало/аварийная база. Подключаем его уже
+    # после создания основного окна, чтобы отсутствие ключа или сети никогда
+    # не мешало запуску Helper и работе с RouterOS.
+    from linkvideo_vpn_helper.ui.vpn_sheets_sync_integration import attach_vpn_sheets_sync
+    attach_vpn_sheets_sync(window, service, credentials, settings)
     splash.close()
     window.show()
     return app.exec()
