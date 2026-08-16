@@ -32,12 +32,18 @@ assert "progress_callback(100)" in update_service
 assert "os.startfile" in update_service
 assert '["cmd", "/c", "start"' not in update_service
 
-# Lifecycle and VPN-dashboard reads are automatic, deadline-bounded and use only
-# daemon workers. A pathological socket must not keep the Helper process alive.
+# VPN-client lifecycle data refreshes silently after the page is interactive;
+# the manual button is the only path that owns visible progress.
 assert "setInterval(60_000)" in ux
-assert "onActivated = patched_activated" in ux
-assert "onDeactivated = patched_deactivated" in ux
-assert "time.monotonic() + 24.0" in ux
+assert "QTimer.singleShot(350, lambda: _background_scan(self))" in ux
+assert "QTimer.singleShot(180, self._scan)" not in ux
+assert 'self._busy_kind = "background-scan" if background else "scan"' in ux
+assert "if not background:\n            self._set_busy(True)" in ux
+assert "incoming == list(getattr(self, \"_records\", []))" in ux
+assert "setUpdatesEnabled(False)" in ux
+assert "time.monotonic() + (14.0 if background else 18.0)" in ux
+
+# Lifecycle and VPN-dashboard reads are daemon-only and deadline-bounded.
 assert "time.monotonic() + 20.0" in ux
 assert "_start_daemon_batch" in ux
 assert "queue.Queue" in ux
