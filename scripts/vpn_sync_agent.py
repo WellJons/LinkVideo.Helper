@@ -10,6 +10,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from linkvideo_vpn_helper.services.google_key_discovery_compat import (
+    discover_service_account_file,
+    install_google_key_discovery,
+)
 from linkvideo_vpn_helper.services.vpn_sheets_sync import GoogleSheetsBackend, VPNSheetsSyncService
 from linkvideo_vpn_helper.services.vpn_service import SessionCredentials, VPNService
 
@@ -36,11 +40,29 @@ def _required(name: str) -> str:
 
 
 def _load_backend() -> GoogleSheetsBackend:
-    path = Path(_required("LINKVIDEO_SHEETS_SERVICE_ACCOUNT_FILE"))
-    if not path.is_file():
-        raise SystemExit(f"Google service account JSON не найден: {path}")
-    import json
-    return GoogleSheetsBackend(json.loads(path.read_text(encoding="utf-8")))
+    """Use the same key discovery rules as desktop Helper.
+
+    ``LINKVIDEO_SHEETS_SERVICE_ACCOUNT_FILE`` remains supported for a server
+    deployment, but it is no longer mandatory when a valid service-account JSON
+    already exists in a standard LinkVideo data directory.
+    """
+    install_google_key_discovery()
+    backend = GoogleSheetsBackend.from_settings(None)
+    if backend is not None:
+        path = getattr(backend, "source_path", "") or discover_service_account_file(None)
+        if path:
+            print(f"Google Sheets key: {path}", flush=True)
+        return backend
+
+    searched = ", ".join(str(path) for path in (
+        Path(os.getenv("PROGRAMDATA", "C:/ProgramData")) / "LinkVideo" / "Helper",
+        Path(os.getenv("PROGRAMDATA", "C:/ProgramData")) / "LinkVideo.Helper",
+        Path(os.getenv("PROGRAMDATA", "C:/ProgramData")) / "LinkVideo.Helper" / "Helper",
+    ))
+    raise SystemExit(
+        "Google service account JSON не найден. Укажите LINKVIDEO_SHEETS_SERVICE_ACCOUNT_FILE "
+        f"или положите валидный service-account JSON в одну из папок: {searched}"
+    )
 
 
 def main() -> int:
