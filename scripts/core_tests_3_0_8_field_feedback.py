@@ -113,6 +113,11 @@ def main() -> None:
     assert "install_visual_density()" in app
     assert "install_inline_port_traffic" not in app
     assert "port_traffic_service" not in app
+    assert "install_vpn_servers_status_ui()" in app
+
+    status_ui = (root / "linkvideo_vpn_helper/ui/vpn_servers_status_ui.py").read_text(encoding="utf-8")
+    assert "status_item.setText(auto.state_text)" in status_ui
+    assert "Счётчики карантина/архива меняются после запуска LV-Aging" in status_ui
 
     print("CORE TESTS 3.0.8 FIELD FEEDBACK OK")
 
