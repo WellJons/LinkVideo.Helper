@@ -89,7 +89,7 @@ func verifySilentUpdateTask(dest string) error {
             `$uid=([string]$t.Principal.UserId).Trim();`+
             `$sid='';`+
             `if($uid -eq 'S-1-5-18'){$sid=$uid}else{`+
-                `try{$sid=(New-Object System.Security.Principal.NTAccount($uid)).Translate([System.Security.Principal.SecurityIdentifier]).Value}catch{$sid=''}};`+
+                `try{$sid=([System.Security.Principal.NTAccount]::new($uid)).Translate([System.Security.Principal.SecurityIdentifier]).Value}catch{$sid=''}};`+
             `if($sid -ne 'S-1-5-18'){throw ('task principal is not SYSTEM: '+$uid)};`+
             `$a=$t.Actions|Select-Object -First 1;`+
             `if(-not $a){throw 'task action missing'};`+
@@ -97,7 +97,7 @@ func verifySilentUpdateTask(dest string) error {
             `$expected=[Environment]::ExpandEnvironmentVariables('%s');`+
             `try{$actual=[IO.Path]::GetFullPath($actual)}catch{};`+
             `try{$expected=[IO.Path]::GetFullPath($expected)}catch{};`+
-            `if(-not [string]::Equals($actual,$expected,[StringComparison]::OrdinalIgnoreCase)){throw ('task action mismatch: '+$actual)};`+
+            `if(-not [string]::Equals($actual,$expected,[System.StringComparison]::OrdinalIgnoreCase)){throw ('task action mismatch: '+$actual)};`+
             `$args=([string]$a.Arguments).Trim();`+
             `if($args.Length -ge 2 -and $args.StartsWith('"') -and $args.EndsWith('"')){$args=$args.Substring(1,$args.Length-2).Trim()};`+
             `if($args -ne '--scheduled'){throw ('task arguments mismatch: '+$args)}`,
