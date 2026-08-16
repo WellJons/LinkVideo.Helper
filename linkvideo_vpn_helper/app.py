@@ -121,6 +121,8 @@ def main() -> int:
     install_operation_cancel_guard()
     from linkvideo_vpn_helper.ui.search_visual_fixes import install_search_visual_fixes
     install_search_visual_fixes()
+    from linkvideo_vpn_helper.services.routeros_search_compat import install_routeros_search_compat
+    install_routeros_search_compat()
     from linkvideo_vpn_helper.services.runtime_hardening import install_service_runtime_hardening
     install_service_runtime_hardening()
     from linkvideo_vpn_helper.services.archive_process_hardening import install_archive_process_hardening
