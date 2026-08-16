@@ -34,8 +34,15 @@ class ArchiveService(_CoreArchiveService):
         deadline_seconds: float,
         cancel_event=None,
         thread_prefix: str = "archive-probe",
+        stop_when=None,
     ) -> tuple[list[tuple[str, dict | None, list[str]]], list[str]]:
-        """Probe HLS hosts using daemon workers under one wall-clock deadline."""
+        """Probe HLS hosts with daemon workers and one wall-clock deadline.
+
+        ``stop_when`` is evaluated after each completed host. This is important
+        for archive discovery: once the already collected slices cover the whole
+        interval, slow remaining DVRs are irrelevant and must not consume the
+        rest of the fallback deadline.
+        """
         ordered = list(dict.fromkeys(str(x).strip() for x in hosts if str(x).strip()))
         if not ordered:
             return [], []
@@ -82,6 +89,8 @@ class ArchiveService(_CoreArchiveService):
                 results.append((host, None, [f"{host}: {exc}"]))
             else:
                 results.append((host, info, errors))
+            if callable(stop_when) and stop_when(results):
+                break
 
         return results, [host for host in ordered if host in pending]
 
@@ -183,7 +192,15 @@ class ArchiveService(_CoreArchiveService):
 
         extra_slices: list[ArchiveSlice] = []
         if reserve_hosts:
-            reserve_results, reserve_timed_out = self._probe_hosts_daemon(
+            def reserve_covers_interval(items) -> bool:
+                slices = list(player_slices)
+                for _host, info, _errors in items:
+                    if info:
+                        slices.extend(info.get("slices") or [])
+                candidate_plan = self._build_plan(slices, start_ts, end_ts)
+                return bool(candidate_plan and not self._gaps(candidate_plan, start_ts, end_ts))
+
+            reserve_results, reserve_unfinished = self._probe_hosts_daemon(
                 reserve_hosts,
                 camera,
                 start_ts,
@@ -193,6 +210,7 @@ class ArchiveService(_CoreArchiveService):
                 deadline_seconds=self.RESERVE_FALLBACK_DEADLINE_SECONDS,
                 cancel_event=cancel_event,
                 thread_prefix="archive-reserve-player",
+                stop_when=reserve_covers_interval,
             )
             for host, info, probe_errors in reserve_results:
                 if host not in checked:
@@ -203,9 +221,9 @@ class ArchiveService(_CoreArchiveService):
                     learned = list(info.get("hosts") or [])
                     self._remember_history_hosts(camera.label, learned)
                     self._remember_global_hosts(operator_id, learned)
-            if reserve_timed_out:
+            if reserve_unfinished and not reserve_covers_interval(reserve_results):
                 errors.append(
-                    f"Reserve fallback: {len(reserve_timed_out)} медленных серверов пропущено после "
+                    f"Reserve fallback: {len(reserve_unfinished)} медленных серверов пропущено после "
                     f"{self.RESERVE_FALLBACK_DEADLINE_SECONDS:.0f} сек"
                 )
 
@@ -281,17 +299,22 @@ class ArchiveService(_CoreArchiveService):
         if not candidates:
             return [], [], 0
 
-        found: list[ArchiveSlice] = []
-        checked_hosts: list[str] = []
         total = len(candidates)
-        checked_count = 0
         if progress:
             progress(
                 "Проверяю резервные DVR",
                 f"Не закрыто {sum(g.duration for g in missing):.0f} сек · кандидатов из B2O: {total}",
             )
 
-        results, timed_out_hosts = self._probe_hosts_daemon(
+        def deep_covers_interval(items) -> bool:
+            slices = list(known_slices)
+            for _host, info, _errors in items:
+                if info:
+                    slices.extend(info.get("slices") or [])
+            candidate_plan = self._build_plan(slices, start_ts, end_ts)
+            return bool(candidate_plan and not self._gaps(candidate_plan, start_ts, end_ts))
+
+        results, unfinished_hosts = self._probe_hosts_daemon(
             candidates,
             camera,
             probe_start,
@@ -301,28 +324,23 @@ class ArchiveService(_CoreArchiveService):
             deadline_seconds=self.DEEP_FALLBACK_DEADLINE_SECONDS,
             cancel_event=cancel_event,
             thread_prefix="archive-player-fallback",
+            stop_when=deep_covers_interval,
         )
 
+        found: list[ArchiveSlice] = []
+        checked_hosts: list[str] = []
         for host, info, _errors in results:
-            checked_count += 1
             checked_hosts.append(host)
             if info:
                 found.extend(info.get("slices") or [])
                 learned = list(info.get("hosts") or [])
                 if learned:
                     self._remember_global_hosts(resolved_operator, learned)
-            current_plan = self._build_plan(list(known_slices) + found, start_ts, end_ts)
-            if current_plan and not self._gaps(current_plan, start_ts, end_ts):
-                break
-            if progress and (checked_count % 6 == 0 or info):
-                detail = f"Проверено {checked_count}/{total}"
-                if info:
-                    detail += f" · найдено на {info.get('host')}"
-                progress("Проверяю резервные DVR", detail)
 
-        if progress and timed_out_hosts:
+        checked_count = len(checked_hosts)
+        if progress and unfinished_hosts and not deep_covers_interval(results):
             progress(
                 "Fallback ограничен по времени",
-                f"Проверено {checked_count}/{total}; ещё {len(timed_out_hosts)} медленных серверов не задерживают результат",
+                f"Проверено {checked_count}/{total}; ещё {len(unfinished_hosts)} медленных серверов не задерживают результат",
             )
         return found, checked_hosts, checked_count
