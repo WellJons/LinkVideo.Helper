@@ -20,7 +20,7 @@ from linkvideo_vpn_helper.services.vpn_automation_service_core import (
 _T = TypeVar("_T")
 
 # Logging action names on the deployed routers are stricter than script and
-# scheduler names.  Keep the inherited core code on the same alphanumeric name.
+# scheduler names. Keep the inherited core code on the same alphanumeric name.
 LEGACY_LV_LOG_ACTION = str(getattr(_core, "LV_LOG_ACTION", "LV-Auth") or "LV-Auth")
 LV_LOG_ACTION = "LVAuth"
 _core.LV_LOG_ACTION = LV_LOG_ACTION
@@ -30,12 +30,19 @@ class VPNAutomationService(_CoreVPNAutomationService):
     """LV automation with field-by-field RouterOS compatibility.
 
     Older RouterOS builds may return only ``unknown parameter`` without naming
-    the rejected property.  Sending a large add/set payload therefore makes it
+    the rejected property. Sending a large add/set payload therefore makes it
     impossible to know which harmless compatibility field broke installation.
 
-    Required fields are written first.  Optional fields are then applied one at
+    Required fields are written first. Optional fields are then applied one at
     a time, so an unsupported option can be skipped without losing the script,
     scheduler, logging action or rule itself.
+
+    One more RouterOS compatibility quirk matters for ``/system/logging``:
+    several deployed versions successfully create a logging rule but do not
+    return ``ret`` from ``add`` and may omit ``.id`` from a plain ``print``.
+    Such a rule is still a valid installed component. We therefore verify it by
+    its stable tuple (prefix/topics/action) and only require ``.id`` when we
+    actually need to mutate that already-created row.
     """
 
     _OPTIONAL_FIELDS_BY_PATH = {
@@ -80,8 +87,6 @@ class VPNAutomationService(_CoreVPNAutomationService):
                 api.set(path, rid, {field: value})
             except Exception as exc:
                 if cls._looks_like_optional_field_error(exc):
-                    # This field is enhancement/metadata only.  The component
-                    # already exists with its functional minimum.
                     continue
                 raise cls._component_error(path, name, field, exc) from exc
 
@@ -93,6 +98,16 @@ class VPNAutomationService(_CoreVPNAutomationService):
 
         if row:
             rid = str(row.get(".id", "") or "").strip()
+            if not rid:
+                # Try an explicit proplist before declaring an existing named
+                # object immutable. Some RouterOS menus omit .id from the broad
+                # print representation.
+                try:
+                    explicit = api.print(path, {".proplist": ".id,name"})
+                    explicit_row = cls._find(explicit, "name", name)
+                    rid = str((explicit_row or {}).get(".id", "") or "").strip()
+                except Exception:
+                    rid = ""
             if not rid:
                 raise RuntimeError(f"RouterOS не вернул .id для {path} {name}")
             if required:
@@ -107,8 +122,11 @@ class VPNAutomationService(_CoreVPNAutomationService):
                 raise cls._component_error(path, name, ", ".join(required), exc) from exc
             rid = str(rid or "").strip()
             if not rid:
-                # Some API versions omit ret even though the object was created.
-                created = cls._find(api.print(path), "name", name)
+                try:
+                    created_rows = api.print(path, {".proplist": ".id,name"})
+                except Exception:
+                    created_rows = api.print(path)
+                created = cls._find(created_rows, "name", name)
                 rid = str((created or {}).get(".id", "") or "").strip()
             if not rid:
                 raise RuntimeError(f"RouterOS создал {path} {name}, но не вернул .id")
@@ -118,6 +136,11 @@ class VPNAutomationService(_CoreVPNAutomationService):
 
     @classmethod
     def _set_logging_rule_enabled(cls, api, rid: str, enabled: bool) -> None:
+        if not rid:
+            # A logging rule created without a returned internal id is enabled
+            # by default. Runtime pause is still enforced by Scheduler. Do not
+            # turn a successfully installed rule into a fatal install error.
+            return
         method = getattr(api, "enable" if enabled else "disable", None)
         if callable(method):
             try:
@@ -129,15 +152,31 @@ class VPNAutomationService(_CoreVPNAutomationService):
         try:
             api.set("/system/logging", rid, {"disabled": "no" if enabled else "yes"})
         except Exception as exc:
-            # Very old builds can expose logging rules without a mutable
-            # disabled property.  The rule itself is still valid; runtime pause
-            # can continue to be controlled by Scheduler.
             if not cls._looks_like_optional_field_error(exc):
                 raise
 
+    @staticmethod
+    def _logging_rule_matches(row: dict | None, prefix: str, topics: str) -> bool:
+        if not row:
+            return False
+        actual_prefix = str(row.get("prefix", "") or "").strip()
+        actual_action = str(row.get("action", "") or "").strip()
+        actual_topics = str(row.get("topics", "") or "").strip()
+        return actual_prefix == prefix and actual_action == LV_LOG_ACTION and actual_topics == topics
+
+    @classmethod
+    def _logging_rows_with_ids(cls, api) -> list[dict]:
+        try:
+            return api.print(
+                "/system/logging",
+                {".proplist": ".id,topics,action,prefix,disabled,regex"},
+            )
+        except Exception:
+            return api.print("/system/logging")
+
     @classmethod
     def _upsert_logging_rule(cls, api, prefix: str, topics: str, enabled: bool = True) -> None:
-        rows = api.print("/system/logging")
+        rows = cls._logging_rows_with_ids(api)
         row = cls._find(rows, "prefix", prefix)
         required = {
             "topics": topics,
@@ -145,33 +184,51 @@ class VPNAutomationService(_CoreVPNAutomationService):
             "prefix": prefix,
         }
 
+        rid = ""
         if row:
             rid = str(row.get(".id", "") or "").strip()
-            if not rid:
-                raise RuntimeError(f"RouterOS не вернул .id для /system/logging {prefix}")
-            try:
-                api.set("/system/logging", rid, required)
-            except Exception as exc:
-                raise cls._component_error("/system/logging", prefix, "topics/action/prefix", exc) from exc
+            if rid:
+                try:
+                    api.set("/system/logging", rid, required)
+                except Exception as exc:
+                    raise cls._component_error("/system/logging", prefix, "topics/action/prefix", exc) from exc
+            elif not cls._logging_rule_matches(row, prefix, topics):
+                # We cannot safely mutate a row for which this RouterOS does not
+                # expose an internal id. Creating a second rule with the same
+                # prefix would duplicate logging, so surface a precise error.
+                raise RuntimeError(
+                    f"RouterOS не вернул .id для существующего /system/logging {prefix}, "
+                    "и его параметры отличаются от ожидаемых"
+                )
         else:
             try:
                 rid = str(api.add("/system/logging", required) or "").strip()
             except Exception as exc:
                 raise cls._component_error("/system/logging", prefix, "topics/action/prefix", exc) from exc
-            if not rid:
-                created = cls._find(api.print("/system/logging"), "prefix", prefix)
-                rid = str((created or {}).get(".id", "") or "").strip()
-            if not rid:
-                raise RuntimeError(f"RouterOS создал /system/logging {prefix}, но не вернул .id")
 
-        # regex is an optimisation: on RouterOS versions without it the
-        # dedicated memory buffer simply receives the selected topic and the
-        # restore script filters the message itself.
-        try:
-            api.set("/system/logging", rid, {"regex": "login failure for user"})
-        except Exception as exc:
-            if not cls._looks_like_optional_field_error(exc):
-                raise cls._component_error("/system/logging", prefix, "regex", exc) from exc
+            if not rid:
+                # Some RouterOS releases acknowledge a successful logging/add
+                # with !done but without =ret=. Re-read using an explicit
+                # proplist; if the stable rule tuple is present, creation was
+                # successful even when .id is still omitted.
+                created_rows = cls._logging_rows_with_ids(api)
+                created = cls._find(created_rows, "prefix", prefix)
+                if not cls._logging_rule_matches(created, prefix, topics):
+                    raise RuntimeError(
+                        f"RouterOS подтвердил создание /system/logging {prefix}, "
+                        "но правило не найдено при повторной проверке"
+                    )
+                rid = str((created or {}).get(".id", "") or "").strip()
+
+        # regex is an optimisation only. If this RouterOS does not expose .id
+        # for logging rows, the base topic/action/prefix rule is already enough:
+        # AutoRestore filters messages inside the RouterOS script itself.
+        if rid:
+            try:
+                api.set("/system/logging", rid, {"regex": "login failure for user"})
+            except Exception as exc:
+                if not cls._looks_like_optional_field_error(exc):
+                    raise cls._component_error("/system/logging", prefix, "regex", exc) from exc
 
         cls._set_logging_rule_enabled(api, rid, enabled)
 
