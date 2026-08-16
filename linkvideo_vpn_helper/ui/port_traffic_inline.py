@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-"""Inline live traffic for NAT port rows.
+"""Incremental live traffic for NAT port rows.
 
-This extension keeps the existing 42 px port row height. The port identity stays
-on the left and a compact live status occupies the otherwise unused space on the
-right. Conntrack is polled only while one client card is visible; multi-VPN
-search remains lightweight.
+Only one public port is queried at a time.  The selected row is checked
+immediately; untouched rows are filled progressively in the background.  This
+keeps the card responsive even on VPN servers with a large conntrack table.
 """
 
 import threading
@@ -55,6 +54,9 @@ def _reset_for_client(page) -> None:
     page._port_traffic_busy = False
     page._port_traffic_previous = {}
     page._port_traffic_previous_key = _client_key(page)
+    page._port_traffic_seen = set()
+    page._port_traffic_cursor = 0
+    page._port_traffic_pending_port = None
 
 
 def _decorate_port_rows(page) -> None:
@@ -102,7 +104,7 @@ def _decorate_port_rows(page) -> None:
         left.setObjectName(left_object)
         left.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
-        traffic = QLabel("… проверка")
+        traffic = QLabel("· ожидает проверки")
         traffic.setObjectName("TinyMuted")
         traffic.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         traffic.setMinimumWidth(210)
@@ -137,6 +139,8 @@ def _show_waiting_state(page) -> None:
     if current is None:
         return
     disabled = {int(x) for x in current.disabled_ports or []}
+    selected = int(getattr(page, "_selected_port", 0) or 0)
+    seen = set(getattr(page, "_port_traffic_seen", set()) or set())
     for port, label in labels.items():
         if port in disabled:
             label.setText("○ отключён")
@@ -146,13 +150,43 @@ def _show_waiting_state(page) -> None:
             label.setText("○ VPN не в сети")
             label.setToolTip("PPP/L2TP-сессия клиента сейчас не активна")
             _polish(label, "Muted")
-        else:
+        elif port == selected and port not in seen:
             label.setText("… проверка")
-            label.setToolTip("Проверяю connection tracking RouterOS")
+            label.setToolTip("Проверяю этот dst-nat порт в connection tracking RouterOS")
+            _polish(label, "TinyMuted")
+        elif port not in seen:
+            label.setText("· ожидает проверки")
+            label.setToolTip("Порт будет проверен по очереди; клик по строке проверяет его сразу")
             _polish(label, "TinyMuted")
 
 
-def _request_port_traffic(page, force: bool = False) -> None:
+def _choose_probe_port(page, requested: int | None = None) -> int | None:
+    current = getattr(page, "current", None)
+    if current is None:
+        return None
+    disabled = {int(x) for x in current.disabled_ports or []}
+    ports = [int(p) for p in current.ports if int(p) not in disabled]
+    if not ports:
+        return None
+
+    if requested is not None and int(requested) in ports:
+        return int(requested)
+
+    seen = set(getattr(page, "_port_traffic_seen", set()) or set())
+    unseen = [p for p in ports if p not in seen]
+    if unseen:
+        cursor = int(getattr(page, "_port_traffic_cursor", 0) or 0) % len(unseen)
+        port = unseen[cursor]
+        page._port_traffic_cursor = cursor + 1
+        return port
+
+    selected = int(getattr(page, "_selected_port", 0) or 0)
+    if selected in ports:
+        return selected
+    return ports[0]
+
+
+def _request_port_traffic(page, force: bool = False, port: int | None = None) -> None:
     current = getattr(page, "current", None)
     if current is None or not getattr(current, "ports", None):
         return
@@ -163,12 +197,25 @@ def _request_port_traffic(page, force: bool = False) -> None:
     if not current.is_online:
         _show_waiting_state(page)
         return
+
+    requested = int(port) if port is not None else None
     if getattr(page, "_port_traffic_busy", False):
+        if requested is not None:
+            page._port_traffic_pending_port = requested
         return
+
+    probe = _choose_probe_port(page, requested)
+    if probe is None:
+        return
+
+    label = getattr(page, "_port_traffic_labels", {}).get(probe)
+    if label is not None:
+        label.setText("… проверка")
+        label.setToolTip("Точечный запрос RouterOS connection tracking по внешнему dst-port")
+        _polish(label, "TinyMuted")
 
     server, login = _client_key(page)
     remote = str(current.remote_address or "")
-    ports = [int(p) for p in current.ports]
     generation = int(getattr(page, "_port_traffic_generation", 0)) + 1
     page._port_traffic_generation = generation
     page._port_traffic_busy = True
@@ -178,17 +225,20 @@ def _request_port_traffic(page, force: bool = False) -> None:
             "generation": generation,
             "server": server,
             "login": login,
+            "probe_port": probe,
             "sampled_at": time.monotonic(),
             "samples": None,
             "error": None,
         }
         try:
+            # Deliberately one port per worker.  This is the latency guarantee
+            # that prevents a 10-15 port client from blocking the whole card.
             payload["samples"] = page._port_traffic_service.sample_client(
                 server,
                 page.credentials,
                 login,
                 remote,
-                ports,
+                [probe],
             )
         except Exception as exc:
             payload["error"] = str(exc) or exc.__class__.__name__
@@ -200,8 +250,72 @@ def _request_port_traffic(page, force: bool = False) -> None:
     threading.Thread(
         target=worker,
         daemon=True,
-        name=f"lv-port-traffic:{server}:{login}",
+        name=f"lv-port-traffic:{server}:{login}:{probe}",
     ).start()
+
+
+def _apply_one_sample(page, port: int, sample, now: float) -> None:
+    label = getattr(page, "_port_traffic_labels", {}).get(port)
+    current = getattr(page, "current", None)
+    if label is None or current is None:
+        return
+
+    disabled = {int(x) for x in current.disabled_ports or []}
+    if port in disabled:
+        label.setText("○ отключён")
+        label.setToolTip("NAT-правило этого порта отключено")
+        _polish(label, "Muted")
+        return
+
+    previous = getattr(page, "_port_traffic_previous", {})
+    if sample is None:
+        label.setText("○ нет данных")
+        label.setToolTip("RouterOS не вернул состояние порта")
+        _polish(label, "Muted")
+        return
+
+    if sample.connections <= 0:
+        label.setText("○ нет соединения")
+        internal = f" → {sample.internal_port}" if sample.internal_port else ""
+        label.setToolTip(f"TCP dst-nat {port}{internal}: активных connection tracking записей нет")
+        _polish(label, "Muted")
+        previous[port] = (sample.total_bytes, now)
+        page._port_traffic_previous = previous
+        return
+
+    rate = float(sample.total_rate_bps)
+    old = previous.get(port)
+    if old:
+        old_bytes, old_time = old
+        dt = max(0.20, now - float(old_time))
+        if sample.total_bytes >= int(old_bytes):
+            delta_rate = (sample.total_bytes - int(old_bytes)) * 8.0 / dt
+            if rate <= 0 and delta_rate > 0:
+                rate = delta_rate
+    previous[port] = (sample.total_bytes, now)
+    page._port_traffic_previous = previous
+
+    internal = f" → {sample.internal_port}" if sample.internal_port else ""
+    details = [
+        f"TCP dst-nat {port}{internal}",
+        f"Соединений: {sample.connections}",
+        f"С ответом: {sample.seen_reply}",
+        f"К клиенту: {_fmt_bps(sample.orig_rate_bps)}",
+        f"От клиента: {_fmt_bps(sample.repl_rate_bps)}",
+    ]
+
+    if rate > 0:
+        label.setText(f"● {_fmt_bps(rate)}")
+        label.setToolTip("\n".join(details))
+        _polish(label, "SuccessText")
+    elif old is None and not sample.rate_supported:
+        label.setText(f"● {sample.connections} соед. · замер…")
+        label.setToolTip("\n".join(details) + "\nСкорость будет рассчитана по изменению byte counters при следующей проверке.")
+        _polish(label, "TinyMuted")
+    else:
+        label.setText("● соединение · без трафика")
+        label.setToolTip("\n".join(details))
+        _polish(label, "Muted")
 
 
 def _apply_samples(page, payload: dict) -> None:
@@ -216,82 +330,28 @@ def _apply_samples(page, payload: dict) -> None:
         return
 
     page._port_traffic_busy = False
-    labels = getattr(page, "_port_traffic_labels", {})
-    disabled = {int(x) for x in current.disabled_ports or []}
-    now = float(payload.get("sampled_at") or time.monotonic())
+    probe = int(payload.get("probe_port") or 0)
+    label = getattr(page, "_port_traffic_labels", {}).get(probe)
     error = payload.get("error")
 
     if error:
-        for port, label in labels.items():
-            if port in disabled:
-                continue
+        if label is not None:
             label.setText("! нет данных")
             label.setToolTip(str(error))
             _polish(label, "WarningText")
-        return
+    else:
+        samples = payload.get("samples") or {}
+        _apply_one_sample(page, probe, samples.get(probe), float(payload.get("sampled_at") or time.monotonic()))
 
-    samples = payload.get("samples") or {}
-    previous = getattr(page, "_port_traffic_previous", {})
-    next_previous = {}
+    seen = set(getattr(page, "_port_traffic_seen", set()) or set())
+    if probe:
+        seen.add(probe)
+    page._port_traffic_seen = seen
 
-    for port, label in labels.items():
-        if port in disabled:
-            label.setText("○ отключён")
-            label.setToolTip("NAT-правило этого порта отключено")
-            _polish(label, "Muted")
-            continue
-
-        sample = samples.get(port)
-        if sample is None:
-            label.setText("○ нет данных")
-            label.setToolTip("RouterOS не вернул состояние порта")
-            _polish(label, "Muted")
-            continue
-
-        if sample.connections <= 0:
-            label.setText("○ нет соединения")
-            internal = f" → {sample.internal_port}" if sample.internal_port else ""
-            label.setToolTip(f"TCP dst-nat {port}{internal}: активных connection tracking записей нет")
-            _polish(label, "Muted")
-            next_previous[port] = (sample.total_bytes, now)
-            continue
-
-        rate = float(sample.total_rate_bps)
-        old = previous.get(port)
-        if old:
-            old_bytes, old_time = old
-            dt = max(0.20, now - float(old_time))
-            # Use byte delta as a compatibility fallback and as a sanity check
-            # when a RouterOS build exposes rate fields but keeps them at zero.
-            if sample.total_bytes >= int(old_bytes):
-                delta_rate = (sample.total_bytes - int(old_bytes)) * 8.0 / dt
-                if rate <= 0 and delta_rate > 0:
-                    rate = delta_rate
-        next_previous[port] = (sample.total_bytes, now)
-
-        internal = f" → {sample.internal_port}" if sample.internal_port else ""
-        details = [
-            f"TCP dst-nat {port}{internal}",
-            f"Соединений: {sample.connections}",
-            f"С ответом: {sample.seen_reply}",
-            f"К клиенту: {_fmt_bps(sample.orig_rate_bps)}",
-            f"От клиента: {_fmt_bps(sample.repl_rate_bps)}",
-        ]
-
-        if rate > 0:
-            label.setText(f"● {_fmt_bps(rate)}")
-            label.setToolTip("\n".join(details))
-            _polish(label, "SuccessText")
-        elif old is None and not sample.rate_supported:
-            label.setText(f"● {sample.connections} соед. · замер…")
-            label.setToolTip("\n".join(details) + "\nТекущая скорость будет рассчитана по изменению byte counters на следующем опросе.")
-            _polish(label, "TinyMuted")
-        else:
-            label.setText("● соединение · без трафика")
-            label.setToolTip("\n".join(details))
-            _polish(label, "Muted")
-
-    page._port_traffic_previous = next_previous
+    pending = getattr(page, "_port_traffic_pending_port", None)
+    page._port_traffic_pending_port = None
+    if pending is not None and int(pending) != probe:
+        QTimer.singleShot(30, lambda p=int(pending): _request_port_traffic(page, force=True, port=p))
 
 
 def install_inline_port_traffic() -> None:
@@ -304,6 +364,7 @@ def install_inline_port_traffic() -> None:
     original_init = SearchManagePage.__init__
     original_render = SearchManagePage._render_client
     original_close = SearchManagePage._close_client_view
+    original_port_selected = SearchManagePage._port_selected
 
     def patched_init(self, *args, **kwargs):
         original_init(self, *args, **kwargs)
@@ -318,6 +379,9 @@ def install_inline_port_traffic() -> None:
         self._port_traffic_previous = {}
         self._port_traffic_previous_key = ("", "")
         self._port_traffic_labels = {}
+        self._port_traffic_seen = set()
+        self._port_traffic_cursor = 0
+        self._port_traffic_pending_port = None
 
     def patched_render(self):
         original_render(self)
@@ -325,7 +389,25 @@ def install_inline_port_traffic() -> None:
         if getattr(self, "current", None) is not None:
             if not self._port_traffic_timer.isActive():
                 self._port_traffic_timer.start()
-            QTimer.singleShot(50, lambda: _request_port_traffic(self, force=True))
+            QTimer.singleShot(
+                50,
+                lambda: _request_port_traffic(
+                    self,
+                    force=True,
+                    port=int(getattr(self, "_selected_port", 0) or 0) or None,
+                ),
+            )
+
+    def patched_port_selected(self, current, previous):
+        result = original_port_selected(self, current, previous)
+        port = int(getattr(self, "_selected_port", 0) or 0)
+        if port:
+            label = getattr(self, "_port_traffic_labels", {}).get(port)
+            if label is not None:
+                label.setText("… проверка")
+                _polish(label, "TinyMuted")
+            QTimer.singleShot(0, lambda p=port: _request_port_traffic(self, force=True, port=p))
+        return result
 
     def patched_close(self, checked=False, immediate: bool = False):
         timer = getattr(self, "_port_traffic_timer", None)
@@ -335,9 +417,12 @@ def install_inline_port_traffic() -> None:
         self._port_traffic_busy = False
         self._port_traffic_previous = {}
         self._port_traffic_labels = {}
+        self._port_traffic_seen = set()
+        self._port_traffic_pending_port = None
         return original_close(self, checked, immediate)
 
     SearchManagePage.__init__ = patched_init
     SearchManagePage._render_client = patched_render
+    SearchManagePage._port_selected = patched_port_selected
     SearchManagePage._close_client_view = patched_close
     _INSTALLED = True
