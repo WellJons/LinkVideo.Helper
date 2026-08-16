@@ -151,6 +151,8 @@ def main() -> int:
     install_update_ux()
     from linkvideo_vpn_helper.ui.runtime_log_integration import install_runtime_log_ui
     install_runtime_log_ui()
+    from linkvideo_vpn_helper.ui.vpn_servers_status_ui import install_vpn_servers_status_ui
+    install_vpn_servers_status_ui()
 
     from linkvideo_vpn_helper.ui.main_window import MainWindow
     splash.set_status("Открываю интерфейс…")
