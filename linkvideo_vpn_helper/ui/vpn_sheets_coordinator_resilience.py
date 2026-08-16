@@ -95,9 +95,14 @@ def install_vpn_sheets_coordinator_resilience() -> None:
         )
 
         def master():
-            # First prove that Google is reachable and migrate all legacy grids in
-            # one request. If this fails, do not spend a minute reading 12 routers
-            # just to discover the same Google outage 12 times.
+            # First prove that the actual server tabs are reachable and migrate
+            # legacy grids in one request. LV Summary is deliberately excluded
+            # from this gate because it is secondary and must never block the
+            # authoritative per-server mirror.
+            had_summary_cache = getattr(self.backend, "_lv_summary_rows", None)
+            suppress_summary_preload = had_summary_cache is None
+            if suppress_summary_preload:
+                self.backend._lv_summary_rows = {}
             try:
                 prepare = getattr(self.backend, "prepare_sync", None)
                 if callable(prepare):
@@ -111,6 +116,9 @@ def install_vpn_sheets_coordinator_resilience() -> None:
                 event("SHEETS", "Google preflight не пройден", detail, level=40)
                 self.syncFinished.emit(0, len(servers))
                 return
+            finally:
+                if suppress_summary_preload:
+                    self.backend._lv_summary_rows = None
 
             tasks: queue.Queue[str] = queue.Queue()
             results: queue.Queue[tuple[str, bool, str, bool]] = queue.Queue()
