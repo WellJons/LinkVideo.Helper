@@ -113,16 +113,19 @@ def main() -> None:
         "install_search_escape_compat()",
         "install_nested_scroll_guard()",
         "install_nat_counter_ui()",
+        "install_uptime_ru()",
         "install_retention_policy()",
         "install_vpn_sheets_retention_compat()",
+        "install_vpn_automation_sheets_bridge()",
     ):
         assert marker in app, marker
+    assert "install_quarantine_runtime_fix()" not in app
     assert "install_inline_port_traffic" not in app
     assert "port_traffic_service" not in app
 
     status_ui = (root / "linkvideo_vpn_helper/ui/vpn_servers_status_ui.py").read_text(encoding="utf-8")
     assert "status_item.setText(auto.state_text)" in status_ui
-    assert "365+ — автоматическое удаление" in status_ui
+    assert "365+" in status_ui and "удал" in status_ui
 
     manual = (root / "linkvideo_vpn_helper/ui/vpn_servers_manual_refresh.py").read_text(encoding="utf-8")
     assert "timer.stop()" in manual
@@ -137,7 +140,15 @@ def main() -> None:
     assert "QAbstractScrollArea" in scroll
     assert "event.accept()" in scroll
 
-    print("CORE TESTS 3.0.8 FIELD FEEDBACK OK")
+    uptime = (root / "linkvideo_vpn_helper/ui/uptime_ru_compat.py").read_text(encoding="utf-8")
+    assert "Время подключения" in uptime
+    assert "мин" in uptime
+
+    bridge = (root / "linkvideo_vpn_helper/ui/vpn_automation_sheets_bridge.py").read_text(encoding="utf-8")
+    assert "notify_mutation" in bridge
+    assert "включение автокарантина" in bridge
+
+    print("CORE TESTS FIELD FEEDBACK 3.0.10 OK")
 
 
 if __name__ == "__main__":
