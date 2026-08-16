@@ -56,8 +56,21 @@ HISTORY_COLUMNS = (
     "Sync ID",
 )
 
-# Поля, изменения которых считаются реальным изменением конфигурации клиента.
-COMPARE_COLUMNS = SERVER_COLUMNS[:12]
+# Только реальные изменения конфигурации/состояния создают запись аудита.
+# Наблюдаемые поля «Последняя активность» и «Дней без связи» обновляются в
+# серверном листе, но не превращают каждую 5-минутную сверку в новое событие.
+COMPARE_COLUMNS = (
+    "Логин",
+    "Пароль",
+    "Service",
+    "Profile",
+    "Local Address",
+    "Remote Address",
+    "Комментарий RouterOS",
+    "NAT / Порты",
+    "Lifecycle",
+    "PPP disabled",
+)
 SENSITIVE_HISTORY_COLUMNS = {"Пароль", "RouterOS snapshot"}
 
 LIFECYCLE_LABELS = {
@@ -107,6 +120,15 @@ def _history_values(item: dict[str, Any], fields: list[str]) -> dict[str, Any]:
         else:
             result[field_name] = item.get(field_name, "")
     return result
+
+
+def _compare_value(field_name: str, value: Any) -> str:
+    text = str(value or "")
+    if field_name == "Комментарий RouterOS":
+        # LV-Activity меняет служебный last= внутри комментария. Это не ручное
+        # изменение конфигурации, поэтому сравниваем только пользовательскую часть.
+        return parse_lv_comment(text).base_comment.strip()
+    return text
 
 
 @dataclass(slots=True)
@@ -469,7 +491,7 @@ def reconcile_records(
             was_deleted = str(previous.get("Удалена", "") or "").strip().lower() in {"да", "yes", "true", "1"}
             changed_fields = [
                 name for name in COMPARE_COLUMNS
-                if str(previous.get(name, "") or "") != str(row.get(name, "") or "")
+                if _compare_value(name, previous.get(name, "")) != _compare_value(name, row.get(name, ""))
             ]
             if was_deleted:
                 restored += 1
@@ -540,9 +562,13 @@ class VPNSheetsSyncService:
             initiator=initiator or self.default_initiator(),
             sync_id=sync_id,
         )
-        self.backend.write_server_rows(server, result.rows, len(existing_rows))
+
+        # Журнал важнее текущего представления: если второй запрос к Google
+        # внезапно не пройдёт, лучше получить повторное событие при следующей
+        # сверке, чем навсегда потерять факт изменения.
         if result.history:
             self.backend.append_history(result.history)
+        self.backend.write_server_rows(server, result.rows, len(existing_rows))
 
         counts: dict[str, int] = {key: 0 for key in LIFECYCLE_LABELS}
         for item in current_clients:
