@@ -58,6 +58,14 @@ assert '($state = "Q")' in restore
 assert '($state = "R")' not in restore
 assert "/ppp secret enable $sid" in restore
 assert "LV RESTORE" in restore
+# Old memory-buffer login failures must not be replayed every minute. The first
+# scheduler pass seeds a signature; only a later, different event may restore Q.
+assert "LVAuthLastEvent" in restore
+assert '($sig != $LVAuthLastEvent)' in restore
+# A failed login is evidence of intent, not a successful VPN session. Preserve
+# the real last-activity day instead of falsely moving it to today.
+assert 's=A|l=" . $last . "|c=" . $created . "|r=r|' in restore
+assert 's=A|l=" . $nowDay' not in restore
 
 install_retention_policy()
 from linkvideo_vpn_helper.services import vpn_automation_service as automation
