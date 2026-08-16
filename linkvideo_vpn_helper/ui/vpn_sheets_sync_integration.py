@@ -8,6 +8,7 @@ from typing import Callable
 from PySide6.QtCore import QObject, QTimer, Signal, Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
+from linkvideo_vpn_helper.services.app_logging import event, error
 from linkvideo_vpn_helper.services.vpn_sheets_sync import (
     GoogleSheetsBackend,
     SYNC_INTERVAL_SECONDS,
@@ -42,6 +43,7 @@ class VPNSyncCoordinator(QObject):
         self._host_lock = threading.Lock()
         self._debounce: dict[str, QTimer] = {}
         self._mutation_reason: dict[str, tuple[str, str]] = {}
+        self.last_failures: list[tuple[str, str]] = []
         self._periodic = QTimer(self)
         self._periodic.setInterval(SYNC_INTERVAL_SECONDS * 1000)
         self._periodic.timeout.connect(self._periodic_sync)
@@ -49,6 +51,11 @@ class VPNSyncCoordinator(QObject):
         self.mutationRequested.connect(self._queue_mutation)
         # Не создаём сетевую нагрузку прямо во время старта Helper.
         QTimer.singleShot(90_000, self._periodic_sync)
+        if self.backend:
+            email = str(getattr(self.backend, "service_account_info", {}).get("client_email", "") or "")
+            event("SHEETS", "Google Sheets подключён", email)
+        else:
+            event("SHEETS", "Google Sheets не настроен")
 
     def is_configured(self) -> bool:
         return self.sync_service is not None
@@ -56,8 +63,8 @@ class VPNSyncCoordinator(QObject):
     @staticmethod
     def config_hint() -> str:
         return (
-            "Ключ Google Sheets не найден. Ожидается "
-            "%PROGRAMDATA%\\LinkVideo\\Helper\\google_sheets_service_account.json"
+            "Ключ Google Sheets не найден. Используйте «Выбрать JSON» или поместите "
+            "Service Account JSON в папку LinkVideo.Helper."
         )
 
     def _claim_host(self, server: str) -> bool:
@@ -107,10 +114,15 @@ class VPNSyncCoordinator(QObject):
 
         def worker():
             try:
-                self.sync_service.sync_server(server, self.credentials, source=source, initiator=initiator)
-            except Exception:
+                result = self.sync_service.sync_server(server, self.credentials, source=source, initiator=initiator)
+                event(
+                    "SHEETS",
+                    "Синхронизирован сервер",
+                    f"{server} · клиентов {result.clients} · +{result.added} · Δ{result.changed} · удалено {result.deleted} · восстановлено {result.restored}",
+                )
+            except Exception as exc:
+                error("SHEETS", f"Ошибка синхронизации {server}", exc)
                 # Автосинхронизация не должна мешать основной работе Helper.
-                pass
             finally:
                 self._release_host(server)
 
@@ -130,9 +142,11 @@ class VPNSyncCoordinator(QObject):
             return
 
         self._busy = True
+        self.last_failures = []
         self.syncStarted.emit(len(servers))
         source = "Ручная синхронизация Helper" if manual else "Автосверка RouterOS"
         initiator = str(getattr(self.credentials, "username", "") or "LinkVideo.Helper") if manual else "LinkVideo.Helper auto-sync"
+        event("SHEETS", "Начата сверка RouterOS → Google Sheets", f"серверов {len(servers)} · {'вручную' if manual else 'автоматически'}")
 
         def master():
             tasks: queue.Queue[str] = queue.Queue()
@@ -191,15 +205,28 @@ class VPNSyncCoordinator(QObject):
                 done += 1
                 ok += int(success)
                 failed += int(not success)
+                if success:
+                    event("SHEETS", "Сверка сервера", f"{host} · {detail}")
+                else:
+                    self.last_failures.append((host, detail))
+                    event("SHEETS", "Ошибка сверки сервера", f"{host} · {detail}", level=40)
                 self.syncProgress.emit(done, len(servers), host, detail if success else f"Ошибка: {detail}")
 
             missing = [host for host in servers if host not in seen]
             for host in missing:
                 done += 1
                 failed += 1
-                self.syncProgress.emit(done, len(servers), host, "Тайм-аут общей синхронизации")
+                detail = "Тайм-аут общей синхронизации"
+                self.last_failures.append((host, detail))
+                event("SHEETS", "Ошибка сверки сервера", f"{host} · {detail}", level=40)
+                self.syncProgress.emit(done, len(servers), host, detail)
 
             self._busy = False
+            if failed:
+                summary = "; ".join(f"{host}: {detail}" for host, detail in self.last_failures[:3])
+                event("SHEETS", "Сверка завершена частично", f"успешно {ok} · ошибок {failed} · {summary}", level=30)
+            else:
+                event("SHEETS", "Сверка завершена", f"успешно {ok}")
             self.syncFinished.emit(ok, failed)
 
         threading.Thread(target=master, daemon=True, name="sheets-sync-master").start()
@@ -306,7 +333,15 @@ def _patch_vpn_servers_page() -> None:
             self.sheets_sync_btn.setEnabled(True)
             self.sheets_sync_btn.setText("Синхронизировать")
             if failed:
-                self.sheets_sync_status.setText(f"Сверка завершена частично · успешно {ok} · ошибок {failed}")
+                failures = list(getattr(coordinator, "last_failures", []) or [])
+                if failures:
+                    summary = "; ".join(f"{host}: {detail}" for host, detail in failures[:2])
+                    extra = f" · ещё {len(failures) - 2}" if len(failures) > 2 else ""
+                    self.sheets_sync_status.setText(
+                        f"Сверка частичная · {ok}/{ok + failed} · {summary}{extra}"
+                    )
+                else:
+                    self.sheets_sync_status.setText(f"Сверка завершена частично · успешно {ok} · ошибок {failed}")
             else:
                 self.sheets_sync_status.setText(f"База синхронизирована · серверов {ok} · автосверка каждые 5 минут")
 
