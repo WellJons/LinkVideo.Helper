@@ -40,6 +40,9 @@ VPN_Backups/
 **/VPN_Backups/
 *.secrets.json
 *.credentials.json
+*service_account*.json
+*service-account*.json
+linkvideo-helper-*.json
 .env
 .env.*
 !.env.example
