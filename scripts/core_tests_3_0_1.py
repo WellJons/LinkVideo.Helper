@@ -11,8 +11,12 @@ assert 'item.setSizeHint(QSize(0, 70))' in search
 assert 'self.page_layout.addStretch(1)' not in search
 assert 'self.workspace.setMinimumHeight(640)' in search
 components=(ROOT/'linkvideo_vpn_helper/ui/components.py').read_text(encoding='utf-8')
-assert 'QLocale("ru_RU")' in components
-assert 'QTime(t.hour(), t.minute(), 0)' in components
+compat=(ROOT/'linkvideo_vpn_helper/ui/components_compat.py').read_text(encoding='utf-8')
+combined=components+'\n'+compat
+assert 'QLocale("ru_RU")' in combined
+assert 'QTime(t.hour(), t.minute(), 0)' in combined
+assert 'class AnimatedStack' in combined
+assert 'class Toast' in combined
 for rel in ['archive_download_page.py','archive_diagnostics_page.py']:
     text=(ROOT/'linkvideo_vpn_helper/ui/pages'/rel).read_text(encoding='utf-8')
     assert 'now_dt = now_dt.addSecs(-now_dt.time().second())' in text
