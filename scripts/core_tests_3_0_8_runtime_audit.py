@@ -38,10 +38,13 @@ assert "os.IsNotExist(err)" in updater
 assert "context.WithTimeout" in patcher
 assert "exec.CommandContext" in patcher
 
-assert "FIRST_COMPLETED" in service_hardening
+# New-client automatic VPN selection uses only daemon workers. Even a socket
+# that ignores its normal timeout cannot own the application process lifetime.
+assert "queue.Queue" in service_hardening
+assert "threading.Semaphore" in service_hardening
 assert "deadline = time.monotonic()" in service_hardening
-assert "pool.shutdown(wait=False, cancel_futures=True)" in service_hardening
-assert "with ThreadPoolExecutor" not in service_hardening
+assert "daemon=True" in service_hardening
+assert "ThreadPoolExecutor" not in service_hardening
 assert "install_service_runtime_hardening()" in app
 
 assert '"-rw_timeout", "30000000"' in archive_hardening
