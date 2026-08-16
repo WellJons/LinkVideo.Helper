@@ -36,13 +36,7 @@ class ArchiveService(_CoreArchiveService):
         thread_prefix: str = "archive-probe",
         stop_when=None,
     ) -> tuple[list[tuple[str, dict | None, list[str]]], list[str]]:
-        """Probe HLS hosts with daemon workers and one wall-clock deadline.
-
-        ``stop_when`` is evaluated after each completed host. This is important
-        for archive discovery: once the already collected slices cover the whole
-        interval, slow remaining DVRs are irrelevant and must not consume the
-        rest of the fallback deadline.
-        """
+        """Probe HLS hosts with daemon workers and one wall-clock deadline."""
         ordered = list(dict.fromkeys(str(x).strip() for x in hosts if str(x).strip()))
         if not ordered:
             return [], []
@@ -136,14 +130,14 @@ class ArchiveService(_CoreArchiveService):
         if progress:
             progress("Получаю данные камеры", "Запрашиваю B2O…")
         camera = self.b2o.camera(operator_id, camera_id)
-        operator_id = self.b2o.resolve_operator_id(camera.label, operator_id)
-        start_ts = self._local_to_epoch(start_local, camera.utc_offset_hours)
-        end_ts = self._local_to_epoch(end_local, camera.utc_offset_hours)
+        start_ts = self._local_to_epoch(start_local, camera.timezone_offset)
+        end_ts = self._local_to_epoch(end_local, camera.timezone_offset)
         if end_ts <= start_ts:
-            raise ValueError("Время окончания должно быть позже начала")
+            raise ValueError("Конец периода должен быть позже начала")
 
-        checked: list[str] = []
         errors: list[str] = []
+        checked: list[str] = []
+        operator_id = self.b2o.resolve_operator_id(camera.label, operator_id)
 
         if progress:
             progress("Определяю DVR по плейлисту", f"{camera.server} · выбранный период")
