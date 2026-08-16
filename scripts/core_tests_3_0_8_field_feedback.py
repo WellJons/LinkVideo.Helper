@@ -116,6 +116,8 @@ def main() -> None:
         "install_uptime_ru()",
         "install_retention_policy()",
         "install_vpn_sheets_retention_compat()",
+        "install_vpn_sheets_resilience()",
+        "install_vpn_sheets_coordinator_resilience()",
         "install_vpn_automation_sheets_bridge()",
     ):
         assert marker in app, marker
@@ -147,6 +149,18 @@ def main() -> None:
     bridge = (root / "linkvideo_vpn_helper/ui/vpn_automation_sheets_bridge.py").read_text(encoding="utf-8")
     assert "notify_mutation" in bridge
     assert "включение автокарантина" in bridge
+
+    sheets_resilience = (root / "linkvideo_vpn_helper/services/vpn_sheets_resilience.py").read_text(encoding="utf-8")
+    assert "_MAX_ATTEMPTS = 3" in sheets_resilience
+    assert "_lv_read_timeout" in sheets_resilience
+    assert "prepare_sync" in sheets_resilience
+    assert "GoogleSheetsUncertainWriteError" in sheets_resilience
+
+    coordinator = (root / "linkvideo_vpn_helper/ui/vpn_sheets_coordinator_resilience.py").read_text(encoding="utf-8")
+    assert "worker_count = min(2" in coordinator
+    assert "prepare_sync" in coordinator
+    assert "time.monotonic() + 75.0" not in coordinator
+    assert "friendly_google_error" in coordinator
 
     print("CORE TESTS FIELD FEEDBACK 3.0.10 OK")
 
