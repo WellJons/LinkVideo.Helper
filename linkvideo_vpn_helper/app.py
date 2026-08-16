@@ -85,8 +85,9 @@ def main() -> int:
     settings = QSettings("LinkVideo", "LinkVideo.Helper")
     _migrate_settings(settings)
 
-    from linkvideo_vpn_helper.services.app_logging import event, install_runtime_logging
+    from linkvideo_vpn_helper.services.app_logging import event, install_runtime_logging, shutdown_runtime_logging
     install_runtime_logging()
+    app.aboutToQuit.connect(shutdown_runtime_logging)
     event("APP", "Запуск Helper", f"версия {APP_VERSION}")
 
     from linkvideo_vpn_helper.brand_theme import install_linkvideo_brand_theme
@@ -110,6 +111,7 @@ def main() -> int:
         login = LoginWindow(settings)
         if login.exec() != QDialog.DialogCode.Accepted or login.payload is None:
             event("APP", "Авторизация отменена")
+            shutdown_runtime_logging()
             return 0
         credential_values = (login.payload.username, login.payload.password)
     event("APP", "Авторизация RouterOS", credential_values[0])
