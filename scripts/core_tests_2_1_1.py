@@ -47,7 +47,8 @@ assert 'disabled=yes' in aging
 assert '(($state = "Q") || ($state = "R"))' in restore
 assert 'disabled=no' in restore
 assert 'login failure for user ' in restore
-assert 'buffer="LV-Auth"' in restore
+assert auto_mod.LV_LOG_ACTION.isalnum()
+assert f'buffer="{auto_mod.LV_LOG_ACTION}"' in restore
 
 
 class FakeAPI:
