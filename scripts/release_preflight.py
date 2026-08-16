@@ -39,6 +39,21 @@ def _check_version_contract() -> None:
     if not _VERSION_RE.fullmatch(APP_VERSION):
         raise SystemExit(f"APP_VERSION must be numeric x.y.z[.w], got: {APP_VERSION!r}")
 
+    notes = ROOT / f"RELEASE_{APP_VERSION}_RU.txt"
+    if not notes.exists() or not notes.read_text(encoding="utf-8").strip():
+        raise SystemExit(f"Release notes missing or empty: {notes.name}")
+
+    installer = (ROOT / "installer.iss").read_text(encoding="utf-8")
+    if f'#define MyAppVersion "{APP_VERSION}"' not in installer:
+        raise SystemExit("installer.iss version is not synchronized with APP_VERSION")
+
+    # 3.0.10 consolidated retention runtime into vpn_retention_policy. Keeping an
+    # old quarantine patch beside it is dangerous because install order could
+    # silently replace script sources/version again.
+    obsolete_runtime = PACKAGE / "services" / "vpn_quarantine_runtime_fix.py"
+    if obsolete_runtime.exists():
+        raise SystemExit("Obsolete vpn_quarantine_runtime_fix.py must not be shipped")
+
     # Legacy regression tests must never pin one concrete release number again.
     # A version bump must not require editing a chain of old tests.
     offenders: list[str] = []
