@@ -53,8 +53,6 @@ class StartupSplash(QWidget):
 
 
 def _migrate_settings(settings: QSettings):
-    # 1.1.x уже использовал то же имя QSettings. Сохраняем логин/пароль/B2O.
-    # Тема имела другие названия — переводим их в компактную схему 2.0.
     if not settings.contains("ui/theme_v2"):
         old = str(settings.value("ui/theme", "", str) or "").lower()
         if any(x in old for x in ("dark", "night", "graphite")):
@@ -64,12 +62,8 @@ def _migrate_settings(settings: QSettings):
         else:
             legacy = QSettings("LinkVideo", "VPNHelper")
             legacy_theme = str(legacy.value("ui/theme", "", str) or "").lower()
-            # На чистой установке фирменная LinkVideo — стандартная тема.
-            # Явную старую тёмную тему при обновлении у пользователя не отбираем.
             settings.setValue("ui/theme_v2", "dark" if "dark" in legacy_theme else "linkvideo_2026")
 
-    # Если приложение когда-то хранило учётные данные в старом VPNHelper,
-    # переносим их только когда актуальные значения отсутствуют.
     if not str(settings.value("username", "", str) or "").strip():
         legacy = QSettings("LinkVideo", "VPNHelper")
         old_user = str(legacy.value("username", "", str) or "").strip()
@@ -88,33 +82,27 @@ def main() -> int:
     app.setOrganizationName("LinkVideo")
     app.setQuitOnLastWindowClosed(True)
 
-    # Busy network operations that expose cancel_current_action() must remain
-    # cancellable by Esc and must not disable the main window's close button.
     from linkvideo_vpn_helper.ui.operation_cancel_guard import install_operation_cancel_guard
     install_operation_cancel_guard()
 
-    # Port connection tracking is attached only to an opened client card. Search
-    # itself stays conntrack-free and therefore cannot become slower because of
-    # the live per-port indicators.
     from linkvideo_vpn_helper.ui.port_traffic_inline import install_inline_port_traffic
     install_inline_port_traffic()
 
-    # Search completion and inline port rows have separate rendering lifecycles.
-    # Keep the floating busy dialog and custom item widgets synchronized.
     from linkvideo_vpn_helper.ui.search_visual_fixes import install_search_visual_fixes
     install_search_visual_fixes()
 
-    # Exact-version patch releases are downloaded without a confirmation dialog
-    # and applied by the pre-registered SYSTEM updater when Helper closes. Full
-    # installers intentionally keep the normal visible confirmation flow.
     from linkvideo_vpn_helper.ui.silent_update_integration import install_silent_patch_updates
     install_silent_patch_updates()
+
+    # Search/dashboard/lifecycle pages already have their own deadline guards.
+    # Apply the same contract to service-level all-VPN workflows such as the
+    # automatic least-loaded server selection used while creating a client.
+    from linkvideo_vpn_helper.services.runtime_hardening import install_service_runtime_hardening
+    install_service_runtime_hardening()
 
     settings = QSettings("LinkVideo", "LinkVideo.Helper")
     _migrate_settings(settings)
 
-    # Keep the historical settings key but expose it under the LinkVideo name.
-    # Runtime colors remain the balanced Helper palette from theme.py.
     from linkvideo_vpn_helper.brand_theme import install_linkvideo_brand_theme
     install_linkvideo_brand_theme()
 
@@ -135,8 +123,6 @@ def main() -> int:
             return 0
         credential_values = (login.payload.username, login.payload.password)
 
-    # Тяжёлые страницы по-прежнему не импортируются здесь — MainWindow создаёт
-    # их только при первом открытии соответствующего раздела.
     splash = StartupSplash(theme_style)
     splash.show()
     splash.set_status("Загружаю ядро…")
