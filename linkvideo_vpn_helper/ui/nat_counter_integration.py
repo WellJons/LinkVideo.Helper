@@ -38,12 +38,14 @@ def _metric(title: str, value: str) -> QWidget:
     host = QWidget()
     host.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
     layout = QVBoxLayout(host)
-    layout.setContentsMargins(0, 0, 0, 0)
-    layout.setSpacing(1)
+    layout.setContentsMargins(0, 2, 0, 2)
+    layout.setSpacing(2)
     caption = QLabel(title)
     caption.setObjectName("TinyMuted")
+    caption.setMinimumHeight(16)
     data = QLabel(value)
     data.setObjectName("Value")
+    data.setMinimumHeight(22)
     data.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
     layout.addWidget(caption, 0, Qt.AlignmentFlag.AlignRight)
     layout.addWidget(data, 0, Qt.AlignmentFlag.AlignRight)
@@ -81,9 +83,9 @@ def install_nat_counter_ui() -> None:
         conflicts = dict(getattr(client, "port_conflicts", {}) or {})
         recent = {int(value) for value in (getattr(self, "_recent_new_ports", set()) or set())}
 
-        port_list.setSpacing(6)
-        port_list.setMinimumHeight(min(330, max(170, len(client.ports) * 70 + 8)))
-        port_list.setMaximumHeight(360)
+        port_list.setSpacing(7)
+        port_list.setMinimumHeight(min(360, max(185, len(client.ports) * 78 + 10)))
+        port_list.setMaximumHeight(390)
 
         for index in range(port_list.count()):
             item = port_list.item(index)
@@ -97,20 +99,29 @@ def install_nat_counter_ui() -> None:
             rule_packets = int(packets_by_port.get(port, 0) or 0)
             conflict_rows = list(conflicts.get(port, []) or [])
 
+            # QListWidget paints its own item text underneath setItemWidget().
+            # Keep only UserRole as the data source so the old "Порт ..." row
+            # does not bleed through the custom card.
+            item.setText("")
+            item.setToolTip("")
+            item.setStatusTip("")
+            item.setWhatsThis("")
+
             row = QWidget()
             row.setObjectName("NatPortRow")
             # The QListWidget remains responsible for selection; labels/pills are
             # presentation only and must not swallow the click.
             row.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             layout = QHBoxLayout(row)
-            layout.setContentsMargins(12, 7, 12, 7)
-            layout.setSpacing(12)
+            layout.setContentsMargins(14, 9, 14, 9)
+            layout.setSpacing(14)
 
             identity = QVBoxLayout()
             identity.setContentsMargins(0, 0, 0, 0)
-            identity.setSpacing(2)
+            identity.setSpacing(3)
             number = QLabel(f"Порт {port}")
             number.setObjectName("Value")
+            number.setMinimumHeight(23)
             identity.addWidget(number)
 
             detail_parts = ["TCP · dst-nat"]
@@ -127,6 +138,7 @@ def install_nat_counter_ui() -> None:
                     detail_parts.append("также: " + ", ".join(owners[:2]))
             detail = QLabel(" · ".join(detail_parts))
             detail.setObjectName("TinyMuted")
+            detail.setMinimumHeight(18)
             identity.addWidget(detail)
             layout.addLayout(identity, 1)
 
@@ -143,15 +155,7 @@ def install_nat_counter_ui() -> None:
             layout.addWidget(_metric("NAT-трафик", _fmt_bytes(rule_bytes)), 0)
             layout.addWidget(_metric("Пакеты", _fmt_packets(rule_packets)), 0)
 
-            note = (
-                f"Порт {port}. Накопительные счётчики RouterOS NAT: "
-                f"{_fmt_bytes(rule_bytes)}, {_fmt_packets(rule_packets)} пакетов. "
-                "Это не текущая скорость и не доказательство активного соединения прямо сейчас."
-            )
-            if conflict_rows:
-                note += " На сервере обнаружено другое NAT-правило с тем же внешним портом."
-            item.setToolTip(note)
-            item.setSizeHint(QSize(0, 66))
+            item.setSizeHint(QSize(0, 72))
             port_list.setItemWidget(item, row)
 
     SearchManagePage._render_client = patched_render
