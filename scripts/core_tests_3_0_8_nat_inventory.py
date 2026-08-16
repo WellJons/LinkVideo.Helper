@@ -85,8 +85,6 @@ assert client.remote_address == FakeRouterOSAPIClient.remote, client.remote_addr
 assert client.ports == [13510, 13511, 13512, 13513], client.ports
 assert len(client.nat_rule_ids) == 4, client.nat_rule_ids
 
-# Counters remain available in the service snapshot for diagnostics/recovery,
-# but the client port rows deliberately do not render them as a live status.
 assert client.port_nat_bytes[13513] == 603853, client.port_nat_bytes
 assert client.port_nat_packets[13513] == 10026, client.port_nat_packets
 assert client.port_nat_packets[13511] == 9959, client.port_nat_packets
@@ -106,8 +104,8 @@ assert "expected_ports - actual_ports" in source
 assert "self._rollback_create" in source
 
 ui_source = (root / "linkvideo_vpn_helper/ui/nat_counter_integration.py").read_text(encoding="utf-8")
-assert "NAT-трафик" not in ui_source
-assert "Пакеты" not in ui_source
+assert "NAT-трафик" in ui_source
+assert "Пакеты" in ui_source
 assert "Включён" in ui_source and "Отключён" in ui_source
 assert "Конфликт" in ui_source
 assert 'item.setText("")' in ui_source
