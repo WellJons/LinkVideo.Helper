@@ -21,12 +21,15 @@ from linkvideo_vpn_helper.services.vpn_lifecycle import (
 from linkvideo_vpn_helper.services.vpn_service import SessionCredentials
 
 
-# Marker round-trip must preserve operator comments exactly enough for display.
-comment = compose_lv_comment("Клиент ПВЗ 15", "Q", 123456789)
+# Marker round-trip preserves operator comments and lifecycle day precision.
+# LV2 deliberately stores whole days instead of 19-digit nanoseconds.
+known_last = 123 * DAY_NS
+comment = compose_lv_comment("Клиент ПВЗ 15", "Q", known_last)
 meta = parse_lv_comment(comment)
 assert meta.base_comment == "Клиент ПВЗ 15"
 assert meta.state == "Q"
-assert meta.last_ns == 123456789
+assert meta.last_ns == known_last
+assert "|LV2|" in comment
 
 now = time.time_ns()
 assert classify_state(now - (SLEEP_DAYS + 1) * DAY_NS, False) == "S"
