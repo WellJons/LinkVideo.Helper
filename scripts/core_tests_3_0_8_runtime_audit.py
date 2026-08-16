@@ -44,7 +44,8 @@ assert "queue.Queue" in service_hardening
 assert "threading.Semaphore" in service_hardening
 assert "deadline = time.monotonic()" in service_hardening
 assert "daemon=True" in service_hardening
-assert "ThreadPoolExecutor" not in service_hardening
+assert "ThreadPoolExecutor(" not in service_hardening
+assert "from concurrent.futures" not in service_hardening
 assert "install_service_runtime_hardening()" in app
 
 assert '"-rw_timeout", "30000000"' in archive_hardening
