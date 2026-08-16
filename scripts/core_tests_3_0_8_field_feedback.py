@@ -20,8 +20,6 @@ class AutomationAPI:
         self.seq = 0
 
     def talk(self, command, params=None, raise_on_trap=True):
-        # Simulate a fleet where /find is not available through API. The public
-        # compatibility facade must work through ordinary print/add as well.
         if command.endswith("/find"):
             raise RuntimeError("no such command")
         raise AssertionError((command, params))
@@ -38,20 +36,18 @@ class AutomationAPI:
             assert re.fullmatch(r"[A-Za-z0-9]+", name), name
             assert set(params) <= {"name", "target"}, params
         if path == "/system/logging":
-            # Functional identity is action+topics. Prefix and regex are
-            # optional and must not be required for creation.
             assert params.get("action") == automation_module.LV_LOG_ACTION, params
             assert params.get("topics") in {"ppp", "l2tp"}, params
             assert "prefix" not in params, params
             assert "regex" not in params, params
             self.rows[path].append(row)
             self.added.append((path, params))
-            return ""  # successful !done without ret/.id
+            return ""
 
         row[".id"] = f"*{self.seq:X}"
         self.rows[path].append(row)
         self.added.append((path, params))
-        return ""  # named objects must also tolerate empty ret
+        return ""
 
     def set(self, path, rid, params):
         params = dict(params)
@@ -110,14 +106,36 @@ def main() -> None:
     assert "QListWidget#PortList::item:selected" in density
 
     app = (root / "linkvideo_vpn_helper/app.py").read_text(encoding="utf-8")
-    assert "install_visual_density()" in app
+    for marker in (
+        "install_visual_density()",
+        "install_vpn_servers_status_ui()",
+        "install_vpn_servers_manual_refresh()",
+        "install_search_escape_compat()",
+        "install_nested_scroll_guard()",
+        "install_nat_counter_ui()",
+        "install_retention_policy()",
+        "install_vpn_sheets_retention_compat()",
+    ):
+        assert marker in app, marker
     assert "install_inline_port_traffic" not in app
     assert "port_traffic_service" not in app
-    assert "install_vpn_servers_status_ui()" in app
 
     status_ui = (root / "linkvideo_vpn_helper/ui/vpn_servers_status_ui.py").read_text(encoding="utf-8")
     assert "status_item.setText(auto.state_text)" in status_ui
-    assert "Счётчики карантина/архива меняются после запуска LV-Aging" in status_ui
+    assert "365+ — автоматическое удаление" in status_ui
+
+    manual = (root / "linkvideo_vpn_helper/ui/vpn_servers_manual_refresh.py").read_text(encoding="utf-8")
+    assert "timer.stop()" in manual
+    assert "Нажмите «Обновить данные»" in manual
+    assert "self.refresh()" not in manual
+
+    esc = (root / "linkvideo_vpn_helper/ui/search_escape_compat.py").read_text(encoding="utf-8")
+    assert "self._close_client_view()" in esc
+    assert "self.query.setFocus()" in esc
+
+    scroll = (root / "linkvideo_vpn_helper/ui/nested_scroll_guard.py").read_text(encoding="utf-8")
+    assert "QAbstractScrollArea" in scroll
+    assert "event.accept()" in scroll
 
     print("CORE TESTS 3.0.8 FIELD FEEDBACK OK")
 
