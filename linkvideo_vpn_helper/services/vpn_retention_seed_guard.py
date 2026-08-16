@@ -7,6 +7,10 @@ The legacy core seed routine only knows ``state`` and ``last``. Calling it after
 (the never-active creation/reference day) and ``r`` (the reason code). This small
 adapter replaces only that seed entry point and lets the authoritative retention
 policy do the migration/classification itself.
+
+Initialization must also stay semantically non-destructive: an enabled PPP Secret
+must never be left with ``s=Q`` merely because it is old enough for quarantine.
+Until LV-Aging is actually enabled/applied such an account remains ``S`` (sleeping).
 """
 
 
@@ -23,7 +27,9 @@ def install_retention_seed_guard() -> None:
     from linkvideo_vpn_helper.services import vpn_automation_service_core as core
     from linkvideo_vpn_helper.services.app_logging import event
     from linkvideo_vpn_helper.services.vpn_retention_policy import (
+        _bool,
         _ensure_tracking_for_server,
+        compose_extended_comment,
         parse_extended_comment,
     )
 
@@ -39,13 +45,37 @@ def install_retention_seed_guard() -> None:
             timeout=creds.timeout,
         ) as api:
             try:
-                rows = api.print("/ppp/secret", {".proplist": "name,comment"})
+                rows = api.print("/ppp/secret", {".proplist": ".id,name,disabled,comment"})
             except Exception:
                 rows = api.print("/ppp/secret")
 
-        for row in rows:
-            if not str(row.get("name", "") or "").strip():
-                continue
+            normalized_rows: list[dict] = []
+            for raw in rows:
+                row = dict(raw)
+                rid = str(row.get(".id", "") or "").strip()
+                login = str(row.get("name", "") or "").strip()
+                if not login:
+                    continue
+                meta = parse_extended_comment(str(row.get("comment", "") or ""))
+                disabled = _bool(row.get("disabled", "no"))
+
+                # Q means an account is actually quarantined. If initialization
+                # merely discovered an old enabled account, retain the inactivity
+                # timestamp/creation day but label it S until policy enforcement.
+                if meta.state == "Q" and not disabled and rid:
+                    new_comment = compose_extended_comment(
+                        meta.base_comment,
+                        "S",
+                        meta.last_ns,
+                        meta.created_ns,
+                        "inactive_30",
+                    )
+                    api.set("/ppp/secret", rid, {"comment": new_comment})
+                    row["comment"] = new_comment
+                    changed += 1
+                normalized_rows.append(row)
+
+        for row in normalized_rows:
             meta = parse_extended_comment(str(row.get("comment", "") or ""))
             state = meta.state if meta.state in counts else "U"
             counts[state] += 1
