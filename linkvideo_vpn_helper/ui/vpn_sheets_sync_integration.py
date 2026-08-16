@@ -39,6 +39,7 @@ class VPNSyncCoordinator(QObject):
         self.sync_service = VPNSheetsSyncService(vpn_service, self.backend) if self.backend else None
         self._busy = False
         self._host_inflight: set[str] = set()
+        self._host_lock = threading.Lock()
         self._debounce: dict[str, QTimer] = {}
         self._mutation_reason: dict[str, tuple[str, str]] = {}
         self._periodic = QTimer(self)
@@ -59,6 +60,17 @@ class VPNSyncCoordinator(QObject):
             "%PROGRAMDATA%\\LinkVideo\\Helper\\google_sheets_service_account.json"
         )
 
+    def _claim_host(self, server: str) -> bool:
+        with self._host_lock:
+            if server in self._host_inflight:
+                return False
+            self._host_inflight.add(server)
+            return True
+
+    def _release_host(self, server: str) -> None:
+        with self._host_lock:
+            self._host_inflight.discard(server)
+
     def notify_mutation(self, server: str, reason: str, login: str = "") -> None:
         self.mutationRequested.emit(str(server or ""), str(reason or "Изменение Helper"), str(login or ""))
 
@@ -77,7 +89,7 @@ class VPNSyncCoordinator(QObject):
         timer.start(1600)
 
     def _sync_mutated_server(self, server: str):
-        if not self.is_configured() or server in self._host_inflight:
+        if not self.is_configured():
             return
         reason, login = self._mutation_reason.pop(server, ("Изменение Helper", ""))
         source = f"Helper · {reason}"
@@ -90,9 +102,8 @@ class VPNSyncCoordinator(QObject):
         self.sync_all(manual=False)
 
     def _start_one(self, server: str, *, source: str, initiator: str):
-        if server in self._host_inflight or not self.sync_service:
+        if not self.sync_service or not self._claim_host(server):
             return
-        self._host_inflight.add(server)
 
         def worker():
             try:
@@ -101,7 +112,7 @@ class VPNSyncCoordinator(QObject):
                 # Автосинхронизация не должна мешать основной работе Helper.
                 pass
             finally:
-                self._host_inflight.discard(server)
+                self._release_host(server)
 
         threading.Thread(target=worker, daemon=True, name=f"sheets-sync-{server}").start()
 
@@ -137,11 +148,10 @@ class VPNSyncCoordinator(QObject):
                         host = tasks.get_nowait()
                     except queue.Empty:
                         return
-                    if host in self._host_inflight:
+                    if not self._claim_host(host):
                         results.put((host, False, "уже синхронизируется"))
                         tasks.task_done()
                         continue
-                    self._host_inflight.add(host)
                     try:
                         result = self.sync_service.sync_server(
                             host,
@@ -157,7 +167,7 @@ class VPNSyncCoordinator(QObject):
                     except Exception as exc:
                         results.put((host, False, str(exc)[:240]))
                     finally:
-                        self._host_inflight.discard(host)
+                        self._release_host(host)
                         tasks.task_done()
 
             for index in range(worker_count):
