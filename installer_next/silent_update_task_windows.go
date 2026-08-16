@@ -77,19 +77,34 @@ func verifySilentUpdateTask(dest string) error {
     if _, err := os.Stat(updaterPath); err != nil {
         return err
     }
+
+    // Task Scheduler normalizes principals and action strings differently on
+    // different Windows builds/locales. Do not compare its presentation strings
+    // literally: resolve the account to the well-known SYSTEM SID and normalize
+    // quotes, whitespace, environment variables and path casing first.
     script := fmt.Sprintf(
         `$ErrorActionPreference='Stop';`+
-            `$t=Get-ScheduledTask -TaskName '%s';`+
+            `$t=Get-ScheduledTask -TaskName '%s' -ErrorAction Stop;`+
             `if(-not $t){throw 'task missing'};`+
-            `$uid=[string]$t.Principal.UserId;`+
-            `if($uid -notin @('SYSTEM','NT AUTHORITY\SYSTEM','S-1-5-18')){throw 'task principal is not SYSTEM'};`+
+            `$uid=([string]$t.Principal.UserId).Trim();`+
+            `$sid='';`+
+            `if($uid -eq 'S-1-5-18'){$sid=$uid}else{`+
+                `try{$sid=(New-Object System.Security.Principal.NTAccount($uid)).Translate([System.Security.Principal.SecurityIdentifier]).Value}catch{$sid=''}};`+
+            `if($sid -ne 'S-1-5-18'){throw ('task principal is not SYSTEM: '+$uid)};`+
             `$a=$t.Actions|Select-Object -First 1;`+
-            `if([string]$a.Execute -ne '%s'){throw 'task action mismatch'};`+
-            `if([string]$a.Arguments -ne '--scheduled'){throw 'task arguments mismatch'}`,
+            `if(-not $a){throw 'task action missing'};`+
+            `$actual=[Environment]::ExpandEnvironmentVariables(([string]$a.Execute).Trim().Trim('"'));`+
+            `$expected=[Environment]::ExpandEnvironmentVariables('%s');`+
+            `try{$actual=[IO.Path]::GetFullPath($actual)}catch{};`+
+            `try{$expected=[IO.Path]::GetFullPath($expected)}catch{};`+
+            `if(-not [string]::Equals($actual,$expected,[StringComparison]::OrdinalIgnoreCase)){throw ('task action mismatch: '+$actual)};`+
+            `$args=([string]$a.Arguments).Trim();`+
+            `if($args.Length -ge 2 -and $args.StartsWith('"') -and $args.EndsWith('"')){$args=$args.Substring(1,$args.Length-2).Trim()};`+
+            `if($args -ne '--scheduled'){throw ('task arguments mismatch: '+$args)}`,
         psEscape(silentUpdateTaskName), psEscape(updaterPath),
     )
     if err := runPowerShell(script); err != nil {
-        return errors.New("задача фонового обновления зарегистрирована некорректно")
+        return errors.New("задача фонового обновления создана, но Windows не подтвердила её параметры")
     }
     return nil
 }
