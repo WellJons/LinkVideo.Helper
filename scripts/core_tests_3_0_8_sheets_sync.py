@@ -26,7 +26,7 @@ def current(login: str, password: str = "pass1", ports: str = "tcp 10001→10001
         "Profile": login,
         "Local Address": "172.31.255.254",
         "Remote Address": "172.16.1.176",
-        "Комментарий RouterOS": "",
+        "Комментарий RouterOS": "ручная заметка |LV1|state=A|last=100|ver=1.0.1|",
         "NAT / Порты": ports,
         "Lifecycle": lifecycle,
         "PPP disabled": "Нет",
@@ -55,9 +55,25 @@ assert first.rows[0]["Удалена"] == "Нет"
 assert first.rows[0]["Первое обнаружение"] == "2026-08-16 16:30:00"
 assert first.history[0][3] == "Обнаружена на RouterOS"
 
+# Наблюдаемая активность и служебный LV last= меняются постоянно, но не должны
+# засорять историю или менять дату реального изменения конфигурации.
+quiet_client = current("89000000001")
+quiet_client.row["Последняя активность"] = "2026-08-16 16:31:00"
+quiet_client.row["Дней без связи"] = "1"
+quiet_client.row["Комментарий RouterOS"] = "ручная заметка |LV1|state=A|last=999999|ver=1.0.1|"
+quiet = reconcile_records(
+    "vpn01.linkvideo.ru", [dict(first.rows[0])], [quiet_client],
+    source="Автосверка RouterOS", initiator="agent", now=datetime(2026, 8, 16, 16, 31, 0), sync_id="sync-quiet",
+)
+assert quiet.changed == 0
+assert quiet.history == []
+assert quiet.rows[0]["Последняя активность"] == "2026-08-16 16:31:00"
+assert quiet.rows[0]["Дней без связи"] == "1"
+assert quiet.rows[0]["Последнее изменение"] == first.rows[0]["Последнее изменение"]
+
 # Реальное изменение портов/пароля обновляет запись, но пароль не копируется
 # открытым текстом в журнал Было/Стало.
-existing = [dict(first.rows[0])]
+existing = [dict(quiet.rows[0])]
 changed_client = current("89000000001", password="new-secret", ports="tcp 10001→10001; tcp 10002→10002")
 changed = reconcile_records(
     "vpn01.linkvideo.ru", existing, [changed_client],
@@ -110,5 +126,6 @@ read_pos = source_text.index("existing_rows = self.backend.read_server_rows")
 reconcile_pos = source_text.index("result = reconcile_records")
 assert fetch_pos < read_pos < reconcile_pos
 assert "ни одна старая строка не может быть ошибочно помечена как удалённая" in source_text
+assert "result.history" in source_text and source_text.index("self.backend.append_history") < source_text.index("self.backend.write_server_rows")
 
 print("CORE TESTS 3.0.8 VPN SHEETS SYNC OK")
