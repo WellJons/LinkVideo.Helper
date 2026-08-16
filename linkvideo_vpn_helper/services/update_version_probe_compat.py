@@ -4,8 +4,8 @@ from __future__ import annotations
 
 Windows PowerShell 5.1 treats tokens after ``-Command <script>`` as part of the
 command text in this invocation shape. The legacy updater passed the downloaded
-file path after the script and PowerShell tried to parse e.g.
-``C:\Users\...\LinkVideo.Helper_Setup_Update.exe.download`` as PowerShell code.
+file path after the script and PowerShell tried to parse a path such as
+``C:/Users/.../LinkVideo.Helper_Setup_Update.exe.download`` as PowerShell code.
 
 Pass the path through an environment variable instead. This works with spaces,
 non-ASCII user names and Windows PowerShell 5.1 without shell quoting.
