@@ -60,6 +60,8 @@ def install_nat_counter_ui() -> None:
     # Sheets coordinator is constructed.
     from linkvideo_vpn_helper.services.google_key_discovery_compat import install_google_key_discovery
     install_google_key_discovery()
+    from linkvideo_vpn_helper.ui.vpn_sheets_key_ui_compat import install_vpn_sheets_key_ui
+    install_vpn_sheets_key_ui()
 
     from linkvideo_vpn_helper.ui.components import StatusPill
     from linkvideo_vpn_helper.ui.pages.search_manage_page import SearchManagePage
