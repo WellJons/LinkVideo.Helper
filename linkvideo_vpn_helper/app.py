@@ -85,8 +85,6 @@ def main() -> int:
     settings = QSettings("LinkVideo", "LinkVideo.Helper")
     _migrate_settings(settings)
 
-    # Theme extensions must be installed before LoginWindow imports
-    # get_theme_style by value, otherwise the login screen can use stale QSS.
     from linkvideo_vpn_helper.brand_theme import install_linkvideo_brand_theme
     install_linkvideo_brand_theme()
     from linkvideo_vpn_helper.ui.visual_density import install_visual_density
@@ -96,8 +94,6 @@ def main() -> int:
     theme_style = get_theme_style(str(settings.value("ui/theme_v2", "linkvideo_2026", str) or "linkvideo_2026"))
     app.setStyleSheet(theme_style)
 
-    # Restore the real authentication path. AdminChats is identified from the
-    # username entered here; personal RouterOS usernames are system admins.
     saved_username = str(settings.value("username", "", str) or "").strip()
     saved_password = str(settings.value("password", "", str) or "")
     remember = bool(settings.value("remember", True, bool))
@@ -119,8 +115,6 @@ def main() -> int:
     credentials = SessionCredentials(credential_values[0], credential_values[1], 8728, 4.5)
     service = VPNService()
 
-    # Runtime integrations are explicit here so the packaged EXE has one
-    # deterministic startup order instead of relying on import side effects.
     from linkvideo_vpn_helper.ui.operation_cancel_guard import install_operation_cancel_guard
     install_operation_cancel_guard()
     from linkvideo_vpn_helper.ui.search_visual_fixes import install_search_visual_fixes
@@ -129,8 +123,16 @@ def main() -> int:
     install_service_runtime_hardening()
     from linkvideo_vpn_helper.services.archive_process_hardening import install_archive_process_hardening
     install_archive_process_hardening()
+    from linkvideo_vpn_helper.services.vpn_automation_resilience import install_vpn_automation_resilience
+    install_vpn_automation_resilience()
     from linkvideo_vpn_helper.ui.background_ux_integration import install_background_ux
     install_background_ux()
+    # Must be installed after background_ux because it wraps the final manual
+    # scan method rather than the original page implementation.
+    from linkvideo_vpn_helper.ui.manual_scan_feedback import install_manual_scan_feedback
+    install_manual_scan_feedback()
+    from linkvideo_vpn_helper.ui.archive_download_ux import install_archive_download_ux
+    install_archive_download_ux()
     from linkvideo_vpn_helper.ui.silent_update_integration import install_silent_patch_updates
     install_silent_patch_updates()
     from linkvideo_vpn_helper.ui.access_policy_integration import install_access_policy
