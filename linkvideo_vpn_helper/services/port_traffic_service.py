@@ -29,18 +29,26 @@ class PortTrafficSample:
 
 
 class PortTrafficService:
-    """Read current traffic for explicitly requested dst-nat ports only.
+    """Read live traffic for selected LinkVideo dst-nat ports.
 
-    A client can have more than a dozen forwarded ports and a production VPN
-    server can have hundreds of active L2TP sessions.  The UI therefore passes
-    one port at a time.  This service never dumps the global conntrack table and
-    never performs a Remote-Address query followed by N per-port fallbacks.
+    The VPN fleet is not homogeneous. Newer RouterOS builds expose connection
+    tuple fields separately (``dst-port``, ``reply-src-port``), while older API
+    output can serialize an endpoint as ``address:port`` in ``dst-address`` or
+    ``reply-src-address``. API query words compare an exact property value, so a
+    query such as ``?dst-port=11158`` necessarily returns nothing on a build
+    whose connection rows do not have a separate ``dst-port`` property.
 
-    Every requested public port is looked up directly by RouterOS ``dst-port``.
-    The exact query itself is accepted as evidence for the public tuple when an
-    older RouterOS API omits the queried field from the returned row; the NAT
-    mapping and translated reply tuple still bind the row to the selected
-    client.
+    For each requested port we therefore use the NAT rule as the authoritative
+    mapping and try bounded conntrack queries in this order:
+
+    1. modern translated tuple: reply-src-address + reply-src-port;
+    2. legacy translated endpoint: reply-src-address=IP:PORT;
+    3. modern public tuple: dst-port=external-port;
+    4. final bounded fallback: dstnat=yes, filtered locally.
+
+    No unfiltered connection-table dump is performed. The UI currently asks for
+    one port at a time, so even the last fallback remains bounded to active
+    destination-NAT connections rather than every tracked connection.
     """
 
     CONNECTION_PROPLIST = (
@@ -106,6 +114,13 @@ class PortTrafficService:
         return 0
 
     @staticmethod
+    def _endpoint(ip: str, port: int | None) -> str:
+        ip = PortTrafficService._normalize_ip(ip)
+        if not ip or not port:
+            return ""
+        return f"{ip}:{int(port)}"
+
+    @staticmethod
     def _ports(value) -> list[int]:
         text = str(value or "").strip()
         if not text:
@@ -142,8 +157,8 @@ class PortTrafficService:
         for row in rows:
             covered.update(ports.intersection(self._ports(row.get("dst-port"))))
 
-        # Historical rules can have an empty/different comment.  Ask only for
-        # the missing public ports instead of serialising the whole NAT table.
+        # Firewall NAT rules have a stable dst-port property even on older
+        # RouterOS. Query only missing ports rather than dumping all NAT rules.
         for port in sorted(ports - covered):
             try:
                 rows.extend(
@@ -176,26 +191,31 @@ class PortTrafficService:
             internal = internal_ports[0] if internal_ports else None
             for port in self._ports(row.get("dst-port")):
                 if port in ports and port not in mapped:
-                    mapped[port] = internal
+                    # If dst-nat omits to-ports, RouterOS keeps the destination
+                    # port unchanged. Treat the external port as the translated
+                    # port for tuple matching.
+                    mapped[port] = internal if internal is not None else port
         return mapped
 
-    def _rows_for_port(self, api: RouterOSAPIClient, port: int) -> list[dict]:
-        query = {"?dst-port=": str(port)}
+    def _query(self, api: RouterOSAPIClient, query: dict[str, str], source: str) -> list[dict]:
         try:
             rows = api.print(
                 "/ip/firewall/connection",
                 {".proplist": self.CONNECTION_PROPLIST, **query},
             )
         except Exception:
-            # Older builds can reject one of the newer .proplist fields.  Keep
-            # the exact query and retry without constraining the returned fields.
-            rows = api.print("/ip/firewall/connection", query)
+            # A legacy build can reject one of the modern .proplist names even
+            # though the query itself is valid. Preserve the query and retry.
+            try:
+                rows = api.print("/ip/firewall/connection", query)
+            except Exception:
+                return []
 
         result: list[dict] = []
         seen: set[tuple] = set()
         for row in rows:
             item = dict(row)
-            item["_lv-query-source"] = "port"
+            item["_lv-query-source"] = source
             key = (
                 str(item.get(".id", "") or ""),
                 str(item.get("protocol", "") or ""),
@@ -219,7 +239,9 @@ class PortTrafficService:
         embedded = self._endpoint_port(row.get("dst-address"))
         if embedded:
             return embedded == port
-        return str(row.get("_lv-query-source", "")) == "port"
+        # Exact public-port query is evidence if the queried property is not
+        # serialised back in this RouterOS API response.
+        return str(row.get("_lv-query-source", "")) == "public-port"
 
     def _row_matches_client(
         self,
@@ -240,20 +262,75 @@ class PortTrafficService:
             return False
 
         remote_norm = self._normalize_ip(remote)
-        reply_remote = self._normalize_ip(row.get("reply-src-address"))
+        reply_raw = str(row.get("reply-src-address", "") or "").strip()
+        reply_remote = self._normalize_ip(reply_raw)
+        source = str(row.get("_lv-query-source", ""))
+
         if remote_norm:
             if reply_remote and reply_remote != remote_norm:
                 return False
-            # If the exact dst-port query does not return the translated address,
-            # the client's NAT rule is still sufficient attribution.  Without
-            # either piece of evidence we do not guess.
-            if not reply_remote and not nat_known:
+            if not reply_remote and source not in {"modern-reply", "legacy-reply"} and not nat_known:
                 return False
 
         reply_port = self._int(row.get("reply-src-port"))
+        if not reply_port:
+            reply_port = self._endpoint_port(reply_raw)
         if internal_port and reply_port and int(internal_port) != reply_port:
             return False
+
         return True
+
+    def _candidate_rows(
+        self,
+        api: RouterOSAPIClient,
+        port: int,
+        remote: str,
+        internal_port: int | None,
+        nat_known: bool,
+    ) -> list[dict]:
+        """Return the first useful bounded conntrack result for this port."""
+        remote = self._normalize_ip(remote)
+
+        # RouterOS 7-style tuple: translated address and port are independent
+        # properties. Two query words are ANDed by the API query stack.
+        if remote and internal_port:
+            rows = self._query(
+                api,
+                {
+                    "?reply-src-address=": remote,
+                    "?reply-src-port=": str(int(internal_port)),
+                },
+                "modern-reply",
+            )
+            matched = [r for r in rows if self._row_matches_client(r, port, remote, internal_port, nat_known)]
+            if matched:
+                return matched
+
+            # RouterOS 6/legacy representation: the port is part of the address
+            # property, so an exact query must include IP:PORT.
+            legacy_endpoint = self._endpoint(remote, internal_port)
+            if legacy_endpoint:
+                rows = self._query(
+                    api,
+                    {"?reply-src-address=": legacy_endpoint},
+                    "legacy-reply",
+                )
+                matched = [r for r in rows if self._row_matches_client(r, port, remote, internal_port, nat_known)]
+                if matched:
+                    return matched
+
+        # Modern public tuple. This is cheap and also covers cases where a NAT
+        # rule has no translated address property in conntrack output.
+        rows = self._query(api, {"?dst-port=": str(port)}, "public-port")
+        matched = [r for r in rows if self._row_matches_client(r, port, remote, internal_port, nat_known)]
+        if matched:
+            return matched
+
+        # Last compatibility fallback: retrieve only connections RouterOS itself
+        # marks as destination-NAT and filter the public + translated tuples in
+        # Python. This avoids an unrestricted conntrack dump.
+        rows = self._query(api, {"?dstnat=": "yes"}, "dstnat")
+        return [r for r in rows if self._row_matches_client(r, port, remote, internal_port, nat_known)]
 
     def sample_client(
         self,
@@ -284,18 +361,15 @@ class PortTrafficService:
             for port in sorted(wanted):
                 sample = result[port]
                 sample.internal_port = nat_map.get(port)
-                rows = self._rows_for_port(api, port)
+                rows = self._candidate_rows(
+                    api,
+                    port,
+                    remote,
+                    sample.internal_port,
+                    port in nat_map,
+                )
 
                 for row in rows:
-                    if not self._row_matches_client(
-                        row,
-                        port,
-                        remote,
-                        sample.internal_port,
-                        port in nat_map,
-                    ):
-                        continue
-
                     sample.connections += 1
                     if self._truthy(row.get("seen-reply")):
                         sample.seen_reply += 1
