@@ -147,6 +147,8 @@ def main() -> int:
     install_retention_seed_guard()
     from linkvideo_vpn_helper.services.vpn_sheets_retention_compat import install_vpn_sheets_retention_compat
     install_vpn_sheets_retention_compat()
+    from linkvideo_vpn_helper.services.vpn_sheets_resilience import install_vpn_sheets_resilience
+    install_vpn_sheets_resilience()
     from linkvideo_vpn_helper.ui.background_ux_integration import install_background_ux
     install_background_ux()
     from linkvideo_vpn_helper.ui.manual_scan_feedback import install_manual_scan_feedback
@@ -175,6 +177,8 @@ def main() -> int:
     install_nested_scroll_guard()
     from linkvideo_vpn_helper.ui.vpn_automation_sheets_bridge import install_vpn_automation_sheets_bridge
     install_vpn_automation_sheets_bridge()
+    from linkvideo_vpn_helper.ui.vpn_sheets_coordinator_resilience import install_vpn_sheets_coordinator_resilience
+    install_vpn_sheets_coordinator_resilience()
 
     from linkvideo_vpn_helper.ui.main_window import MainWindow
     splash.set_status("Открываю интерфейс…")
