@@ -2,9 +2,11 @@ from __future__ import annotations
 
 """Public LV Automation service facade for 3.0.8.
 
-The original implementation is kept in ``vpn_automation_service_core``. This
-facade adds RouterOS-version compatibility around component upserts while
-preserving the tested lifecycle/runtime logic from the core implementation.
+The original lifecycle/runtime implementation stays in
+``vpn_automation_service_core``.  This facade owns compatibility with the
+RouterOS versions deployed on the VPN fleet.  The important rule is that an
+optional property rejected by one router must never leave the whole LV set
+half-installed.
 """
 
 from typing import Callable, Iterable, TypeVar
@@ -17,31 +19,29 @@ from linkvideo_vpn_helper.services.vpn_automation_service_core import (
 
 _T = TypeVar("_T")
 
-# RouterOS logging action names are stricter than script/scheduler names on the
-# deployed VPN routers: action names may contain only ASCII letters and digits.
-# The old core constant ("LV-Auth") therefore caused install/update to stop
-# after the scripts were created, leaving every server partially installed.
-# Keep the core module and this public facade on one canonical value because
-# inherited methods and restore_script_source() resolve the core global at run
-# time.
+# Logging action names on the deployed routers are stricter than script and
+# scheduler names.  Keep the inherited core code on the same alphanumeric name.
 LEGACY_LV_LOG_ACTION = str(getattr(_core, "LV_LOG_ACTION", "LV-Auth") or "LV-Auth")
 LV_LOG_ACTION = "LVAuth"
 _core.LV_LOG_ACTION = LV_LOG_ACTION
 
 
 class VPNAutomationService(_CoreVPNAutomationService):
-    """LV automation with tolerant RouterOS component installation.
+    """LV automation with field-by-field RouterOS compatibility.
 
-    RouterOS releases differ slightly in accepted fields for scripts/logging
-    actions/logging rules. A single unsupported optional field must not leave
-    the server in a half-installed state. Required fields are never dropped;
-    only known optional compatibility fields are retried without.
+    Older RouterOS builds may return only ``unknown parameter`` without naming
+    the rejected property.  Sending a large add/set payload therefore makes it
+    impossible to know which harmless compatibility field broke installation.
+
+    Required fields are written first.  Optional fields are then applied one at
+    a time, so an unsupported option can be skipped without losing the script,
+    scheduler, logging action or rule itself.
     """
 
     _OPTIONAL_FIELDS_BY_PATH = {
-        "/system/script": ("dont-require-permissions",),
-        "/system/logging/action": ("memory-stop-on-full",),
-        "/system/logging": ("regex",),
+        "/system/script": ("comment", "dont-require-permissions"),
+        "/system/logging/action": ("memory-lines", "memory-stop-on-full"),
+        "/system/scheduler": ("start-time", "comment"),
     }
 
     @staticmethod
@@ -49,95 +49,134 @@ class VPNAutomationService(_CoreVPNAutomationService):
         want = str(value).strip()
         return next((row for row in rows if str(row.get(field, "") or "").strip() == want), None)
 
-    @classmethod
-    def _compat_variants(cls, path: str, params: dict) -> list[dict]:
-        """Return full params first, then one compatibility-safe reduced form."""
-        full = dict(params)
-        optional = cls._OPTIONAL_FIELDS_BY_PATH.get(path, ())
-        reduced = {key: value for key, value in full.items() if key not in optional}
-        if reduced == full:
-            return [full]
-        return [full, reduced]
-
     @staticmethod
     def _looks_like_optional_field_error(exc: Exception) -> bool:
         text = str(exc or "").lower()
         markers = (
-            "regex",
-            "dont-require-permissions",
-            "memory-stop-on-full",
             "unknown parameter",
             "expected end of command",
             "input does not match",
+            "not supported",
+            "no such item",
         )
         return any(marker in text for marker in markers)
 
     @classmethod
-    def _set_with_compat(cls, api, path: str, rid: str, variants: list[dict]) -> None:
-        first_error: Exception | None = None
-        for index, params in enumerate(variants):
-            try:
-                api.set(path, rid, params)
-                return
-            except Exception as exc:
-                if first_error is None:
-                    first_error = exc
-                if index + 1 >= len(variants) or not cls._looks_like_optional_field_error(exc):
-                    raise
-        if first_error is not None:
-            raise first_error
+    def _split_params(cls, path: str, params: dict) -> tuple[dict, list[tuple[str, object]]]:
+        optional_names = set(cls._OPTIONAL_FIELDS_BY_PATH.get(path, ()))
+        required = {key: value for key, value in params.items() if key not in optional_names}
+        optional = [(key, params[key]) for key in cls._OPTIONAL_FIELDS_BY_PATH.get(path, ()) if key in params]
+        return required, optional
+
+    @staticmethod
+    def _component_error(path: str, name: str, field: str, exc: Exception) -> RuntimeError:
+        suffix = f" · параметр {field}" if field else ""
+        return RuntimeError(f"Не удалось настроить {path} {name}{suffix}: {exc}")
 
     @classmethod
-    def _add_with_compat(cls, api, path: str, variants: list[dict]) -> str:
-        first_error: Exception | None = None
-        for index, params in enumerate(variants):
+    def _apply_optional_fields(cls, api, path: str, rid: str, name: str, fields: list[tuple[str, object]]) -> None:
+        for field, value in fields:
             try:
-                return api.add(path, params)
+                api.set(path, rid, {field: value})
             except Exception as exc:
-                if first_error is None:
-                    first_error = exc
-                if index + 1 >= len(variants) or not cls._looks_like_optional_field_error(exc):
-                    raise
-        if first_error is not None:
-            raise first_error
-        return ""
+                if cls._looks_like_optional_field_error(exc):
+                    # This field is enhancement/metadata only.  The component
+                    # already exists with its functional minimum.
+                    continue
+                raise cls._component_error(path, name, field, exc) from exc
 
     @classmethod
     def _upsert_named(cls, api, path: str, name: str, params: dict) -> str:
         rows = api.print(path)
         row = cls._find(rows, "name", name)
-        variants = cls._compat_variants(path, params)
+        required, optional = cls._split_params(path, params)
+
         if row:
             rid = str(row.get(".id", "") or "").strip()
             if not rid:
                 raise RuntimeError(f"RouterOS не вернул .id для {path} {name}")
-            cls._set_with_compat(api, path, rid, variants)
-            return rid
-        return cls._add_with_compat(api, path, [{"name": name, **item} for item in variants])
+            if required:
+                try:
+                    api.set(path, rid, required)
+                except Exception as exc:
+                    raise cls._component_error(path, name, ", ".join(required), exc) from exc
+        else:
+            try:
+                rid = api.add(path, {"name": name, **required})
+            except Exception as exc:
+                raise cls._component_error(path, name, ", ".join(required), exc) from exc
+            rid = str(rid or "").strip()
+            if not rid:
+                # Some API versions omit ret even though the object was created.
+                created = cls._find(api.print(path), "name", name)
+                rid = str((created or {}).get(".id", "") or "").strip()
+            if not rid:
+                raise RuntimeError(f"RouterOS создал {path} {name}, но не вернул .id")
+
+        cls._apply_optional_fields(api, path, rid, name, optional)
+        return rid
+
+    @classmethod
+    def _set_logging_rule_enabled(cls, api, rid: str, enabled: bool) -> None:
+        method = getattr(api, "enable" if enabled else "disable", None)
+        if callable(method):
+            try:
+                method("/system/logging", rid)
+                return
+            except Exception as exc:
+                if not cls._looks_like_optional_field_error(exc):
+                    raise
+        try:
+            api.set("/system/logging", rid, {"disabled": "no" if enabled else "yes"})
+        except Exception as exc:
+            # Very old builds can expose logging rules without a mutable
+            # disabled property.  The rule itself is still valid; runtime pause
+            # can continue to be controlled by Scheduler.
+            if not cls._looks_like_optional_field_error(exc):
+                raise
 
     @classmethod
     def _upsert_logging_rule(cls, api, prefix: str, topics: str, enabled: bool = True) -> None:
         rows = api.print("/system/logging")
         row = cls._find(rows, "prefix", prefix)
-        params = {
+        required = {
             "topics": topics,
             "action": LV_LOG_ACTION,
-            "regex": "login failure for user",
             "prefix": prefix,
-            "disabled": "no" if enabled else "yes",
         }
-        variants = cls._compat_variants("/system/logging", params)
+
         if row:
             rid = str(row.get(".id", "") or "").strip()
             if not rid:
                 raise RuntimeError(f"RouterOS не вернул .id для /system/logging {prefix}")
-            cls._set_with_compat(api, "/system/logging", rid, variants)
-            return
-        cls._add_with_compat(api, "/system/logging", variants)
+            try:
+                api.set("/system/logging", rid, required)
+            except Exception as exc:
+                raise cls._component_error("/system/logging", prefix, "topics/action/prefix", exc) from exc
+        else:
+            try:
+                rid = str(api.add("/system/logging", required) or "").strip()
+            except Exception as exc:
+                raise cls._component_error("/system/logging", prefix, "topics/action/prefix", exc) from exc
+            if not rid:
+                created = cls._find(api.print("/system/logging"), "prefix", prefix)
+                rid = str((created or {}).get(".id", "") or "").strip()
+            if not rid:
+                raise RuntimeError(f"RouterOS создал /system/logging {prefix}, но не вернул .id")
+
+        # regex is an optimisation: on RouterOS versions without it the
+        # dedicated memory buffer simply receives the selected topic and the
+        # restore script filters the message itself.
+        try:
+            api.set("/system/logging", rid, {"regex": "login failure for user"})
+        except Exception as exc:
+            if not cls._looks_like_optional_field_error(exc):
+                raise cls._component_error("/system/logging", prefix, "regex", exc) from exc
+
+        cls._set_logging_rule_enabled(api, rid, enabled)
 
     @staticmethod
     def _device_mode_hint(api) -> str:
-        """Keep the core hint but make scheduler restrictions explicit."""
         hint = _CoreVPNAutomationService._device_mode_hint(api)
         low = hint.lower()
         if "scheduler=no" in low:
@@ -148,13 +187,6 @@ class VPNAutomationService(_CoreVPNAutomationService):
 
     @staticmethod
     def _call_core_with_public_api(call: Callable[[], _T]) -> _T:
-        """Keep legacy tests/extensions that monkeypatch this module working.
-
-        Methods inherited from ``vpn_automation_service_core`` resolve the API
-        class in the core module's globals. The public module historically was
-        monkeypatched directly by tests and troubleshooting harnesses, so mirror
-        that binding only for the duration of the call.
-        """
         public_api = globals().get("RouterOSAPIClient", _core.RouterOSAPIClient)
         old_api = _core.RouterOSAPIClient
         _core.RouterOSAPIClient = public_api
