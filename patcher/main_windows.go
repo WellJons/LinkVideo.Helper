@@ -5,6 +5,7 @@ package main
 import (
     "archive/zip"
     "bytes"
+    "context"
     "crypto/sha256"
     "encoding/hex"
     "encoding/json"
@@ -130,8 +131,6 @@ func applyPatch() error {
         return err
     }
 
-    // New installer stores DisplayVersion here. If 3.0.8 is still an Inno
-    // bridge build the key may not exist; ProductVersion remains authoritative.
     _ = runHidden("reg.exe", "add", `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\LinkVideo.Helper`, "/v", "DisplayVersion", "/t", "REG_SZ", "/d", m.ToVersion, "/f")
 
     if nextVersion, err := productVersion(appPath); err != nil || !sameVersion(nextVersion, m.ToVersion) {
@@ -371,9 +370,14 @@ func productVersion(path string) (string, error) {
         return "", fmt.Errorf("не найден установленный %s", filepath.Base(path))
     }
     script := `$ErrorActionPreference='Stop';[Console]::Out.Write([string](Get-Item -LiteralPath $args[0]).VersionInfo.ProductVersion)`
-    cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script, path)
+    ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+    defer cancel()
+    cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script, path)
     cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindowFlag}
     out, err := cmd.CombinedOutput()
+    if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+        return "", errors.New("Windows не ответила при проверке ProductVersion за 8 секунд")
+    }
     if err != nil {
         return "", fmt.Errorf("не удалось определить установленную версию: %s", strings.TrimSpace(string(out)))
     }
@@ -385,9 +389,15 @@ func productVersion(path string) (string, error) {
 }
 
 func runHidden(name string, args ...string) error {
-    cmd := exec.Command(name, args...)
+    ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+    defer cancel()
+    cmd := exec.CommandContext(ctx, name, args...)
     cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindowFlag}
-    return cmd.Run()
+    err := cmd.Run()
+    if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+        return fmt.Errorf("%s не ответил за 8 секунд", name)
+    }
+    return err
 }
 
 type shellExecuteInfoW struct {
