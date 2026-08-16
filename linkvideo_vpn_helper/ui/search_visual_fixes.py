@@ -64,6 +64,11 @@ def install_search_visual_fixes() -> None:
     if _INSTALLED:
         return
 
+    # Access policy is installed from the same early UI hook so destructive
+    # service methods are guarded before any page can invoke them.
+    from linkvideo_vpn_helper.ui.access_policy_integration import install_access_policy
+    install_access_policy()
+
     from linkvideo_vpn_helper.ui.pages.search_manage_page import SearchManagePage
     from linkvideo_vpn_helper.ui.pages.inactive_clients_page import InactiveClientsPage
 
