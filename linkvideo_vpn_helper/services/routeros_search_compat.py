@@ -140,6 +140,8 @@ def install_routeros_search_compat() -> None:
     # cumulative NAT byte/packet counters shown in the client card.
     from linkvideo_vpn_helper.services.nat_inventory_compat import install_nat_inventory_compat
     install_nat_inventory_compat()
+    from linkvideo_vpn_helper.services.nat_conflict_compat import install_nat_conflict_compat
+    install_nat_conflict_compat()
     try:
         from linkvideo_vpn_helper.ui.nat_counter_integration import install_nat_counter_ui
         install_nat_counter_ui()
