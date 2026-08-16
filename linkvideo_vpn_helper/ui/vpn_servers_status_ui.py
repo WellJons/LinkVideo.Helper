@@ -41,6 +41,7 @@ def install_vpn_servers_status_ui() -> None:
         return
 
     from PySide6.QtWidgets import QLabel
+    from linkvideo_vpn_helper.ui.dialogs import ConfirmDialog
     from linkvideo_vpn_helper.ui.pages.vpn_servers_page import VPNServersPage
     from linkvideo_vpn_helper.ui.pages.inactive_clients_page import InactiveClientsPage
 
@@ -69,11 +70,58 @@ def install_vpn_servers_status_ui() -> None:
                     "автоудаление 365+, ручные отключения и записи без подтверждённой активности."
                 )
 
+    def patched_toggle_quarantine(self, host: str):
+        auto = self._automation_by_host.get(host)
+        if not auto or not auto.installed:
+            self.task.show()
+            self.task.warning("LV-автоматика не установлена", "Сначала установите LV на сервер.")
+            return
+
+        target = not auto.aging_enabled
+        if target and auto.initialized <= 0:
+            self.task.show()
+            self.task.warning(
+                "Последняя активность не инициализирована",
+                "Сначала нажмите «Инициализировать активность». Карантин нельзя включать без служебных состояний.",
+            )
+            return
+
+        if target:
+            text = (
+                f"Включить LV-Aging на {host}?\n\n"
+                f"Сейчас: активные {auto.active}, спящие {auto.sleeping}, карантин {auto.quarantine}, "
+                f"365+ дней {auto.archive}, отключены вручную {auto.manual}, активность неизвестна {auto.unknown}.\n\n"
+                "Политика будет применена сразу и затем ежедневно в 03:20: 30+ дней — спящая; "
+                "90+ дней — PPP Secret отключается; 365+ дней — PPP Secret удаляется вместе с его NAT, "
+                "а отдельный неиспользуемый PPP Profile также удаляется. Учётки без единого подключения "
+                "считаются от даты создания/начала LV-отсчёта.\n\n"
+                "Ручное отключение запрещает автовосстановление, но не отменяет автоудаление после 365 дней."
+            )
+            title, button, danger = "Включить автоматическую политику", "Включить", True
+        else:
+            text = (
+                f"Выключить LV-Aging на {host}?\n\n"
+                "Уже отключённые PPP Secret останутся в текущем состоянии. Новые переходы в карантин и "
+                "автоматические удаления по сроку выполняться не будут, пока LV-Aging снова не включат. "
+                "Сбор активности и автовосстановление существующего карантина продолжат работать."
+            )
+            title, button, danger = "Выключить автоматическую политику", "Выключить", False
+
+        dialog = ConfirmDialog(title, text, button, danger, self)
+        if not dialog.exec():
+            return
+        self._run_mutation(
+            "quarantine_on" if target else "quarantine_off",
+            host,
+            lambda h: self.automation.set_quarantine_enabled(h, self.credentials, target),
+        )
+
     def patched_on_stats(self, rows):
         original_on_stats(self, rows)
         _refresh_automation_cells(self)
 
     VPNServersPage._build = patched_build
     VPNServersPage._on_stats = patched_on_stats
+    VPNServersPage._toggle_quarantine = patched_toggle_quarantine
     InactiveClientsPage._build = patched_inactive_build
     _INSTALLED = True
