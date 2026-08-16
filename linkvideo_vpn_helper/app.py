@@ -169,6 +169,8 @@ def main() -> int:
     install_search_escape_compat()
     from linkvideo_vpn_helper.ui.nested_scroll_guard import install_nested_scroll_guard
     install_nested_scroll_guard()
+    from linkvideo_vpn_helper.ui.vpn_automation_sheets_bridge import install_vpn_automation_sheets_bridge
+    install_vpn_automation_sheets_bridge()
 
     from linkvideo_vpn_helper.ui.main_window import MainWindow
     splash.set_status("Открываю интерфейс…")
