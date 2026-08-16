@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-"""Public LV Automation service facade for 3.0.8."""
+"""Public LV Automation compatibility facade for RouterOS fleet variants."""
 
+import re
 from typing import Callable, Iterable, TypeVar
 
+from linkvideo_vpn_helper.mikrotik.api_ssl_client import RouterOSAPIClient
 from linkvideo_vpn_helper.services import vpn_automation_service_core as _core
 from linkvideo_vpn_helper.services.vpn_automation_service_core import *  # noqa: F401,F403
 from linkvideo_vpn_helper.services.vpn_automation_service_core import (
@@ -18,13 +20,17 @@ _core.LV_LOG_ACTION = LV_LOG_ACTION
 
 
 class VPNAutomationService(_CoreVPNAutomationService):
-    """LV automation with field-by-field RouterOS compatibility.
+    """LV automation with conservative RouterOS compatibility.
 
-    RouterOS API/CLI guarantees that ``find`` returns internal item IDs. Some
-    deployed routers acknowledge ``add`` without returning ``ret`` and some menu
-    print forms omit ``.id``. Installation therefore never treats an empty add
-    return as failure; it resolves the object through ``/find`` by its stable
-    name/prefix and verifies the complete set afterwards.
+    Functional identity matters more than optional metadata. In particular a
+    ``/system/logging`` rule is identified by ``action + topics``. ``prefix``
+    merely decorates the emitted log text and is not required by AutoRestore,
+    which reads the dedicated LVAuth memory buffer and parses the message body.
+
+    Some deployed routers acknowledge ``add`` with ``!done`` but return no
+    ``ret``/``.id`` and may not immediately expose optional fields in a readback.
+    A successful add is therefore accepted. Internal IDs are only required when
+    an existing object actually has to be mutated.
     """
 
     _OPTIONAL_FIELDS_BY_PATH = {
@@ -79,7 +85,8 @@ class VPNAutomationService(_CoreVPNAutomationService):
 
     @classmethod
     def _find_ids(cls, api, path: str, field: str, value: str) -> list[str]:
-        """Resolve internal IDs using RouterOS find, then a print fallback."""
+        # Some menus expose find through API, some do not. Prefer it, then use
+        # an exact filtered print and finally a broad print as compatibility.
         try:
             ids = cls._ret_ids(api.talk(f"{path}/find", {field: value}))
             if ids:
@@ -126,15 +133,14 @@ class VPNAutomationService(_CoreVPNAutomationService):
                 except Exception as exc:
                     raise cls._component_error(path, name, ", ".join(required), exc) from exc
         else:
-            # A plain print is used only to avoid duplicates on an unusual menu
-            # where find itself is unavailable. The object may legitimately be
-            # present without an exposed .id.
             try:
                 existing = cls._find(api.print(path), "name", name)
             except Exception:
                 existing = None
             if existing is None:
                 try:
+                    # Empty ret is valid on some RouterOS menus. !done without
+                    # !trap means the component was accepted.
                     returned = str(api.add(path, {"name": name, **required}) or "").strip()
                 except Exception as exc:
                     raise cls._component_error(path, name, ", ".join(required), exc) from exc
@@ -142,11 +148,43 @@ class VPNAutomationService(_CoreVPNAutomationService):
             else:
                 rid = str(existing.get(".id", "") or "").strip() or cls._find_id(api, path, "name", name)
 
-        # If RouterOS created the named object but exposes no ID even through
-        # find, do not fail here. Optional metadata cannot be applied, but final
-        # get_status() still verifies that every required component exists.
         cls._apply_optional_fields(api, path, rid, name, optional)
         return rid
+
+    @staticmethod
+    def _topic_set(value) -> frozenset[str]:
+        return frozenset(
+            part.strip().lower()
+            for part in str(value or "").split(",")
+            if part.strip()
+        )
+
+    @classmethod
+    def _managed_logging_rule(cls, row: dict | None, topics: str, prefix: str = "") -> bool:
+        if not row:
+            return False
+        action = str(row.get("action", "") or "").strip()
+        if action != LV_LOG_ACTION:
+            return False
+        if cls._topic_set(row.get("topics")) == cls._topic_set(topics):
+            return True
+        # Compatibility with partially installed older builds that used prefix
+        # as identity. Action must still be LVAuth so unrelated rules are safe.
+        return bool(prefix) and str(row.get("prefix", "") or "").strip() == prefix
+
+    @classmethod
+    def _find_logging_rule(cls, rows: Iterable[dict], topics: str, prefix: str = "") -> dict | None:
+        return next((row for row in rows if cls._managed_logging_rule(row, topics, prefix)), None)
+
+    @classmethod
+    def _logging_rows(cls, api) -> list[dict]:
+        try:
+            return api.print(
+                "/system/logging",
+                {".proplist": ".id,topics,action,prefix,disabled,regex"},
+            )
+        except Exception:
+            return api.print("/system/logging")
 
     @classmethod
     def _set_logging_rule_enabled(cls, api, rid: str, enabled: bool) -> None:
@@ -166,63 +204,46 @@ class VPNAutomationService(_CoreVPNAutomationService):
             if not cls._looks_like_optional_field_error(exc):
                 raise
 
-    @staticmethod
-    def _logging_rule_matches(row: dict | None, prefix: str, topics: str) -> bool:
-        if not row:
-            return False
-        return (
-            str(row.get("prefix", "") or "").strip() == prefix
-            and str(row.get("action", "") or "").strip() == LV_LOG_ACTION
-            and str(row.get("topics", "") or "").strip() == topics
-        )
-
-    @classmethod
-    def _logging_rows(cls, api) -> list[dict]:
-        try:
-            return api.print(
-                "/system/logging",
-                {".proplist": ".id,topics,action,prefix,disabled,regex"},
-            )
-        except Exception:
-            return api.print("/system/logging")
-
     @classmethod
     def _upsert_logging_rule(cls, api, prefix: str, topics: str, enabled: bool = True) -> None:
-        required = {"topics": topics, "action": LV_LOG_ACTION, "prefix": prefix}
+        # Only action+topics are functionally required. Prefix and regex are
+        # optional metadata/filtering and must never make installation fail.
         rows = cls._logging_rows(api)
-        row = cls._find(rows, "prefix", prefix)
-        rid = cls._find_id(api, "/system/logging", "prefix", prefix)
+        row = cls._find_logging_rule(rows, topics, prefix)
+        rid = str((row or {}).get(".id", "") or "").strip()
 
         if row:
             if rid:
                 try:
-                    api.set("/system/logging", rid, required)
+                    api.set("/system/logging", rid, {"topics": topics, "action": LV_LOG_ACTION})
                 except Exception as exc:
-                    raise cls._component_error("/system/logging", prefix, "topics/action/prefix", exc) from exc
-            elif not cls._logging_rule_matches(row, prefix, topics):
-                raise RuntimeError(
-                    f"RouterOS нашёл /system/logging {prefix}, но не дал ID для исправления его параметров"
-                )
+                    raise cls._component_error("/system/logging", topics, "topics/action", exc) from exc
         else:
             try:
-                returned = str(api.add("/system/logging", required) or "").strip()
+                returned = str(api.add("/system/logging", {"topics": topics, "action": LV_LOG_ACTION}) or "").strip()
             except Exception as exc:
-                raise cls._component_error("/system/logging", prefix, "topics/action/prefix", exc) from exc
-            rid = returned or cls._find_id(api, "/system/logging", "prefix", prefix)
-            # Verify the stable tuple rather than the add return value.
-            created = cls._find(cls._logging_rows(api), "prefix", prefix)
-            if not cls._logging_rule_matches(created, prefix, topics):
-                raise RuntimeError(
-                    f"RouterOS подтвердил создание /system/logging {prefix}, но правило не найдено при проверке"
-                )
+                raise cls._component_error("/system/logging", topics, "topics/action", exc) from exc
+            # Do not convert successful !done into an error merely because this
+            # RouterOS omitted ret or an immediate readback field.
+            rid = returned
 
         if rid:
-            try:
-                api.set("/system/logging", rid, {"regex": "login failure for user"})
-            except Exception as exc:
-                if not cls._looks_like_optional_field_error(exc):
-                    raise cls._component_error("/system/logging", prefix, "regex", exc) from exc
+            for field, value in (("prefix", prefix), ("regex", "login failure for user")):
+                try:
+                    api.set("/system/logging", rid, {field: value})
+                except Exception as exc:
+                    if not cls._looks_like_optional_field_error(exc):
+                        raise cls._component_error("/system/logging", topics, field, exc) from exc
         cls._set_logging_rule_enabled(api, rid, enabled)
+
+    def _set_logging_enabled(self, api, enabled: bool) -> None:
+        rows = self._logging_rows(api)
+        for topics, prefix in (("ppp", LV_LOG_PREFIX_PPP), ("l2tp", LV_LOG_PREFIX_L2TP)):
+            row = self._find_logging_rule(rows, topics, prefix)
+            if not row:
+                continue
+            rid = str(row.get(".id", "") or "").strip()
+            self._set_logging_rule_enabled(api, rid, enabled)
 
     @staticmethod
     def _device_mode_hint(api) -> str:
@@ -266,4 +287,27 @@ class VPNAutomationService(_CoreVPNAutomationService):
         )
 
     def get_status(self, server, creds):
-        return self._call_core_with_public_api(lambda: super(VPNAutomationService, self).get_status(server, creds))
+        status = self._call_core_with_public_api(lambda: super(VPNAutomationService, self).get_status(server, creds))
+        # Core keeps compatibility with old prefix-based installs. Re-evaluate
+        # logging readiness by the actual functional identity used in 3.0.8.
+        try:
+            with RouterOSAPIClient(
+                server,
+                creds.username,
+                creds.password,
+                port=creds.port,
+                timeout=creds.timeout,
+            ) as api:
+                actions = api.print("/system/logging/action")
+                rules = self._logging_rows(api)
+            action_ok = self._find(actions, "name", LV_LOG_ACTION) is not None
+            ppp = self._find_logging_rule(rules, "ppp", LV_LOG_PREFIX_PPP)
+            l2tp = self._find_logging_rule(rules, "l2tp", LV_LOG_PREFIX_L2TP)
+            status.logging_ready = bool(action_ok and ppp and l2tp)
+            managed = [row for row in (ppp, l2tp) if row]
+            status.logging_enabled = bool(managed) and all(
+                not self._bool(row.get("disabled", "no")) for row in managed
+            )
+        except Exception:
+            pass
+        return status
