@@ -16,8 +16,6 @@ class AutomationAPI:
         self.sets: list[tuple[str, str, dict]] = []
 
     def print(self, path, params=None):
-        # New upsert code can re-read an object if an old API omitted ret. Our
-        # fake always returns ret, so no persistent store is needed here.
         return []
 
     def add(self, path, params):
@@ -25,7 +23,6 @@ class AutomationAPI:
         if path == "/system/logging/action":
             name = str(params.get("name", ""))
             assert re.fullmatch(r"[A-Za-z0-9]+", name), name
-            # Functional minimum must be created before optional memory fields.
             assert set(params) <= {"name", "target"}, params
         if path == "/system/logging":
             assert params.get("action") == automation_module.LV_LOG_ACTION, params
@@ -36,8 +33,6 @@ class AutomationAPI:
     def set(self, path, rid, params):
         params = dict(params)
         self.sets.append((path, rid, params))
-        # Simulate the terse real-server response. Each optional field is sent
-        # alone, so Helper can safely skip only that field.
         optional_unsupported = {
             ("/system/script", "dont-require-permissions"),
             ("/system/logging/action", "memory-lines"),
@@ -98,16 +93,16 @@ class TrafficAPI:
             raise AssertionError(path)
 
         type(self).connection_queries.append(dict(params))
-        assert "?reply-src-address=" not in params, params
-        port = params.get("?dst-port=")
-        if port == "11136":
-            # Exact query + known NAT map must be sufficient even when this API
-            # version omits reply-src-address from the returned row.
+        if (
+            params.get("?reply-src-address=") == "172.16.2.5"
+            and params.get("?reply-src-port=") == "554"
+        ):
             return [
                 {
                     ".id": "*C1",
                     "protocol": "tcp",
                     "dst-port": "11136",
+                    "reply-src-address": "172.16.2.5",
                     "reply-src-port": "554",
                     "dstnat": "yes",
                     "seen-reply": "yes",
@@ -115,10 +110,7 @@ class TrafficAPI:
                     "repl-rate": "4.8Mbps",
                     "orig-bytes": "1000",
                     "repl-bytes": "9000",
-                }
-            ]
-        if port == "11140":
-            return [
+                },
                 {
                     ".id": "*C2",
                     "protocol": "tcp",
@@ -131,7 +123,7 @@ class TrafficAPI:
                     "repl-rate": "250kbps",
                     "orig-bytes": "500",
                     "repl-bytes": "5000",
-                }
+                },
             ]
         return []
 
@@ -142,8 +134,6 @@ def main() -> None:
     assert automation_core.LV_LOG_ACTION == automation_module.LV_LOG_ACTION
     assert f'buffer="{automation_module.LV_LOG_ACTION}"' in automation_core.restore_script_source()
 
-    # A server that rejects several optional fields with only "unknown
-    # parameter" must still receive the complete functional LV component set.
     automation_api = AutomationAPI()
     automation_module.VPNAutomationService()._ensure_components(automation_api, preserve_pause=False)
     action_rows = [params for path, params in automation_api.added if path == "/system/logging/action"]
@@ -180,6 +170,8 @@ def main() -> None:
     assert second.internal_port == 554
     assert second.repl_rate_bps == 250_000, second.repl_rate_bps
     assert len(TrafficAPI.connection_queries) == 2, TrafficAPI.connection_queries
+    assert all(q.get("?reply-src-address=") == "172.16.2.5" for q in TrafficAPI.connection_queries)
+    assert all(q.get("?reply-src-port=") == "554" for q in TrafficAPI.connection_queries)
 
     root = Path(__file__).resolve().parents[1]
     visual = (root / "linkvideo_vpn_helper/ui/search_visual_fixes.py").read_text(encoding="utf-8")
