@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import os
+import queue
 import subprocess
 import threading
 import time
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from PySide6.QtCore import QTimer, Qt
 
@@ -15,13 +15,7 @@ _INSTALLED = False
 
 
 def _install_no_console_process_guard() -> None:
-    """Prevent console helpers (FFmpeg/PowerShell/taskkill/etc.) flashing windows.
-
-    Runtime code is GUI-only. On Windows every subprocess inherits
-    CREATE_NO_WINDOW unless a caller explicitly requests CREATE_NEW_CONSOLE.
-    subprocess.run/check_output use subprocess.Popen internally, so one guard
-    also covers helper paths that are easy to miss during future development.
-    """
+    """Prevent console helpers (FFmpeg/PowerShell/taskkill/etc.) flashing windows."""
     if os.name != "nt" or getattr(subprocess.Popen, "_lv_no_console_guard", False):
         return
 
@@ -41,14 +35,42 @@ def _install_no_console_process_guard() -> None:
     subprocess.Popen = HiddenPopen
 
 
-def _install_inactive_clients_auto_refresh() -> None:
-    """Keep lifecycle data current and make its all-server scan deadline-bounded.
+def _start_daemon_batch(
+    hosts: list[str],
+    worker,
+    *,
+    max_workers: int,
+    thread_prefix: str,
+):
+    """Start bounded-concurrency daemon workers and return their result queue.
 
-    The first visit performs the normal visible scan. Later refreshes run every
-    minute without opening a modal spinner over the operator. Both manual and
-    automatic scans have a hard deadline and abandon stuck RouterOS futures
-    without waiting for executor shutdown.
+    Python ThreadPoolExecutor workers are non-daemon. ``shutdown(wait=False)``
+    releases the caller but a platform socket that ignores its timeout may still
+    own process lifetime. Background/read-only refreshes must never have that
+    property, so they use daemon threads just like interactive search.
     """
+    semaphore = threading.Semaphore(max(1, min(int(max_workers), max(1, len(hosts)))))
+    output: queue.Queue[tuple[str, object | None, BaseException | None]] = queue.Queue()
+
+    def run(host: str) -> None:
+        with semaphore:
+            try:
+                output.put((host, worker(host), None))
+            except BaseException as exc:
+                output.put((host, None, exc))
+
+    for host in hosts:
+        threading.Thread(
+            target=run,
+            args=(host,),
+            daemon=True,
+            name=f"{thread_prefix}:{host}",
+        ).start()
+    return output
+
+
+def _install_inactive_clients_auto_refresh() -> None:
+    """Keep lifecycle data current with a hard deadline and daemon-only I/O."""
     from linkvideo_vpn_helper.ui.pages.inactive_clients_page import InactiveClientsPage
 
     if getattr(InactiveClientsPage, "_lv_auto_refresh_installed", False):
@@ -90,67 +112,60 @@ def _install_inactive_clients_auto_refresh() -> None:
             self.task.show()
             self.task.busy("Проверяю VPN-серверы", f"Проверено 0 из {len(servers)}", 0)
 
+        def one(server: str):
+            return self.service.list_lifecycle_clients(
+                server,
+                self.credentials,
+                self.INACTIVE_DAYS,
+                True,
+            )
+
         def worker():
             records = []
             errors = []
-            workers = min(8, max(1, len(servers)))
-            pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="inactive-vpn")
-            futures = {
-                pool.submit(
-                    self.service.list_lifecycle_clients,
-                    server,
-                    self.credentials,
-                    self.INACTIVE_DAYS,
-                    True,
-                ): server
-                for server in servers
-            }
-            pending = set(futures)
+            pending = set(servers)
+            completed = _start_daemon_batch(
+                servers,
+                one,
+                max_workers=8,
+                thread_prefix="inactive-vpn",
+            )
             checked = 0
             deadline = time.monotonic() + 24.0
-            try:
-                while pending and not cancel_event.is_set():
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        break
-                    done, pending = wait(
-                        pending,
-                        timeout=min(0.4, remaining),
-                        return_when=FIRST_COMPLETED,
+
+            while pending and not cancel_event.is_set():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    server, payload, exc = completed.get(timeout=min(0.20, remaining))
+                except queue.Empty:
+                    continue
+                if server not in pending:
+                    continue
+                pending.remove(server)
+                checked += 1
+                if exc is None:
+                    records.extend(payload or [])
+                else:
+                    errors.append((server, classify_exception(exc)))
+                if not background:
+                    self.progressReady.emit(checked, len(servers), server)
+
+            if cancel_event.is_set():
+                return
+
+            for server in servers:
+                if server not in pending:
+                    continue
+                errors.append(
+                    (
+                        server,
+                        classify_exception(TimeoutError("VPN-сервер не завершил проверку до общего deadline")),
                     )
-                    for future in done:
-                        server = futures[future]
-                        checked += 1
-                        try:
-                            records.extend(future.result())
-                        except Exception as exc:
-                            errors.append((server, classify_exception(exc)))
-                        if not background:
-                            self.progressReady.emit(checked, len(servers), server)
+                )
 
-                if cancel_event.is_set():
-                    for future in pending:
-                        future.cancel()
-                    return
-
-                if pending:
-                    for future in pending:
-                        server = futures[future]
-                        future.cancel()
-                        errors.append(
-                            (
-                                server,
-                                classify_exception(
-                                    TimeoutError("VPN-сервер не завершил проверку до общего deadline")
-                                ),
-                            )
-                        )
-            finally:
-                # Critical: never wait here for a broken socket/thread. Its
-                # result is no longer allowed to hold the Qt completion path.
-                pool.shutdown(wait=False, cancel_futures=True)
-
-            if not cancel_event.is_set() and self._cancel_event is cancel_event:
+            if self._cancel_event is cancel_event:
                 self.scanReady.emit(records, errors)
 
         threading.Thread(target=worker, daemon=True, name="inactive-vpn-scan").start()
@@ -223,12 +238,7 @@ def _install_inactive_clients_auto_refresh() -> None:
 
 
 def _install_vpn_server_refresh_deadline() -> None:
-    """Make the already-automatic VPN dashboard refresh impossible to hang.
-
-    The page already refreshes every 20 seconds and suppresses its modal during
-    timer refreshes. This layer keeps that UX but adds Esc cancellation and a
-    hard deadline so one broken RouterOS/API call cannot hold the dashboard.
-    """
+    """Make the automatic VPN dashboard refresh deadline-bounded and daemon-only."""
     from linkvideo_vpn_helper.ui.pages.vpn_servers_page import VPNServersPage
 
     if getattr(VPNServersPage, "_lv_deadline_refresh_installed", False):
@@ -260,41 +270,40 @@ def _install_vpn_server_refresh_deadline() -> None:
 
         def worker():
             rows = []
-            pool = ThreadPoolExecutor(max_workers=min(8, len(servers)), thread_name_prefix="vpn-dashboard")
-            futures = {pool.submit(one, host): host for host in servers}
-            pending = set(futures)
+            pending = set(servers)
+            completed = _start_daemon_batch(
+                servers,
+                one,
+                max_workers=8,
+                thread_prefix="vpn-dashboard",
+            )
             deadline = time.monotonic() + 20.0
-            try:
-                while pending and not cancel_event.is_set():
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        break
-                    done, pending = wait(
-                        pending,
-                        timeout=min(0.35, remaining),
-                        return_when=FIRST_COMPLETED,
-                    )
-                    for future in done:
-                        host = futures[future]
-                        try:
-                            stat, auto = future.result()
-                            rows.append((host, stat, auto, None))
-                        except Exception as exc:
-                            rows.append((host, None, None, classify_exception(exc).message))
 
-                if cancel_event.is_set():
-                    for future in pending:
-                        future.cancel()
-                    return
+            while pending and not cancel_event.is_set():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    host, payload, exc = completed.get(timeout=min(0.20, remaining))
+                except queue.Empty:
+                    continue
+                if host not in pending:
+                    continue
+                pending.remove(host)
+                if exc is None:
+                    stat, auto = payload
+                    rows.append((host, stat, auto, None))
+                else:
+                    rows.append((host, None, None, classify_exception(exc).message))
 
-                for future in pending:
-                    host = futures[future]
-                    future.cancel()
+            if cancel_event.is_set():
+                return
+
+            for host in servers:
+                if host in pending:
                     rows.append((host, None, None, "Сервер не ответил до общего deadline"))
-            finally:
-                pool.shutdown(wait=False, cancel_futures=True)
 
-            if not cancel_event.is_set() and self._cancel_event is cancel_event:
+            if self._cancel_event is cancel_event:
                 self.statsReady.emit(rows)
 
         threading.Thread(target=worker, daemon=True, name="vpn-dashboard-refresh").start()
