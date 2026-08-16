@@ -94,11 +94,14 @@ def main() -> int:
     from linkvideo_vpn_helper.ui.silent_update_integration import install_silent_patch_updates
     install_silent_patch_updates()
 
-    # Search/dashboard/lifecycle pages already have their own deadline guards.
-    # Apply the same contract to service-level all-VPN workflows such as the
-    # automatic least-loaded server selection used while creating a client.
     from linkvideo_vpn_helper.services.runtime_hardening import install_service_runtime_hardening
     install_service_runtime_hardening()
+
+    # FFmpeg archive jobs already run outside the Qt thread and expose progress
+    # and Esc cancellation. Give HTTP/HLS reads a fixed stall timeout as well so
+    # a half-open media connection cannot trap readline() forever.
+    from linkvideo_vpn_helper.services.archive_process_hardening import install_archive_process_hardening
+    install_archive_process_hardening()
 
     settings = QSettings("LinkVideo", "LinkVideo.Helper")
     _migrate_settings(settings)
