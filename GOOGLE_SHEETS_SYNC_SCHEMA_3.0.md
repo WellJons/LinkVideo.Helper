@@ -1,68 +1,111 @@
-# LinkVideo.Helper 3.0 — Google Sheets sync schema
+# LinkVideo.Helper 3.0 — Google Sheets VPN database
 
-Google Sheets рассматривается как зеркало и история, а RouterOS — как источник истины.
-Старые строки не считаются актуальными до первой полной сверки.
+Google Sheets используется как аварийное зеркало RouterOS и журнал изменений. RouterOS остаётся источником текущего состояния; строки в Sheets никогда не должны заставлять Helper менять MikroTik автоматически.
 
-## Ключ записи
-`server + login`
+## Структура
 
-## Лист VPN_Clients
-- server
-- country
-- login
-- remote_address
-- profile
-- disabled
-- online
-- lifecycle_state
-- last_seen
-- first_seen
-- updated_at
-- deleted
-- deleted_at
-- last_sync_at
+Старые ручные листы `vpn01.linkvideo.ru` … сохранены как исторический архив и не перезаписываются.
 
-## Лист VPN_Ports
-- server
-- login
-- external_port
-- internal_port
-- protocol
-- disabled
-- deleted
-- updated_at
+Новая рабочая база разделена по серверам:
 
-## Лист VPN_Servers
-- server
-- country
-- active_l2tp
-- secrets
-- cpu
-- ram
-- nat_rules
-- lv_version
-- lv_running
-- quarantine_enabled
-- last_sync
-- status
+- `LV vpn01` … `LV vpn10`
+- `LV rb-vpn01`
+- `LV kz-vpn01`
+- `LV Сводка`
+- `LV История`
 
-## Лист Sync_Log
-- timestamp
-- server
-- added
-- changed
-- enabled
-- disabled
-- deleted
-- errors
+### Серверный лист
 
-## Первая синхронизация — FULL RECONCILIATION
-1. Опросить каждый включённый VPN-сервер.
-2. Сопоставить строки по `server + login`.
-3. Есть на RouterOS, нет в Sheets → создать.
-4. Есть в Sheets, нет на RouterOS → `deleted=true`, строку не удалять.
-5. Есть в обоих → RouterOS перезаписывает актуальные поля.
-6. NAT/порты синхронизировать отдельным листом.
-7. Старые данные Google Sheets до завершения этой процедуры считаются непроверенными.
+Одна VPN-учётка = одна строка.
 
-Пароли в рабочий лист не выгружать. Полный аварийный backup с паролями хранить отдельно и шифровать.
+Колонки:
+
+1. Логин
+2. Пароль
+3. Service
+4. Profile
+5. Local Address
+6. Remote Address
+7. Комментарий RouterOS
+8. NAT / Порты
+9. Lifecycle
+10. PPP disabled
+11. Последняя активность
+12. Дней без связи
+13. Первое обнаружение
+14. Последнее изменение
+15. Удалена
+16. Удалена в
+17. Последняя сверка RouterOS
+18. Источник
+19. RouterOS snapshot
+
+`Пароль` и `RouterOS snapshot` нужны только для аварийного восстановления. Их рекомендуется скрывать в обычном представлении и ограничить доступ к таблице.
+
+### LV История
+
+Неизменяемый журнал фактов синхронизации:
+
+- время;
+- VPN-сервер;
+- логин;
+- событие;
+- изменённые поля;
+- было;
+- стало;
+- источник;
+- инициатор;
+- Sync ID.
+
+Пароли и полный snapshot не дублируются открытым текстом в `Было/Стало`: для чувствительных полей журнал фиксирует только факт изменения.
+
+## Правила сверки
+
+Ключ строки: `server + login`.
+
+1. RouterOS успешно прочитан, учётка есть на RouterOS, строки нет в Sheets → создать строку и событие `Обнаружена на RouterOS`.
+2. Есть и там, и там → сравнить конфигурационные поля и обновить только при реальном изменении.
+3. Есть в Sheets, но после УСПЕШНОГО полного чтения `/ppp/secret` её нет на RouterOS → сохранить строку, поставить `Удалена = Да`, записать дату и событие `Удалена на RouterOS`.
+4. Ранее удалённая учётка снова появилась → оживить существующую строку и записать `Восстановлена на RouterOS`, не создавать дубль.
+5. Если RouterOS недоступен, snapshot неполный или чтение завершилось ошибкой → состояние этого сервера НЕ сверяется и никакие строки не помечаются удалёнными.
+
+## Источники изменений
+
+- `Helper · ...` — операция выполнена через LinkVideo.Helper и после её успешного завершения запущена фоновая сверка.
+- `Ручная синхронизация Helper` — оператор нажал кнопку `Синхронизировать`.
+- `Автосверка RouterOS` — периодическая сверка из открытого Helper.
+- `LinkVideo.VPNSync` — независимый центральный агент на сервере/VM.
+
+Ручные изменения через WinBox обнаруживаются следующей полной сверкой.
+
+## Helper
+
+На странице `VPN-серверы` есть кнопка `Синхронизировать`. Если установлен Google service account key, Helper также:
+
+- автоматически сверяет базу раз в 5 минут;
+- после создания клиента, изменения пароля, NAT/портов, enable/disable и удаления ставит ускоренную сверку конкретного сервера;
+- выполняет Google-операции только в фоне. Ошибка Google не отменяет и не блокирует успешную операцию RouterOS.
+
+Ключ по умолчанию ищется здесь:
+
+`%PROGRAMDATA%\LinkVideo\Helper\google_sheets_service_account.json`
+
+Также поддерживаются:
+
+- `LINKVIDEO_SHEETS_SERVICE_ACCOUNT_FILE`
+- `LINKVIDEO_SHEETS_SERVICE_ACCOUNT_JSON`
+- QSettings `sheets/service_account_file`
+
+Сам приватный ключ в GitHub и EXE не встраивается.
+
+## Центральный агент
+
+`scripts/vpn_sync_agent.py` использует тот же reconciliation-код и предназначен для постоянной работы на LinkVideo VM/Linux/Windows-сервере, чтобы изменения RouterOS обнаруживались даже когда у сотрудников Helper закрыт.
+
+Переменные окружения:
+
+- `LINKVIDEO_ROUTEROS_USER`
+- `LINKVIDEO_ROUTEROS_PASSWORD`
+- `LINKVIDEO_SHEETS_SERVICE_ACCOUNT_FILE`
+- `LINKVIDEO_SYNC_INTERVAL_SECONDS` — по умолчанию 300
+- `LINKVIDEO_VPN_SERVERS` — необязательный список через запятую.
