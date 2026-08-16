@@ -36,40 +36,39 @@ class FakeAPI:
             ]
         if path == "/ip/firewall/connection":
             type(self).connection_queries.append(dict(params))
-            # Runtime contract: exact public dst-port only. Never dump global
-            # conntrack and never start with an expensive Remote Address scan.
-            assert params.get("?dst-port=") == "11312", params
-            assert "?reply-src-address=" not in params, params
-            return [
-                {
-                    ".id": "*C1",
-                    "protocol": "tcp",
-                    "dst-port": "11312",
-                    "reply-src-address": "172.16.1.10",
-                    "reply-src-port": "554",
-                    "dstnat": "yes",
-                    "seen-reply": "yes",
-                    "orig-rate": "1200",
-                    "repl-rate": "4800000",
-                    "orig-bytes": "10000",
-                    "repl-bytes": "9000000",
-                },
-                # Same public port but another translated destination: must not
-                # be attributed to the selected LinkVideo client.
-                {
-                    ".id": "*C2",
-                    "protocol": "tcp",
-                    "dst-port": "11312",
-                    "reply-src-address": "172.16.1.99",
-                    "reply-src-port": "554",
-                    "dstnat": "yes",
-                    "seen-reply": "yes",
-                    "orig-rate": "999999",
-                    "repl-rate": "999999",
-                    "orig-bytes": "999999",
-                    "repl-bytes": "999999",
-                },
-            ]
+            if (
+                params.get("?reply-src-address=") == "172.16.1.10"
+                and params.get("?reply-src-port=") == "554"
+            ):
+                return [
+                    {
+                        ".id": "*C1",
+                        "protocol": "tcp",
+                        "dst-port": "11312",
+                        "reply-src-address": "172.16.1.10",
+                        "reply-src-port": "554",
+                        "dstnat": "yes",
+                        "seen-reply": "yes",
+                        "orig-rate": "1200",
+                        "repl-rate": "4800000",
+                        "orig-bytes": "10000",
+                        "repl-bytes": "9000000",
+                    },
+                    {
+                        ".id": "*C2",
+                        "protocol": "tcp",
+                        "dst-port": "11399",
+                        "reply-src-address": "172.16.1.10",
+                        "reply-src-port": "554",
+                        "dstnat": "yes",
+                        "seen-reply": "yes",
+                        "orig-rate": "999999",
+                        "repl-rate": "999999",
+                        "orig-bytes": "999999",
+                        "repl-bytes": "999999",
+                    },
+                ]
+            return []
         raise AssertionError(path)
 
 
@@ -100,6 +99,8 @@ def main() -> None:
     assert sample.orig_bytes == 10_000
     assert sample.repl_bytes == 9_000_000
     assert len(FakeAPI.connection_queries) == 1, FakeAPI.connection_queries
+    assert FakeAPI.connection_queries[0].get("?reply-src-address=") == "172.16.1.10"
+    assert FakeAPI.connection_queries[0].get("?reply-src-port=") == "554"
 
     root = Path(__file__).resolve().parents[1]
     ui = (root / "linkvideo_vpn_helper/ui/port_traffic_inline.py").read_text(encoding="utf-8")
@@ -112,8 +113,10 @@ def main() -> None:
     assert "patched_port_selected" in ui
 
     service_src = (root / "linkvideo_vpn_helper/services/port_traffic_service.py").read_text(encoding="utf-8")
+    assert '"?reply-src-address=": remote' in service_src
+    assert '"?reply-src-address=": legacy_endpoint' in service_src
     assert '"?dst-port=": str(port)' in service_src
-    assert '"?reply-src-address=": remote' not in service_src
+    assert '"?dstnat=": "yes"' in service_src
     assert "traffic_timeout = min(3.5" in service_src
 
     app = (root / "linkvideo_vpn_helper/app.py").read_text(encoding="utf-8")
