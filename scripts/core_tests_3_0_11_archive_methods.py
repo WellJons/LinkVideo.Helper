@@ -123,7 +123,10 @@ def test_release_packaging_contract() -> None:
     assert "installer payload correctly excludes ffmpeg.exe" in build
     assert "LinkVideo.Helper_Setup.exe" in build
     assert "LinkVideo.Helper_Setup_Next.exe" not in build
-    assert '$asset = "installer_next/output/LinkVideo.Helper_Setup.exe"' in workflow
+    assert '$setup = "installer_next/output/LinkVideo.Helper_Setup.exe"' in workflow
+    assert 'LinkVideo.Helper_Payload_${version}.zip' in workflow
+    assert 'LinkVideo.Helper_Payload_${version}.json' in workflow
+    assert "continue-on-error: true" in workflow
     assert "release_upload/LinkVideo_VPN_Helper_Setup.exe\"\n          $notes" not in workflow
     assert "install_archive_download_methods()" in app
     assert app.index("install_archive_download_methods()") < app.index("install_archive_download_ux()")
