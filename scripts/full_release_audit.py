@@ -74,7 +74,10 @@ def _has_timeout(call: ast.Call) -> bool:
     if any(keyword.arg == "timeout" for keyword in call.keywords):
         return True
     name = _call_name(call)
-    if name.endswith("urlopen") and len(call.args) >= 2:
+    # urllib.request.urlopen(url, data=None, timeout=...) has timeout as its
+    # third positional argument. The second positional argument is request data
+    # and must not be mistaken for a timeout.
+    if name.endswith("urlopen") and len(call.args) >= 3:
         return True
     return False
 
@@ -140,6 +143,7 @@ def audit_release_chain(audit: Audit) -> None:
         "version": ROOT / "linkvideo_vpn_helper" / "version.py",
         "update": ROOT / "linkvideo_vpn_helper" / "services" / "update_service.py",
         "archive_methods": ROOT / "linkvideo_vpn_helper" / "services" / "archive_download_methods.py",
+        "archive_process_guard": ROOT / "linkvideo_vpn_helper" / "services" / "archive_download_process_guard.py",
         "spec": ROOT / "LinkVideo.Helper.spec",
         "build_next": ROOT / "scripts" / "build_next_installer.ps1",
         "installer_backend": ROOT / "installer_next" / "backend_windows.go",
@@ -155,6 +159,7 @@ def audit_release_chain(audit: Audit) -> None:
     app = required["app"].read_text(encoding="utf-8")
     update = required["update"].read_text(encoding="utf-8")
     methods = required["archive_methods"].read_text(encoding="utf-8")
+    process_guard = required["archive_process_guard"].read_text(encoding="utf-8")
     spec = required["spec"].read_text(encoding="utf-8")
     build = required["build_next"].read_text(encoding="utf-8")
     backend = required["installer_backend"].read_text(encoding="utf-8")
@@ -165,8 +170,12 @@ def audit_release_chain(audit: Audit) -> None:
         ("GitHub production manifest", "WellJons/LinkVideo.Helper.Updates/main/update-manifest.json" in update),
         ("SHA verification", "actual_hash != expected_hash" in update),
         ("ProductVersion verification", "_windows_product_version" in update),
+        ("safe Windows update path transport", "LINKVIDEO_UPDATE_FILE" in update),
         ("update probe compatibility installed", "install_update_version_probe_compat()" in app),
         ("archive methods installed", "install_archive_download_methods()" in app),
+        ("archive process guard installed", "install_archive_download_process_guard()" in app),
+        ("Curl child cleanup", "_run_process_cancellable" in process_guard and "finally:" in process_guard),
+        ("FFmpeg child cleanup", "_run_ffmpeg_progress" in process_guard and "_stop_process(proc)" in process_guard),
         ("FFmpeg LocalAppData download", "FFMPEG_DOWNLOAD_URL" in methods and "tools_dir()" in methods),
         ("FFmpeg absent from PyInstaller spec", "ffmpeg = root /" not in spec),
         ("payload explicitly rejects FFmpeg", "installer payload correctly excludes ffmpeg.exe" in build),
@@ -180,8 +189,10 @@ def audit_release_chain(audit: Audit) -> None:
         if not okay:
             audit.error(f"Release contract missing: {label}")
 
-    if app.index("install_archive_download_methods()") > app.index("install_archive_download_ux()"):
-        audit.error("Archive method integration must install before archive_download_ux")
+    if app.index("install_archive_download_methods()") > app.index("install_archive_download_process_guard()"):
+        audit.error("Archive methods must install before their process guard")
+    if app.index("install_archive_download_process_guard()") > app.index("install_archive_download_ux()"):
+        audit.error("Archive process guard must install before archive_download_ux")
 
     install_section = backend.split("func installProduct", 1)[-1]
     if "cleanRuntimeBeforeInstall(dest)" not in install_section or "extractPayload(dest, progress)" not in install_section:
