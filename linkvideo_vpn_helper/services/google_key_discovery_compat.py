@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Robust discovery of the Google Sheets service-account JSON.
+r"""Robust discovery of the Google Sheets service-account JSON.
 
 The installer and older Helper builds have used both ``LinkVideo.Helper`` and
 ``LinkVideo\Helper`` data directories.  Google also downloads service-account
