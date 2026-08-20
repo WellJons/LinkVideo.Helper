@@ -18,6 +18,7 @@ dist/
 installer_output/
 release_upload/
 release_payload/
+release_candidate/
 patch_output/
 installer_next/output/
 build_version_info.txt
