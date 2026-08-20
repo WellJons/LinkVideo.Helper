@@ -17,6 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "linkvideo_vpn_helper"
 SCRIPTS = ROOT / "scripts"
+THIS_FILE = Path(__file__).resolve()
 
 SKIP_DIRS = {
     ".git",
@@ -118,9 +119,12 @@ def audit_python(audit: Audit) -> None:
                 if len(node.body) == 1 and isinstance(node.body[0], ast.Pass):
                     broad_pass.append(f"{_rel(path)}:{node.lineno}")
 
-        for lineno, line in enumerate(text.splitlines(), 1):
-            if re.search(r"\b(?:TODO|FIXME|XXX)\b", line, re.I):
-                todo_hits.append(f"{_rel(path)}:{lineno}")
+        # Do not let the audit implementation's own marker vocabulary report
+        # itself. Every product/runtime/test file is still checked.
+        if path.resolve() != THIS_FILE:
+            for lineno, line in enumerate(text.splitlines(), 1):
+                if re.search(r"\b(?:TODO|FIXME|XXX)\b", line, re.I):
+                    todo_hits.append(f"{_rel(path)}:{lineno}")
 
     if broad_pass:
         audit.warn(
@@ -217,14 +221,20 @@ def audit_archive_contract(audit: Audit) -> None:
 
 
 def audit_sensitive_literals(audit: Audit) -> None:
-    private_key = "-----BEGIN PRIVATE KEY-----"
+    # Require the full PEM shape with a substantial base64 body. Test fixtures
+    # that deliberately use BEGIN/TEST/END markers must not be mistaken for a
+    # leaked credential.
+    private_key_pattern = re.compile(
+        r"-----BEGIN PRIVATE KEY-----\s+[A-Za-z0-9+/=\r\n]{80,}-----END PRIVATE KEY-----",
+        re.MULTILINE,
+    )
     token_patterns = [
         re.compile(r"ghp_[A-Za-z0-9]{20,}"),
         re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
     ]
     for path in _files({".py", ".ps1", ".bat", ".yml", ".yaml", ".json", ".txt", ".md", ".go"}):
         text = path.read_text(encoding="utf-8", errors="replace")
-        if private_key in text:
+        if private_key_pattern.search(text):
             audit.error(f"Private key material committed: {_rel(path)}")
         for pattern in token_patterns:
             if pattern.search(text):
