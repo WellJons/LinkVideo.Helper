@@ -48,9 +48,37 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pyinstaller
 
-      - name: Complete release preflight
+      - name: Complete Python release preflight
         shell: pwsh
         run: python scripts/release_preflight.py
+
+      - name: Audit Go installer, patcher and updater sources
+        shell: pwsh
+        run: |
+          $goFiles = Get-ChildItem installer_next,patcher,silent_updater -Recurse -Filter *.go | ForEach-Object { $_.FullName }
+          $notFormatted = @(& gofmt -l $goFiles)
+          if ($notFormatted.Count -gt 0) {
+            $notFormatted | ForEach-Object { Write-Host "gofmt required: $_" }
+            throw 'Go source formatting audit failed'
+          }
+
+          # Embedded payload files are generated later by the normal builders.
+          # Create harmless temporary fixtures so go vet can compile every Go
+          # module before any release artifact is produced.
+          python -c "import zipfile; zipfile.ZipFile(r'installer_next/payload.zip','w').close(); zipfile.ZipFile(r'patcher/patch_payload.zip','w').close()"
+          Set-Content -LiteralPath 'patcher/patch_manifest.json' -Value '{}' -Encoding utf8NoBOM
+          try {
+            Push-Location installer_next
+            try { go vet ./...; if ($LASTEXITCODE -ne 0) { throw 'installer_next go vet failed' } } finally { Pop-Location }
+            Push-Location patcher
+            try { go vet ./...; if ($LASTEXITCODE -ne 0) { throw 'patcher go vet failed' } } finally { Pop-Location }
+            Push-Location silent_updater
+            try { go vet ./...; if ($LASTEXITCODE -ne 0) { throw 'silent_updater go vet failed' } } finally { Pop-Location }
+          } finally {
+            Remove-Item -Force -ErrorAction SilentlyContinue 'installer_next/payload.zip'
+            Remove-Item -Force -ErrorAction SilentlyContinue 'patcher/patch_payload.zip'
+            Remove-Item -Force -ErrorAction SilentlyContinue 'patcher/patch_manifest.json'
+          }
 
       # Keep the historical Inno build as a compatibility/build-health check,
       # but it is never a release asset again.
