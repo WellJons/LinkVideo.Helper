@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory=$true)][string]$FromZip,
     [Parameter(Mandatory=$true)][string]$FromVersion,
     [Parameter(Mandatory=$true)][string]$ToVersion,
-    [string]$ToDir = 'dist\LinkVideo.Helper'
+    [string]$ToDir = 'dist\LinkVideo.Helper',
+    [switch]$FullRuntime
 )
 
 $ErrorActionPreference = 'Stop'
@@ -16,12 +17,19 @@ $patcherDir = Join-Path $root 'patcher'
 $outputDir = Join-Path $root 'patch_output'
 New-Item -ItemType Directory -Force -Path $bundleDir | Out-Null
 
-python scripts/make_patch_bundle.py `
-  --from-zip $fromZipPath `
-  --to-dir $toDirPath `
-  --from-version $FromVersion `
-  --to-version $ToVersion `
-  --out-dir $bundleDir
+$bundleArgs = @(
+    'scripts/make_patch_bundle.py',
+    '--from-zip', $fromZipPath,
+    '--to-dir', $toDirPath,
+    '--from-version', $FromVersion,
+    '--to-version', $ToVersion,
+    '--out-dir', $bundleDir
+)
+if ($FullRuntime) {
+    $bundleArgs += '--full-runtime'
+}
+& python @bundleArgs
+if ($LASTEXITCODE -ne 0) { throw "Patch bundle builder failed with exit code $LASTEXITCODE" }
 
 Copy-Item -Force (Join-Path $bundleDir 'patch_payload.zip') (Join-Path $patcherDir 'patch_payload.zip')
 Copy-Item -Force (Join-Path $bundleDir 'patch_manifest.json') (Join-Path $patcherDir 'patch_manifest.json')
@@ -41,5 +49,7 @@ if (-not (Test-Path $out)) { throw "Patch EXE was not created: $out" }
 $item = Get-Item $out
 if ($item.Length -lt 500000) { throw "Patch EXE is unexpectedly small: $($item.Length)" }
 $hash = (Get-FileHash -Algorithm SHA256 $out).Hash.ToLowerInvariant()
+$mode = if ($FullRuntime) { 'full-runtime' } else { 'differential' }
 Write-Host "PATCH READY: $out"
+Write-Host "MODE: $mode"
 Write-Host "SHA256: $hash"
