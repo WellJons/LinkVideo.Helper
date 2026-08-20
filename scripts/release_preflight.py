@@ -92,6 +92,8 @@ def _check_version_contract() -> None:
         raise SystemExit(f"Release notes missing or empty: {notes.name}")
 
     for required in (
+        ROOT / "scripts" / "verify_release.ps1",
+        ROOT / "scripts" / "audit_go.ps1",
         ROOT / "scripts" / "build_next_installer.ps1",
         ROOT / "installer_next" / "go.mod",
         ROOT / "installer_next" / "selftest_windows.go",
