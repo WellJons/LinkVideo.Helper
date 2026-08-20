@@ -23,7 +23,7 @@ concurrency:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -52,17 +52,17 @@ jobs:
         shell: pwsh
         run: python scripts/release_preflight.py
 
+      # Keep the historical Inno build as a compatibility/build-health check,
+      # but it is never a release asset again.
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --no-progress -y
 
-      - name: Build and verify current Inno Setup
+      - name: Build legacy Inno compatibility installer
         shell: cmd
         run: build_setup.bat
 
-      # The replacement installer is built in parallel and remains a test asset
-      # until it is explicitly selected for the public update channel.
-      - name: Build next LinkVideo installer and uninstaller
+      - name: Build authoritative LinkVideo installer and uninstaller
         shell: pwsh
         run: ./scripts/build_next_installer.ps1
 
@@ -70,27 +70,29 @@ jobs:
         shell: pwsh
         run: ./scripts/test_patch_builder.ps1
 
-      - name: Upload verified current Windows build
+      - name: Upload authoritative Windows release candidate
         uses: actions/upload-artifact@v4
         with:
-          name: LinkVideo.Helper-build-${{ github.run_number }}-${{ github.sha }}
+          name: LinkVideo.Helper-release-${{ github.run_number }}-${{ github.sha }}
           path: |
-            release_upload/LinkVideo_VPN_Helper_Setup.exe
-            release_upload/version.json
-          if-no-files-found: error
-
-      - name: Upload next installer test build
-        uses: actions/upload-artifact@v4
-        with:
-          name: LinkVideo.Helper-next-installer-${{ github.run_number }}-${{ github.sha }}
-          path: |
-            installer_next/output/LinkVideo.Helper_Setup_Next.exe
+            installer_next/output/LinkVideo.Helper_Setup.exe
             installer_next/output/Uninstall.exe
             release_payload/LinkVideo.Helper_Payload_*.zip
             release_payload/LinkVideo.Helper_Payload_*.json
           if-no-files-found: error
 
-      # Only a version tag may create/update the private draft release.
+      - name: Upload legacy Inno build for compatibility diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinkVideo.Helper-legacy-inno-${{ github.run_number }}-${{ github.sha }}
+          path: |
+            release_upload/LinkVideo_VPN_Helper_Setup.exe
+            release_upload/version.json
+          if-no-files-found: error
+
+      # Only a version tag may create/update the private draft release. The same
+      # exact Setup is later copied by publish-public-update.yml to the public
+      # WellJons/LinkVideo.Helper.Updates repository.
       - name: Create or update private draft Release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
@@ -99,8 +101,9 @@ jobs:
         run: |
           $tag = "${{ github.ref_name }}"
           $version = $tag.TrimStart('v')
-          $asset = "release_upload/LinkVideo_VPN_Helper_Setup.exe"
+          $asset = "installer_next/output/LinkVideo.Helper_Setup.exe"
           $notes = "RELEASE_${version}_RU.txt"
+          if (-not (Test-Path $asset)) { throw "Authoritative Setup not found: $asset" }
           if (-not (Test-Path $notes)) { throw "Release notes not found: $notes" }
           gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -eq 0) {
