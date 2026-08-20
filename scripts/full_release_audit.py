@@ -27,6 +27,7 @@ SKIP_DIRS = {
     "installer_output",
     "release_upload",
     "release_payload",
+    "release_candidate",
     "patch_output",
     "__pycache__",
 }
@@ -128,9 +129,14 @@ def audit_python(audit: Audit) -> None:
                         audit.error(f"TLS verification disabled: {_rel(path)}:{node.lineno} ({name})")
                 if name == "os.system":
                     audit.error(f"os.system is forbidden in runtime code: {_rel(path)}:{node.lineno}")
-                if name in {"subprocess.run", "subprocess.call", "subprocess.check_call", "subprocess.check_output", "subprocess.Popen"}:
-                    if _keyword_literal(node, "shell") is True:
-                        audit.error(f"shell=True is forbidden in runtime code: {_rel(path)}:{node.lineno} ({name})")
+                if name in {
+                    "subprocess.run",
+                    "subprocess.call",
+                    "subprocess.check_call",
+                    "subprocess.check_output",
+                    "subprocess.Popen",
+                } and _keyword_literal(node, "shell") is True:
+                    audit.error(f"shell=True is forbidden in runtime code: {_rel(path)}:{node.lineno} ({name})")
                 if name == "tempfile.mktemp":
                     audit.error(f"Insecure tempfile.mktemp use: {_rel(path)}:{node.lineno}")
 
@@ -144,8 +150,6 @@ def audit_python(audit: Audit) -> None:
                     else:
                         broad_pass.append(f"{_rel(path)}:{node.lineno}")
 
-        # Do not let the audit implementation's own marker vocabulary report
-        # itself. Every product/runtime/test file is still checked.
         if path.resolve() != THIS_FILE:
             for lineno, line in enumerate(text.splitlines(), 1):
                 if re.search(r"\b(?:TODO|FIXME|XXX)\b", line, re.I):
@@ -168,6 +172,8 @@ def audit_release_chain(audit: Audit) -> None:
         "archive_methods": ROOT / "linkvideo_vpn_helper" / "services" / "archive_download_methods.py",
         "archive_process_guard": ROOT / "linkvideo_vpn_helper" / "services" / "archive_download_process_guard.py",
         "spec": ROOT / "LinkVideo.Helper.spec",
+        "verifier": ROOT / "scripts" / "verify_release.ps1",
+        "go_audit": ROOT / "scripts" / "audit_go.ps1",
         "build_next": ROOT / "scripts" / "build_next_installer.ps1",
         "installer_backend": ROOT / "installer_next" / "backend_windows.go",
         "installer_selftest": ROOT / "installer_next" / "selftest_windows.go",
@@ -185,6 +191,8 @@ def audit_release_chain(audit: Audit) -> None:
     methods = required["archive_methods"].read_text(encoding="utf-8")
     process_guard = required["archive_process_guard"].read_text(encoding="utf-8")
     spec = required["spec"].read_text(encoding="utf-8")
+    verifier = required["verifier"].read_text(encoding="utf-8")
+    go_audit = required["go_audit"].read_text(encoding="utf-8")
     build = required["build_next"].read_text(encoding="utf-8")
     backend = required["installer_backend"].read_text(encoding="utf-8")
     selftest = required["installer_selftest"].read_text(encoding="utf-8")
@@ -207,7 +215,15 @@ def audit_release_chain(audit: Audit) -> None:
         ("authoritative Setup filename", "LinkVideo.Helper_Setup.exe" in build and "LinkVideo.Helper_Setup_Next.exe" not in build),
         ("full installer removes stale runtime", "cleanRuntimeBeforeInstall(dest)" in backend),
         ("exact Setup has side-effect-free self-test", 'hasArg("--self-test")' in selftest and "installerSelfTest()" in selftest),
-        ("CI executes produced Setup self-test", "Self-test exact produced Setup payload" in workflow and "--self-test" in workflow),
+        ("one reusable full verifier", "Build and preflight application runtime" in verifier and "Ruff critical correctness audit" in verifier),
+        ("verifier runs Go audit", "scripts\\audit_go.ps1" in verifier and "go vet" in go_audit),
+        ("verifier builds authoritative Setup", "scripts\\build_next_installer.ps1" in verifier),
+        ("verifier compiles patch pipeline", "scripts\\test_patch_builder.ps1" in verifier),
+        ("verifier self-tests exact Setup", "Self-test exact produced Setup payload" in verifier and "--self-test" in verifier),
+        ("verifier checks ProductVersion", "Assert-Version" in verifier and "ProductVersion mismatch" in verifier),
+        ("verifier records SHA256", "Get-FileHash -Algorithm SHA256" in verifier and "verification.json" in verifier),
+        ("verifier protects source tree", "git status --porcelain --untracked-files=no" in verifier),
+        ("CI calls reusable verifier", "scripts/verify_release.ps1" in workflow),
         ("RC is one private draft Release", "Create or update private RC draft" in workflow and '"rc-$version"' in workflow),
         ("Actions artifact quota is not used", "actions/upload-artifact" not in workflow),
         ("legacy Inno build is gone", "build_setup.bat" not in workflow and "innosetup" not in workflow.lower()),
@@ -263,9 +279,6 @@ def audit_archive_contract(audit: Audit) -> None:
 
 
 def audit_sensitive_literals(audit: Audit) -> None:
-    # Require the full PEM shape with a substantial base64 body. Test fixtures
-    # that deliberately use BEGIN/TEST/END markers must not be mistaken for a
-    # leaked credential.
     private_key_pattern = re.compile(
         r"-----BEGIN PRIVATE KEY-----\s+[A-Za-z0-9+/=\r\n]{80,}-----END PRIVATE KEY-----",
         re.MULTILINE,
