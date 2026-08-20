@@ -109,18 +109,23 @@ jobs:
         shell: pwsh
         run: ./scripts/test_patch_builder.ps1
 
-      - name: Upload authoritative Windows release candidate
+      # Actions artifact storage is only a convenience for manual RC downloads.
+      # Hitting the repository/account storage quota must not turn a fully
+      # verified build into a false code failure. Tags persist the authoritative
+      # Setup + private payload baseline in the private draft Release below.
+      - name: Upload authoritative Windows RC (best effort)
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: LinkVideo.Helper-release-${{ github.run_number }}-${{ github.sha }}
           path: |
             installer_next/output/LinkVideo.Helper_Setup.exe
             installer_next/output/Uninstall.exe
-            release_payload/LinkVideo.Helper_Payload_*.zip
-            release_payload/LinkVideo.Helper_Payload_*.json
           if-no-files-found: error
+          retention-days: 3
 
-      - name: Upload legacy Inno build for compatibility diagnostics
+      - name: Upload legacy Inno diagnostic (best effort)
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: LinkVideo.Helper-legacy-inno-${{ github.run_number }}-${{ github.sha }}
@@ -128,10 +133,12 @@ jobs:
             release_upload/LinkVideo_VPN_Helper_Setup.exe
             release_upload/version.json
           if-no-files-found: error
+          retention-days: 1
 
       # Only a version tag may create/update the private draft release. The same
       # exact Setup is later copied by publish-public-update.yml to the public
-      # WellJons/LinkVideo.Helper.Updates repository.
+      # WellJons/LinkVideo.Helper.Updates repository. Private payload metadata is
+      # kept here as the trustworthy baseline for future differential patches.
       - name: Create or update private draft Release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
@@ -140,13 +147,18 @@ jobs:
         run: |
           $tag = "${{ github.ref_name }}"
           $version = $tag.TrimStart('v')
-          $asset = "installer_next/output/LinkVideo.Helper_Setup.exe"
+          $setup = "installer_next/output/LinkVideo.Helper_Setup.exe"
+          $uninstall = "installer_next/output/Uninstall.exe"
+          $payloadZip = "release_payload/LinkVideo.Helper_Payload_${version}.zip"
+          $payloadJson = "release_payload/LinkVideo.Helper_Payload_${version}.json"
           $notes = "RELEASE_${version}_RU.txt"
-          if (-not (Test-Path $asset)) { throw "Authoritative Setup not found: $asset" }
-          if (-not (Test-Path $notes)) { throw "Release notes not found: $notes" }
+          foreach ($required in @($setup, $uninstall, $payloadZip, $payloadJson, $notes)) {
+            if (-not (Test-Path $required)) { throw "Required release file not found: $required" }
+          }
+          $assets = @($setup, $uninstall, $payloadZip, $payloadJson)
           gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $asset --repo $env:GITHUB_REPOSITORY --clobber
+            gh release upload $tag $assets --repo $env:GITHUB_REPOSITORY --clobber
           } else {
-            gh release create $tag $asset --repo $env:GITHUB_REPOSITORY --draft --title "LinkVideo.Helper $version" --notes-file $notes
+            gh release create $tag $assets --repo $env:GITHUB_REPOSITORY --draft --title "LinkVideo.Helper $version" --notes-file $notes
           }
