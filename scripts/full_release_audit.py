@@ -181,7 +181,9 @@ def audit_release_chain(audit: Audit) -> None:
         ("payload explicitly rejects FFmpeg", "installer payload correctly excludes ffmpeg.exe" in build),
         ("authoritative Setup filename", "LinkVideo.Helper_Setup.exe" in build and "LinkVideo.Helper_Setup_Next.exe" not in build),
         ("full installer removes stale runtime", "cleanRuntimeBeforeInstall(dest)" in backend),
-        ("draft release uses authoritative Setup", '$asset = "installer_next/output/LinkVideo.Helper_Setup.exe"' in workflow),
+        ("draft release uses authoritative Setup", '$setup = "installer_next/output/LinkVideo.Helper_Setup.exe"' in workflow),
+        ("draft release keeps private patch baseline", 'LinkVideo.Helper_Payload_${version}.zip' in workflow and 'LinkVideo.Helper_Payload_${version}.json' in workflow),
+        ("Actions artifacts are non-authoritative", "continue-on-error: true" in workflow),
         ("public publisher downloads Setup", "--pattern '*Setup.exe'" in publish),
         ("public manifest writes SHA", '"sha256": setup_sha' in publish),
     ]
