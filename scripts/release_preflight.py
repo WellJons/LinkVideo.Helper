@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -63,19 +64,30 @@ def _check_version_contract() -> None:
 
 
 def _compile_python() -> None:
-    ok_package = compileall.compile_dir(str(PACKAGE), quiet=1, force=True)
-    ok_scripts = compileall.compile_dir(str(SCRIPTS), quiet=1, force=True)
+    # SyntaxWarning caught a real invalid escape during the 3.0.11 audit. Treat
+    # such warnings as release failures so they cannot become background noise.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", SyntaxWarning)
+        try:
+            ok_package = compileall.compile_dir(str(PACKAGE), quiet=1, force=True)
+            ok_scripts = compileall.compile_dir(str(SCRIPTS), quiet=1, force=True)
+        except SyntaxWarning as exc:
+            raise SystemExit(f"Python SyntaxWarning preflight failed: {exc}") from exc
     if not (ok_package and ok_scripts):
         raise SystemExit("Python compile preflight failed")
 
 
 def _run_full_audit() -> None:
     print("\n=== full_release_audit.py ===", flush=True)
-    result = subprocess.run(
-        [sys.executable, str(SCRIPTS / "full_release_audit.py")],
-        cwd=str(ROOT),
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS / "full_release_audit.py")],
+            cwd=str(ROOT),
+            check=False,
+            timeout=90,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise SystemExit("Full source audit exceeded 90 seconds") from exc
     if result.returncode != 0:
         raise SystemExit(f"Full source audit failed (exit {result.returncode})")
 
@@ -92,12 +104,16 @@ def _run_regressions() -> None:
     print(f"Running {len(tests)} regression test files...")
     for path in tests:
         print(f"\n=== {path.name} ===", flush=True)
-        result = subprocess.run(
-            [sys.executable, str(path)],
-            cwd=str(ROOT),
-            env=env,
-            check=False,
-        )
+        try:
+            result = subprocess.run(
+                [sys.executable, str(path)],
+                cwd=str(ROOT),
+                env=env,
+                check=False,
+                timeout=180,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise SystemExit(f"Regression timed out after 180s: {path.name}") from exc
         if result.returncode != 0:
             raise SystemExit(f"Regression failed: {path.name} (exit {result.returncode})")
 
