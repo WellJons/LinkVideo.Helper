@@ -1,15 +1,10 @@
-name: Build LinkVideo.Helper
+name: Verify LinkVideo.Helper Release
 
 on:
   workflow_dispatch:
-  pull_request:
-    branches:
-      - main
   push:
     branches:
-      - main
-      - 'fix/**'
-      - 'feature/**'
+      - 'rc/**'
     tags:
       - 'v*'
 
@@ -17,24 +12,24 @@ permissions:
   contents: write
 
 concurrency:
-  group: linkvideo-helper-build-${{ github.ref }}
+  group: linkvideo-helper-release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build:
+  verify:
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
-      - name: Checkout
+      - name: Checkout exact release source
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: 'pip'
 
-      - name: Set up Go for installer and patcher
+      - name: Set up Go
         uses: actions/setup-go@v6
         with:
           go-version: '1.24.x'
@@ -42,83 +37,17 @@ jobs:
             installer_next/go.mod
             patcher/go.mod
 
-      - name: Install audit/build dependencies
+      # This is deliberately the same entry point that can be executed on any
+      # local Windows machine. CI does not have a second, divergent release path.
+      - name: Full release verification
         shell: pwsh
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pyinstaller ruff
-          python -m pip check
+        run: ./scripts/verify_release.ps1
 
-      - name: Complete Python release preflight
-        shell: pwsh
-        run: python scripts/release_preflight.py
-
-      - name: Audit Python undefined names and invalid constructs
-        shell: pwsh
-        run: ruff check linkvideo_vpn_helper scripts --select E9,F63,F7,F82
-
-      - name: Audit Go installer, patcher and updater sources
-        shell: pwsh
-        run: |
-          $goFiles = Get-ChildItem installer_next,patcher,silent_updater -Recurse -Filter *.go | ForEach-Object { $_.FullName }
-          $notFormatted = @(& gofmt -l $goFiles)
-          if ($notFormatted.Count -gt 0) {
-            Write-Warning "Historical Go files still need a formatting-only cleanup; this does not bypass go vet."
-            $notFormatted | ForEach-Object { Write-Host "gofmt diagnostic: $_" }
-          }
-
-          # Embedded payload files are generated later by the normal builders.
-          # Harmless fixtures let go vet compile every module before a release
-          # installer is produced.
-          python -c "import zipfile; zipfile.ZipFile(r'installer_next/payload.zip','w').close(); zipfile.ZipFile(r'patcher/patch_payload.zip','w').close()"
-          Set-Content -LiteralPath 'patcher/patch_manifest.json' -Value '{}' -Encoding utf8NoBOM
-          try {
-            Push-Location installer_next
-            try {
-              # WM_DRAWITEM lParam is the one intentional Windows ABI pointer
-              # conversion; its exact site is regression-tested separately.
-              go vet -unsafeptr=false ./...
-              if ($LASTEXITCODE -ne 0) { throw 'installer_next go vet failed' }
-            } finally { Pop-Location }
-            Push-Location patcher
-            try { go vet ./...; if ($LASTEXITCODE -ne 0) { throw 'patcher go vet failed' } } finally { Pop-Location }
-            Push-Location silent_updater
-            try { go vet ./...; if ($LASTEXITCODE -ne 0) { throw 'silent_updater go vet failed' } } finally { Pop-Location }
-          } finally {
-            Remove-Item -Force -ErrorAction SilentlyContinue 'installer_next/payload.zip'
-            Remove-Item -Force -ErrorAction SilentlyContinue 'patcher/patch_payload.zip'
-            Remove-Item -Force -ErrorAction SilentlyContinue 'patcher/patch_manifest.json'
-          }
-
-      - name: Build application runtime from scratch
-        shell: cmd
-        run: build_onedir.bat
-
-      - name: Build authoritative LinkVideo installer and uninstaller
-        shell: pwsh
-        run: ./scripts/build_next_installer.ps1
-
-      - name: Compile differential patch pipeline
-        shell: pwsh
-        run: ./scripts/test_patch_builder.ps1
-
-      - name: Self-test exact produced Setup payload
-        shell: pwsh
-        run: |
-          & '.\installer_next\output\LinkVideo.Helper_Setup.exe' --self-test
-          if ($LASTEXITCODE -ne 0) {
-            throw "Produced Setup self-test failed with exit code $LASTEXITCODE"
-          }
-          $setup = Get-Item '.\installer_next\output\LinkVideo.Helper_Setup.exe'
-          $hash = (Get-FileHash -Algorithm SHA256 $setup.FullName).Hash.ToLowerInvariant()
-          Write-Host "RC Setup verified: $([math]::Round($setup.Length/1MB,2)) MB | SHA256 $hash"
-
-      # Actions artifact storage is deliberately not used. A single private
-      # draft RC Release is overwritten on every successful push to the active
-      # release branch, so testing remains available without filling artifact
-      # quota or leaving dozens of old builds around.
+      # RC builds do not use Actions artifacts. One private draft RC is replaced
+      # in-place, so quota and historical build clutter are not part of the
+      # release chain.
       - name: Create or update private RC draft
-        if: github.event_name == 'push' && github.ref == 'refs/heads/feature/3.0.8-vpn-sheets-sync'
+        if: startsWith(github.ref, 'refs/heads/rc/')
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -126,10 +55,13 @@ jobs:
           $version = (python -c "from linkvideo_vpn_helper.version import APP_VERSION; print(APP_VERSION)").Trim()
           if ([string]::IsNullOrWhiteSpace($version)) { throw 'APP_VERSION not found' }
           $tag = "rc-$version"
-          $setup = 'installer_next/output/LinkVideo.Helper_Setup.exe'
-          if (-not (Test-Path $setup)) { throw "RC Setup not found: $setup" }
+          $setup = "release_candidate/LinkVideo.Helper_Setup_${version}_RC.exe"
+          $report = 'release_candidate/verification.json'
+          foreach ($required in @($setup, $report)) {
+            if (-not (Test-Path $required)) { throw "Verified RC output not found: $required" }
+          }
           $hash = (Get-FileHash -Algorithm SHA256 $setup).Hash.ToLowerInvariant()
-          $body = "Временная приватная RC-сборка LinkVideo.Helper $version.`n`nCommit: $env:GITHUB_SHA`nSHA-256: $hash`n`nФайл заменяется следующей успешной RC-сборкой."
+          $body = "Временная приватная RC-сборка LinkVideo.Helper $version.`n`nCommit: $env:GITHUB_SHA`nSHA-256: $hash`n`nСледующая успешная RC-проверка заменяет этот файл."
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -138,16 +70,14 @@ jobs:
 
           gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $setup --repo $env:GITHUB_REPOSITORY --clobber
+            gh release upload $tag $setup $report --repo $env:GITHUB_REPOSITORY --clobber
             gh release edit $tag --repo $env:GITHUB_REPOSITORY --draft --prerelease --title "LinkVideo.Helper $version RC" --notes $body
           } else {
-            gh release create $tag $setup --repo $env:GITHUB_REPOSITORY --draft --prerelease --target $env:GITHUB_SHA --title "LinkVideo.Helper $version RC" --notes $body
+            gh release create $tag $setup $report --repo $env:GITHUB_REPOSITORY --draft --prerelease --target $env:GITHUB_SHA --title "LinkVideo.Helper $version RC" --notes $body
           }
 
-      # Only a real version tag prepares the private final draft. The public
-      # update workflow later copies the exact verified Setup into
-      # WellJons/LinkVideo.Helper.Updates. Private payload metadata remains here
-      # as the baseline for future differential patches.
+      # A real version tag is the final private draft gate. Public publication is
+      # still a separate explicit action after manual RC acceptance.
       - name: Create or update private final draft Release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
@@ -160,11 +90,12 @@ jobs:
           $uninstall = 'installer_next/output/Uninstall.exe'
           $payloadZip = "release_payload/LinkVideo.Helper_Payload_${version}.zip"
           $payloadJson = "release_payload/LinkVideo.Helper_Payload_${version}.json"
+          $verification = 'release_candidate/verification.json'
           $notes = "RELEASE_${version}_RU.txt"
-          foreach ($required in @($setup, $uninstall, $payloadZip, $payloadJson, $notes)) {
+          foreach ($required in @($setup, $uninstall, $payloadZip, $payloadJson, $verification, $notes)) {
             if (-not (Test-Path $required)) { throw "Required release file not found: $required" }
           }
-          $assets = @($setup, $uninstall, $payloadZip, $payloadJson)
+          $assets = @($setup, $uninstall, $payloadZip, $payloadJson, $verification)
           gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag $assets --repo $env:GITHUB_REPOSITORY --clobber
@@ -172,8 +103,8 @@ jobs:
             gh release create $tag $assets --repo $env:GITHUB_REPOSITORY --draft --title "LinkVideo.Helper $version" --notes-file $notes
           }
 
-          # The RC is temporary by design. Once the final draft exists, remove
-          # the single RC release/tag so Releases also stays clean.
+          # Keep Releases clean: the single temporary RC release/tag is removed
+          # after the final draft was created successfully.
           $rcTag = "rc-$version"
           gh release view $rcTag --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -eq 0) {
