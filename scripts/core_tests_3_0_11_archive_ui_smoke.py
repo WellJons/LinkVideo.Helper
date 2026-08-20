@@ -16,7 +16,6 @@ from PySide6.QtWidgets import QApplication
 
 from linkvideo_vpn_helper.services.archive_service import ArchiveService
 from linkvideo_vpn_helper.services.archive_download_methods import install_archive_download_methods
-from linkvideo_vpn_helper.services.archive_download_process_guard import install_archive_download_process_guard
 from linkvideo_vpn_helper.ui.components_compat import install_components_compat
 
 
@@ -24,7 +23,6 @@ def main() -> None:
     app = QApplication.instance() or QApplication([])
     install_components_compat()
     install_archive_download_methods()
-    install_archive_download_process_guard()
 
     from linkvideo_vpn_helper.ui.pages.archive_download_page import ArchiveDownloadPage
 

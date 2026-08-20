@@ -89,6 +89,12 @@ func removeSilentUpdateTask() {
     _ = runHiddenTimeout(
         4*time.Second,
         "schtasks.exe",
+        "/End",
+        "/TN", silentUpdateTaskName,
+    )
+    _ = runHiddenTimeout(
+        4*time.Second,
+        "schtasks.exe",
         "/Delete",
         "/TN", silentUpdateTaskName,
         "/F",

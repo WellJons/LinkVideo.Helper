@@ -143,12 +143,18 @@ def install_nat_conflict_compat() -> None:
             if failures:
                 raise RuntimeError("RouterOS подтвердил создание, но найдены дубли NAT: " + "; ".join(failures))
             return created
-        except Exception:
+        except Exception as operation_error:
+            rollback_errors: list[str] = []
             for item in reversed(created or []):
                 try:
                     self._rollback_create(server, creds, item.profile_id, item.secret_id, list(item.nat_rule_ids or []))
-                except Exception:
-                    pass
+                except Exception as rollback_error:
+                    rollback_errors.append(f"{item.login}: {rollback_error}")
+            if rollback_errors:
+                raise RuntimeError(
+                    f"{operation_error}. Автоматический откат выполнен не полностью: "
+                    + "; ".join(rollback_errors)
+                ) from operation_error
             raise
 
     def safe_add_ports(self: VPNService, server, creds, login: str, count: int):
@@ -166,14 +172,20 @@ def install_nat_conflict_compat() -> None:
                 )
             refreshed.port_conflicts = conflicts
             return refreshed
-        except Exception:
+        except Exception as operation_error:
             # Internal rollback must work even for AdminChats, while the public
             # destructive UI action remains role-restricted.
+            rollback_errors: list[str] = []
             for port in reversed(new_ports):
                 try:
                     original_remove_port(self, server, creds, login, port)
-                except Exception:
-                    pass
+                except Exception as rollback_error:
+                    rollback_errors.append(f"порт {port}: {rollback_error}")
+            if rollback_errors:
+                raise RuntimeError(
+                    f"{operation_error}. Автоматический откат выполнен не полностью: "
+                    + "; ".join(rollback_errors)
+                ) from operation_error
             raise
 
     VPNService.inspect_port_conflicts = robust_inspect_port_conflicts

@@ -9,7 +9,7 @@ task = (ROOT / "installer_next/silent_update_task_windows.go").read_text(encodin
 updater = (ROOT / "silent_updater/main_windows.go").read_text(encoding="utf-8")
 patcher = (ROOT / "patcher/main_windows.go").read_text(encoding="utf-8")
 service_hardening = (ROOT / "linkvideo_vpn_helper/services/runtime_hardening.py").read_text(encoding="utf-8")
-archive_hardening = (ROOT / "linkvideo_vpn_helper/services/archive_process_hardening.py").read_text(encoding="utf-8")
+archive_methods = (ROOT / "linkvideo_vpn_helper/services/archive_download_methods.py").read_text(encoding="utf-8")
 app = (ROOT / "linkvideo_vpn_helper/app.py").read_text(encoding="utf-8")
 
 assert '"context"' in backend
@@ -48,9 +48,9 @@ assert "ThreadPoolExecutor(" not in service_hardening
 assert "from concurrent.futures" not in service_hardening
 assert "install_service_runtime_hardening()" in app
 
-assert '"-rw_timeout", "30000000"' in archive_hardening
-assert '"-nostdin"' in archive_hardening
-assert "http://" in archive_hardening and "https://" in archive_hardening
-assert "install_archive_process_hardening()" in app
+assert '"-rw_timeout", "30000000"' in archive_methods
+assert '"-nostdin"' in archive_methods
+assert 'startswith(("http://", "https://"))' in archive_methods
+assert "install_archive_process_hardening" not in app
 
 print("CORE TESTS 3.0.8 FULL RUNTIME FREEZE AUDIT OK")

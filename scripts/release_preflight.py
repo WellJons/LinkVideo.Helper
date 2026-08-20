@@ -74,6 +74,7 @@ def _check_repository_layout() -> None:
         "prepare_release.bat",
         "README_FULL_RELEASE.txt",
         "server_example",
+        "scripts/make_release_manifest.py",
     ):
         if (ROOT / obsolete).exists():
             raise SystemExit(f"Obsolete release path must not return: {obsolete}")
@@ -147,6 +148,21 @@ def _run_full_audit() -> None:
         raise SystemExit(f"Full source audit failed (exit {result.returncode})")
 
 
+def _run_self_check() -> None:
+    print("\n=== self_check.py ===", flush=True)
+    try:
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS / "self_check.py")],
+            cwd=str(ROOT),
+            check=False,
+            timeout=90,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise SystemExit("Runtime self-check exceeded 90 seconds") from exc
+    if result.returncode != 0:
+        raise SystemExit(f"Runtime self-check failed (exit {result.returncode})")
+
+
 def _run_regressions() -> None:
     env = os.environ.copy()
     existing = env.get("PYTHONPATH", "")
@@ -178,6 +194,7 @@ def main() -> None:
     _check_version_contract()
     _compile_python()
     _run_full_audit()
+    _run_self_check()
     _run_regressions()
     print(f"\nRELEASE PREFLIGHT OK — {APP_NAME} {APP_VERSION}")
 

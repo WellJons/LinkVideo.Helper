@@ -38,12 +38,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify_release.ps1
 4. запускает `go vet` для installer/patcher/updater;
 5. пересобирает PyInstaller runtime с нуля;
 6. собирает актуальные Setup/Uninstall и differential patch pipeline;
-7. запускает `--self-test` на **точно том Setup.exe**, который пойдёт в RC;
+7. запускает `--self-test` на **точно том Setup.exe**, который пойдёт в RC/final draft;
 8. проверяет Windows ProductVersion приложения, Setup и Uninstall;
 9. считает SHA-256;
 10. создаёт локальный `release_candidate/verification.json` и RC EXE.
 
-`--self-test` не устанавливает программу: он в temp-каталоге проверяет встроенный payload, очистку старого runtime, обязательные EXE и отсутствие встроенного FFmpeg.
+`--self-test` не устанавливает программу: он в temp-каталоге проверяет встроенный payload, staging/атомарную замену, восстановление после прерванного upgrade, обязательные EXE и отсутствие встроенного FFmpeg.
 
 ## CI и RC
 
@@ -51,11 +51,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify_release.ps1
 
 Actions artifacts для RC не используются. У версии существует один приватный draft Release `rc-<version>`; следующая успешно проверенная RC-сборка заменяет его содержимое вместо накопления старых сборок.
 
-После создания final draft временный RC Release/tag удаляется. Публичное обновление публикуется только после ручной проверки RC.
+После создания final draft временный RC Release/tag удаляется. Поскольку final tag повторно собирает EXE, перед **Publish Release** обязательно вручную проверяется именно точный `LinkVideo.Helper_Setup.exe` из final draft. Только после этого он попадает в публичный GitHub-канал.
 
 ## Канал обновлений
 
 Production manifest находится в отдельном `WellJons/LinkVideo.Helper.Updates`. Helper проверяет SHA-256 и Windows ProductVersion перед запуском скачанного обновления. Google Drive остаётся только переходным fallback для старых установок.
+
+Публичный workflow дополнительно сверяет Setup с `verification.json` и commit тега. Он не разрешает понизить версию manifest или заменить уже опубликованную версию другим EXE.
+
+Релиз 3.0.11 распространяется только полным Setup (`patches: {}`). Это сознательный выбор надёжности: атомарный полный установщик безопаснее текущего дифференциального patcher при внезапном прерывании записи файлов.
 
 FFmpeg в Setup не входит: при первом FFmpeg-скачивании архива он загружается в LocalAppData-кэш пользователя и затем переиспользуется.
 

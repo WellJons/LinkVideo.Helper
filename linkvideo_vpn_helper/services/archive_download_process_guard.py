@@ -4,18 +4,17 @@ from __future__ import annotations
 
 Curl and FFmpeg are child processes. Cancellation, timeout or an unexpected
 Python exception must never leave either process running after the Helper
-operation has stopped. Network FFmpeg inputs additionally receive the central
-30-second AVIO stall timeout from ``archive_process_hardening``.
+operation has stopped. Network FFmpeg commands carry their own 30-second AVIO
+stall timeout directly, without a global ``subprocess.Popen`` monkey patch.
 """
 
 import os
+import queue
 import subprocess
+import threading
 import time
 
 from linkvideo_vpn_helper.services.errors import OperationCancelled
-
-
-_INSTALLED = False
 
 
 def _stop_process(proc) -> None:
@@ -88,12 +87,44 @@ def _run_ffmpeg_progress(
         errors="replace",
         creationflags=flags,
     )
+    output_queue: queue.Queue[str | None] = queue.Queue()
+
+    def _read_stdout() -> None:
+        try:
+            if proc.stdout is not None:
+                while True:
+                    line = proc.stdout.readline()
+                    if not line:
+                        break
+                    output_queue.put(line)
+        finally:
+            output_queue.put(None)
+
+    reader = threading.Thread(target=_read_stdout, name="ffmpeg-progress-reader", daemon=True)
+    reader.start()
+
+    try:
+        duration = max(0.0, float(item_duration))
+    except (TypeError, ValueError, OverflowError):
+        duration = 0.0
+    timeout_seconds = max(600.0, min(86_400.0, duration * 5.0 + 600.0))
+    deadline = time.monotonic() + timeout_seconds
     diagnostic: list[str] = []
+    reader_done = False
     try:
         while True:
             if cancel_event is not None and cancel_event.is_set():
                 raise OperationCancelled("Скачивание отменено пользователем")
-            line = proc.stdout.readline() if proc.stdout else ""
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(cmd, timeout_seconds)
+            try:
+                line = output_queue.get(timeout=min(0.1, remaining))
+            except queue.Empty:
+                line = ""
+            if line is None:
+                reader_done = True
+                line = ""
             if line:
                 value = line.strip()
                 if value.startswith("out_time_ms="):
@@ -115,21 +146,8 @@ def _run_ffmpeg_progress(
                         pass
                 elif value and "=" not in value:
                     diagnostic.append(value)
-            if proc.poll() is not None:
+            if proc.poll() is not None and reader_done and output_queue.empty():
                 break
-            if not line:
-                time.sleep(0.03)
-        return int(proc.wait()), "\n".join(diagnostic)
+        return int(proc.wait(timeout=2)), "\n".join(diagnostic)
     finally:
         _stop_process(proc)
-
-
-def install_archive_download_process_guard() -> None:
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    from linkvideo_vpn_helper.services import archive_download_methods
-
-    archive_download_methods._run_process_cancellable = _run_process_cancellable
-    archive_download_methods._run_ffmpeg_progress = _run_ffmpeg_progress
-    _INSTALLED = True

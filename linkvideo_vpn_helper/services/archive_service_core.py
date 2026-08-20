@@ -10,7 +10,6 @@ import time
 import urllib.error
 import urllib.request
 import urllib.parse
-import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -1407,332 +1406,36 @@ class ArchiveService:
         except Exception:
             return False
 
-    @staticmethod
-    def _run_cancellable(cmd: list[str], timeout: float, cancel_event=None) -> tuple[int, str]:
-        """Run FFmpeg while keeping Esc/cancel responsive during fallback/concat."""
-        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=flags,
+    def ensure_ffmpeg(self, progress: Callable[[str, str], None] | None = None, cancel_event=None) -> str:
+        """Return the validated LocalAppData/system FFmpeg executable."""
+        from linkvideo_vpn_helper.services.archive_download_methods import _download_ffmpeg
+
+        return _download_ffmpeg(self, progress, cancel_event)
+
+    def download(
+        self,
+        discovery: ArchiveDiscovery,
+        output: Path,
+        progress: Callable[[dict], None] | None = None,
+        cancel_event=None,
+    ) -> ArchiveDownloadResult:
+        """Download through the explicitly selected, cancellable transport."""
+        from linkvideo_vpn_helper.services.archive_download_methods import (
+            DEFAULT_ARCHIVE_DOWNLOAD_METHOD,
+            _download_curl,
+            _download_no_audio,
+            _download_with_ffmpeg_audio,
         )
-        deadline = time.monotonic() + max(1.0, float(timeout))
-        while True:
-            if cancel_event is not None and cancel_event.is_set():
-                try:
-                    proc.terminate()
-                    proc.wait(timeout=2)
-                except Exception:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
-                raise OperationCancelled("Скачивание отменено пользователем")
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                try:
-                    proc.terminate()
-                    proc.wait(timeout=2)
-                except Exception:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
-                raise subprocess.TimeoutExpired(cmd, timeout)
-            try:
-                stdout, _ = proc.communicate(timeout=min(0.25, remaining))
-                return int(proc.returncode or 0), stdout or ""
-            except subprocess.TimeoutExpired:
-                continue
 
-    def ensure_ffmpeg(self, progress: Callable[[str,str],None]|None=None, cancel_event=None) -> str:
-        if cancel_event is not None and cancel_event.is_set():
-            raise OperationCancelled("Операция отменена пользователем")
-
-        local_cached = self.tools_dir() / "ffmpeg.exe"
-        for path in self._ffmpeg_candidates():
-            if not (path.exists() and path.is_file()):
-                continue
-            if self._ffmpeg_usable(path):
-                return str(path)
-            # A corrupt cached copy in LocalAppData would otherwise be selected on
-            # every attempt forever. Bundled/system files are never deleted here.
-            try:
-                if path.resolve() == local_cached.resolve():
-                    path.unlink(missing_ok=True)
-            except Exception:
-                pass
-
-        tools = self.tools_dir()
-        try:
-            tools.mkdir(parents=True, exist_ok=True)
-        except PermissionError as exc:
-            raise RuntimeError(
-                "Не удалось подготовить папку FFmpeg. "
-                f"Нет доступа к {tools}."
-            ) from exc
-
-        target = tools / "ffmpeg.exe"
-        url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-        if progress:
-            progress("Подготавливаю FFmpeg", "Скачиваю компонент для сохранения архива…")
-
-        with tempfile.TemporaryDirectory(prefix="lv_ffmpeg_") as td:
-            if cancel_event is not None and cancel_event.is_set():
-                raise OperationCancelled("Операция отменена пользователем")
-            zpath = Path(td) / "ffmpeg.zip"
-            req = urllib.request.Request(url, headers={"User-Agent": "LinkVideo.Helper/2.0"})
-            with urllib.request.urlopen(req, timeout=300) as response, zpath.open("wb") as handle:
-                while True:
-                    if cancel_event is not None and cancel_event.is_set():
-                        raise OperationCancelled("Операция отменена пользователем")
-                    chunk = response.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    handle.write(chunk)
-
-            with zipfile.ZipFile(zpath) as zf:
-                member = next(
-                    (name for name in zf.namelist()
-                     if name.replace("\\", "/").lower().endswith("/bin/ffmpeg.exe")),
-                    None,
-                )
-                if not member:
-                    raise RuntimeError("В загруженном архиве не найден ffmpeg.exe")
-                temp_target = tools / "ffmpeg.exe.download"
-                try:
-                    with zf.open(member) as src, temp_target.open("wb") as dst:
-                        shutil.copyfileobj(src, dst)
-                    temp_target.replace(target)
-                finally:
-                    try:
-                        temp_target.unlink(missing_ok=True)
-                    except Exception:
-                        pass
-
-        if not target.exists():
-            raise RuntimeError("FFmpeg был загружен, но итоговый файл не найден")
-        if not self._ffmpeg_usable(target):
-            try:
-                target.unlink(missing_ok=True)
-            except Exception:
-                pass
-            raise RuntimeError("Загруженный FFmpeg повреждён или не запускается")
-        return str(target)
-
-    def _download_direct_hls(self, ffmpeg: str, discovery: ArchiveDiscovery, output: Path, progress=None, cancel_event=None) -> ArchiveDownloadResult:
-        url = str(discovery.hls_fallback_url or "").strip()
-        if not url:
-            raise RuntimeError("Нет HLS-ссылки для скачивания")
-        total = max(1.0, float(discovery.hls_fallback_duration or discovery.requested_duration or 1.0))
-        header_value = "Origin: https://test-desktop-player-b2o.elct.ru\r\nReferer: https://test-desktop-player-b2o.elct.ru/\r\nUser-Agent: LinkVideo.Helper/2.1\r\n"
-
-        def run(args: list[str]) -> tuple[int, str]:
-            proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
-            diagnostic: list[str] = []
-            while True:
-                if cancel_event is not None and cancel_event.is_set():
-                    try:
-                        proc.terminate(); proc.wait(timeout=2)
-                    except Exception:
-                        try: proc.kill()
-                        except Exception: pass
-                    raise OperationCancelled("Скачивание отменено пользователем")
-                line = proc.stdout.readline() if proc.stdout else ""
-                if line:
-                    value = line.strip()
-                    if value.startswith("out_time_ms="):
-                        try:
-                            done = min(total, float(value.split("=", 1)[1]) / 1_000_000.0)
-                            if progress:
-                                progress({"type":"progress","value":int(min(99, done/total*100)),"done":done,"total":total})
-                        except Exception:
-                            pass
-                    elif value and "=" not in value:
-                        diagnostic.append(value)
-                if proc.poll() is not None:
-                    break
-                if not line:
-                    time.sleep(0.03)
-            return proc.wait(), "\n".join(diagnostic)
-
-        common = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-progress", "pipe:1", "-headers", header_value, "-i", url]
-        code, text = run(common + ["-c", "copy", str(output)])
-        if code != 0 or not output.exists() or output.stat().st_size <= 0:
-            try:
-                output.unlink(missing_ok=True)
-            except Exception:
-                pass
-            code2, text2 = run(common + ["-c:v", "copy", "-an", str(output)])
-            if code2 != 0 or not output.exists() or output.stat().st_size <= 0:
-                reason = (text2 or text or "FFmpeg не получил HLS-архив").strip().splitlines()
-                raise RuntimeError(reason[-1] if reason else "FFmpeg не получил HLS-архив")
-        if progress:
-            progress({"type":"progress","value":100,"done":total,"total":total})
-        return ArchiveDownloadResult(output, [], [], [], direct_download_duration=total)
-
-    def download(self, discovery: ArchiveDiscovery, output: Path, progress: Callable[[dict],None]|None=None, cancel_event=None) -> ArchiveDownloadResult:
-        """Скачивает максимум доступных участков.
-
-        Известные DVR-пропуски из ``discovery.gaps`` не считаются ошибкой. Если
-        отдельный подтверждённый участок временно не скачался, Helper продолжает
-        остальные части и возвращает частичный результат с точной причиной.
-        """
-        if cancel_event is not None and cancel_event.is_set():
-            raise OperationCancelled("Операция отменена пользователем")
-        if not discovery.has_downloadable_archive:
-            raise RuntimeError("Нет доступного архива для скачивания")
-        output = Path(output)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        ffmpeg = self.ensure_ffmpeg(lambda a, b: progress and progress({"type": "stage", "title": a, "detail": b}), cancel_event)
-        if discovery.hls_fallback_url and (not discovery.slices or discovery.hls_fallback_method.startswith("player playlist")):
-            if progress:
-                hosts = ", ".join(discovery.hls_fallback_hosts[:3]) if discovery.hls_fallback_hosts else discovery.hls_fallback_host
-                progress({"type":"stage","title":"Скачиваю архив","detail":f"Плейлист плеера · {hosts}"})
-            return self._download_direct_hls(ffmpeg, discovery, output, progress, cancel_event)
-        tmp = Path(tempfile.mkdtemp(prefix="lv_archive_"))
-        parts: list[Path] = []
-        downloaded: list[ArchiveSlice] = []
-        failed: list[ArchiveSlice] = []
-        errors: list[str] = []
-        total = max(1.0, discovery.covered_duration)
-        completed = 0.0
-
-        def run_part(sl: ArchiveSlice, target: Path, idx: int) -> tuple[bool, str]:
-            url = self.playlist_url(sl)
-            cmd = [
-                ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
-                "-progress", "pipe:1", "-i", url, "-c", "copy", str(target),
-            ]
-            proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                encoding="utf-8", errors="replace",
-            )
-            local = 0.0
-            diagnostic: list[str] = []
-            while True:
-                if cancel_event is not None and cancel_event.is_set():
-                    try:
-                        proc.terminate()
-                        proc.wait(timeout=2)
-                    except Exception:
-                        try:
-                            proc.kill()
-                        except Exception:
-                            pass
-                    raise OperationCancelled("Скачивание отменено пользователем")
-                line = proc.stdout.readline() if proc.stdout else ""
-                if line:
-                    line = line.strip()
-                    if line.startswith("out_time_ms="):
-                        try:
-                            local = min(sl.duration, float(line.split("=", 1)[1]) / 1_000_000.0)
-                        except Exception:
-                            pass
-                        pct = int(min(99, (completed + local) / total * 100))
-                        if progress:
-                            progress({"type": "progress", "value": pct, "done": completed + local, "total": total})
-                    elif line and "=" not in line:
-                        diagnostic.append(line)
-                if proc.poll() is not None:
-                    break
-                if not line:
-                    time.sleep(0.03)
-            code = proc.wait()
-            if code == 0 and target.exists() and target.stat().st_size > 0:
-                return True, ""
-
-            if cancel_event is not None and cancel_event.is_set():
-                raise OperationCancelled("Скачивание отменено пользователем")
-
-            # У части камер аудио повреждено или имеет формат, который нельзя
-            # корректно remux-нуть. Повторяем участок без аудио и сохраняем stderr.
-            try:
-                fallback_code, fallback_output = self._run_cancellable(
-                    [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-i", url, "-c:v", "copy", "-an", str(target)],
-                    max(90, int(sl.duration * 2 + 60)),
-                    cancel_event,
-                )
-                if fallback_code == 0 and target.exists() and target.stat().st_size > 0:
-                    return True, ""
-                if fallback_output:
-                    diagnostic.extend(x.strip() for x in fallback_output.splitlines() if x.strip())
-            except subprocess.TimeoutExpired:
-                diagnostic.append("FFmpeg не завершил скачивание участка за допустимое время")
-            except OperationCancelled:
-                raise
-            except Exception as exc:
-                diagnostic.append(str(exc))
-
-            reason = diagnostic[-1] if diagnostic else "FFmpeg не получил данные с DVR-сервера"
-            return False, reason
-
-        try:
-            for idx, sl in enumerate(discovery.slices, 1):
-                if cancel_event is not None and cancel_event.is_set():
-                    raise OperationCancelled("Скачивание отменено пользователем")
-                part = tmp / f"part_{idx:03d}.mp4"
-                if progress:
-                    progress({
-                        "type": "stage", "title": "Скачиваю архив",
-                        "detail": f"Участок {idx}/{len(discovery.slices)} · {sl.host}",
-                    })
-                ok, reason = run_part(sl, part, idx)
-                if ok:
-                    parts.append(part)
-                    downloaded.append(sl)
-                else:
-                    failed.append(sl)
-                    errors.append(f"{sl.host}: {reason}")
-                    try:
-                        part.unlink(missing_ok=True)
-                    except Exception:
-                        pass
-                completed += sl.duration
-                if progress:
-                    progress({
-                        "type": "progress", "value": int(min(99, completed / total * 100)),
-                        "done": completed, "total": total,
-                    })
-
-            if not parts:
-                detail = errors[0] if errors else "Ни один подтверждённый участок не удалось скачать"
-                raise RuntimeError(detail)
-
-            if cancel_event is not None and cancel_event.is_set():
-                raise OperationCancelled("Скачивание отменено пользователем")
-
-            if len(parts) == 1:
-                shutil.copyfile(parts[0], output)
-            else:
-                list_file = tmp / "concat.txt"
-                list_file.write_text(
-                    "\n".join("file '" + str(part).replace("\\", "/").replace("'", "'\\''") + "'" for part in parts),
-                    encoding="utf-8",
-                )
-                if progress:
-                    progress({"type": "stage", "title": "Объединяю участки", "detail": "Склеиваю скачанные части в один MP4…"})
-                try:
-                    merged_code, merged_output = self._run_cancellable(
-                        [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(list_file), "-c", "copy", str(output)],
-                        max(120, int(sum(x.duration for x in downloaded) + 90)),
-                        cancel_event,
-                    )
-                except subprocess.TimeoutExpired as exc:
-                    raise RuntimeError("Участки скачаны, но FFmpeg не завершил объединение за допустимое время") from exc
-                if merged_code != 0 or not output.exists() or output.stat().st_size <= 0:
-                    reason = (merged_output or "").strip().splitlines()[-1:]
-                    raise RuntimeError("Участки скачаны, но объединить их в один файл не удалось" + ((": " + reason[0]) if reason else ""))
-
-            if progress:
-                progress({"type": "progress", "value": 100, "done": total, "total": total})
-            return ArchiveDownloadResult(output, downloaded, failed, errors)
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+        method = str(
+            getattr(self, "_lv_archive_download_method", DEFAULT_ARCHIVE_DOWNLOAD_METHOD)
+            or DEFAULT_ARCHIVE_DOWNLOAD_METHOD
+        )
+        if method == "curl":
+            return _download_curl(self, discovery, output, progress, cancel_event)
+        if method == "ffmpeg_no_audio":
+            return _download_no_audio(self, discovery, output, progress, cancel_event)
+        return _download_with_ffmpeg_audio(self, discovery, output, progress, cancel_event)
 
     @staticmethod
     def format_local(ts: float, offset: int) -> str:

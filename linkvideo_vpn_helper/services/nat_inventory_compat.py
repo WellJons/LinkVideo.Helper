@@ -341,15 +341,21 @@ def install_nat_inventory_compat() -> None:
             if failures:
                 raise RuntimeError("Проверка созданных учёток не пройдена: " + "; ".join(failures))
             return verified
-        except Exception:
+        except Exception as operation_error:
             # Do not leave half-verified accounts behind.  This uses the creation
             # ledger returned by the successful add operations and does not depend
             # on role-gated delete_client().
+            rollback_errors: list[str] = []
             for item in reversed(created):
                 try:
                     self._rollback_create(server, creds, item.profile_id, item.secret_id, list(item.nat_rule_ids or []))
-                except Exception:
-                    pass
+                except Exception as rollback_error:
+                    rollback_errors.append(f"{item.login}: {rollback_error}")
+            if rollback_errors:
+                raise RuntimeError(
+                    f"{operation_error}. Автоматический откат выполнен не полностью: "
+                    + "; ".join(rollback_errors)
+                ) from operation_error
             raise
 
     VPNService._api_print_exact = staticmethod(robust_api_print_exact)

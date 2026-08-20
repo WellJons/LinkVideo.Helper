@@ -172,45 +172,140 @@ func runCleanup(name string, args ...string) {
 }
 
 func stopHelperProcesses() {
-    for _, image := range []string{appExeName, "LinkVideo VPN Helper.exe", "updater.exe", silentUpdaterExeName} {
+    for _, image := range []string{
+        appExeName,
+        "LinkVideo VPN Helper.exe",
+        "updater.exe",
+        silentUpdaterExeName,
+        "LinkVideo.Helper.Updater.Worker.exe",
+        "official-patch.exe",
+        "LinkVideo.Helper_Patch_Update.exe",
+    } {
         runCleanup("taskkill.exe", "/IM", image, "/T", "/F")
     }
     time.Sleep(450 * time.Millisecond)
 }
 
-// A full installer is an authoritative runtime snapshot, not an overlay.  Old
-// files that disappeared from the new payload must not survive an upgrade: a
-// stale Python module, DLL or the temporary 3.0.10 bundled FFmpeg can otherwise
-// silently override the new release.  User data and the on-demand FFmpeg cache
-// live under LocalAppData and are intentionally not touched here.
-func cleanRuntimeBeforeInstall(dest string) error {
-    for _, name := range []string{"_internal", "tools", "linkvideo_vpn_helper", "scripts"} {
-        target := filepath.Join(dest, name)
-        if err := os.RemoveAll(target); err != nil {
-            return fmt.Errorf("не удалось удалить старый каталог %s: %w", name, err)
+// A full installer is an authoritative runtime snapshot, not an overlay.  It
+// is first extracted into a sibling staging directory and verified there.  The
+// old Program Files directory remains untouched until the complete new runtime
+// is ready, so a corrupt payload, full disk or antivirus failure cannot brick
+// the installed version.  User data and the on-demand FFmpeg cache live under
+// LocalAppData and are intentionally outside this transaction.
+func verifyRuntimeSnapshot(dest string) error {
+    required := map[string]int64{
+        appExeName:                     100_000,
+        "LinkVideo.Helper.Updater.exe": 200_000,
+        "Uninstall.exe":               500_000,
+    }
+    for name, minSize := range required {
+        info, err := os.Stat(filepath.Join(dest, name))
+        if err != nil {
+            return fmt.Errorf("в runtime не найден %s: %w", name, err)
+        }
+        if !info.Mode().IsRegular() || info.Size() < minSize {
+            return fmt.Errorf("файл runtime %s повреждён (%d байт)", name, info.Size())
         }
     }
+    return nil
+}
 
-    for _, name := range []string{
-        appExeName,
-        "LinkVideo.Helper.Updater.exe",
-        "LinkVideo VPN Helper.exe",
-        "updater.exe",
-        "Uninstall.exe",
-    } {
-        target := filepath.Join(dest, name)
-        if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
-            return fmt.Errorf("не удалось удалить старый файл %s: %w", name, err)
+func previousRuntimeUsable(dest string) bool {
+    for _, name := range []string{appExeName, "LinkVideo VPN Helper.exe"} {
+        info, err := os.Stat(filepath.Join(dest, name))
+        if err == nil && info.Mode().IsRegular() && info.Size() > 100_000 {
+            return true
         }
     }
+    return false
+}
 
-    for _, pattern := range []string{"*.py", "*.pyc", "*.new"} {
-        matches, _ := filepath.Glob(filepath.Join(dest, pattern))
-        for _, target := range matches {
-            if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
-                return fmt.Errorf("не удалось удалить старый файл %s: %w", filepath.Base(target), err)
+func recoverInterruptedRuntimeUpgrade(dest string) error {
+    backup := dest + ".rollback"
+    if _, err := os.Stat(backup); errors.Is(err, os.ErrNotExist) {
+        return nil
+    } else if err != nil {
+        return fmt.Errorf("не удалось проверить резервную копию runtime: %w", err)
+    }
+    if verifyRuntimeSnapshot(dest) == nil {
+        if err := os.RemoveAll(backup); err != nil {
+            return fmt.Errorf("не удалось удалить резервную копию завершённого обновления: %w", err)
+        }
+        return nil
+    }
+    if !previousRuntimeUsable(backup) {
+        return errors.New("резервная копия runtime повреждена; автоматическое удаление остановлено")
+    }
+    if err := os.RemoveAll(dest); err != nil {
+        return fmt.Errorf("не удалось удалить незавершённый runtime: %w", err)
+    }
+    if err := os.Rename(backup, dest); err != nil {
+        return fmt.Errorf("не удалось восстановить предыдущую версию: %w", err)
+    }
+    return nil
+}
+
+func stageRuntimeSnapshot(dest string, progress progressFunc) (string, error) {
+    parent := filepath.Dir(dest)
+    if err := os.MkdirAll(parent, 0o755); err != nil {
+        return "", fmt.Errorf("не удалось подготовить папку установки: %w", err)
+    }
+    staging := fmt.Sprintf("%s.staging-%d-%d", dest, os.Getpid(), time.Now().UnixNano())
+    if err := os.Mkdir(staging, 0o755); err != nil {
+        return "", fmt.Errorf("не удалось создать временный runtime: %w", err)
+    }
+    if err := extractPayload(staging, progress); err != nil {
+        _ = os.RemoveAll(staging)
+        return "", err
+    }
+    if err := verifyRuntimeSnapshot(staging); err != nil {
+        _ = os.RemoveAll(staging)
+        return "", err
+    }
+    return staging, nil
+}
+
+func activateStagedRuntime(dest, staging string) (string, error) {
+    backup := dest + ".rollback"
+    if _, err := os.Stat(backup); err == nil {
+        return "", errors.New("обнаружена необработанная резервная копия runtime")
+    } else if !errors.Is(err, os.ErrNotExist) {
+        return "", fmt.Errorf("не удалось проверить путь резервной копии: %w", err)
+    }
+
+    hadPrevious := false
+    if _, err := os.Stat(dest); err == nil {
+        if err := os.Rename(dest, backup); err != nil {
+            return "", fmt.Errorf("не удалось сохранить предыдущую версию: %w", err)
+        }
+        hadPrevious = true
+    } else if !errors.Is(err, os.ErrNotExist) {
+        return "", fmt.Errorf("не удалось проверить текущую версию: %w", err)
+    }
+
+    if err := os.Rename(staging, dest); err != nil {
+        if hadPrevious {
+            if restoreErr := os.Rename(backup, dest); restoreErr != nil {
+                return "", fmt.Errorf("не удалось активировать новую версию (%v) и восстановить старую (%v)", err, restoreErr)
             }
         }
+        return "", fmt.Errorf("не удалось активировать новую версию: %w", err)
+    }
+    if hadPrevious {
+        return backup, nil
+    }
+    return "", nil
+}
+
+func rollbackActivatedRuntime(dest, backup string) error {
+    if err := os.RemoveAll(dest); err != nil {
+        return fmt.Errorf("не удалось удалить повреждённый новый runtime: %w", err)
+    }
+    if backup == "" {
+        return nil
+    }
+    if err := os.Rename(backup, dest); err != nil {
+        return fmt.Errorf("не удалось восстановить runtime из резервной копии: %w", err)
     }
     return nil
 }
@@ -366,20 +461,37 @@ func installProduct(opts installOptions, progress progressFunc) (string, error) 
     dest := defaultInstallDir()
     appPath := filepath.Join(dest, appExeName)
     progress(5, "Подготовка обновления…")
+    // Prevent an already registered background patch task from racing the full
+    // installer for the same Program Files directory. Full Setup supersedes
+    // any staged differential patch and registers a fresh task after success.
+    removeSilentUpdateTask()
     stopHelperProcesses()
-    if err := os.MkdirAll(dest, 0o755); err != nil {
-        return "", fmt.Errorf("не удалось создать папку установки: %w", err)
+    if err := recoverInterruptedRuntimeUpgrade(dest); err != nil {
+        return "", fmt.Errorf("не удалось восстановить прерванное обновление: %w", err)
     }
-    progress(12, "Удаление файлов предыдущей версии…")
-    if err := cleanRuntimeBeforeInstall(dest); err != nil {
+    progress(12, "Проверка и подготовка новой версии…")
+    staging, err := stageRuntimeSnapshot(dest, progress)
+    if err != nil {
+        return "", fmt.Errorf("не удалось подготовить новый runtime: %w", err)
+    }
+    defer os.RemoveAll(staging)
+
+    progress(74, "Атомарная замена версии…")
+    backup, err := activateStagedRuntime(dest, staging)
+    if err != nil {
         return "", err
     }
-    progress(14, "Обновление файлов программы…")
-    if err := extractPayload(dest, progress); err != nil {
-        return "", err
+    if err := verifyRuntimeSnapshot(dest); err != nil {
+        rollbackErr := rollbackActivatedRuntime(dest, backup)
+        if rollbackErr != nil {
+            return "", fmt.Errorf("новый runtime не прошёл проверку (%v); откат также не удался (%v)", err, rollbackErr)
+        }
+        return "", fmt.Errorf("новый runtime не прошёл проверку; предыдущая версия восстановлена: %w", err)
     }
-    if _, err := os.Stat(appPath); err != nil {
-        return "", fmt.Errorf("после распаковки не найден %s", appExeName)
+    if backup != "" {
+        // Runtime activation has already succeeded.  A locked old backup is
+        // harmless and will be removed by recovery on the next installer run.
+        _ = os.RemoveAll(backup)
     }
     progress(76, "Перенос регистрации предыдущей версии…")
     removeLegacyInstallArtifacts(dest)

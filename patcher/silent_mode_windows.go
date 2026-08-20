@@ -105,32 +105,38 @@ func applyPatchSilently() error {
     }
 
     if err := applyChangedFiles(installDir, m); err != nil {
-        _ = rollback(installDir, backupRoot, existingBefore, affected)
-        return err
+        return rollbackAfterFailure(err, installDir, backupRoot, existingBefore, affected)
     }
     if err := applyDeletes(installDir, m.Deleted); err != nil {
-        _ = rollback(installDir, backupRoot, existingBefore, affected)
-        return err
+        return rollbackAfterFailure(err, installDir, backupRoot, existingBefore, affected)
     }
     if err := verifyChangedFiles(installDir, m.Changed); err != nil {
-        _ = rollback(installDir, backupRoot, existingBefore, affected)
-        return err
+        return rollbackAfterFailure(err, installDir, backupRoot, existingBefore, affected)
     }
-
-    _ = runHidden(
-        "reg.exe", "add",
-        `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\LinkVideo.Helper`,
-        "/v", "DisplayVersion", "/t", "REG_SZ", "/d", m.ToVersion, "/f",
-    )
 
     nextVersion, err := productVersion(appPath)
     if err != nil {
-        _ = rollback(installDir, backupRoot, existingBefore, affected)
-        return fmt.Errorf("после патча не удалось прочитать версию приложения: %w", err)
+        return rollbackAfterFailure(
+            fmt.Errorf("после патча не удалось прочитать версию приложения: %w", err),
+            installDir, backupRoot, existingBefore, affected,
+        )
     }
     if !sameVersion(nextVersion, m.ToVersion) {
-        _ = rollback(installDir, backupRoot, existingBefore, affected)
-        return fmt.Errorf("после патча приложение сообщает версию %s вместо %s; выполнен откат", nextVersion, m.ToVersion)
+        return rollbackAfterFailure(
+            fmt.Errorf("после патча приложение сообщает версию %s вместо %s", nextVersion, m.ToVersion),
+            installDir, backupRoot, existingBefore, affected,
+        )
+    }
+
+    if err := runHidden(
+        "reg.exe", "add",
+        `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\LinkVideo.Helper`,
+        "/v", "DisplayVersion", "/t", "REG_SZ", "/d", m.ToVersion, "/f",
+    ); err != nil {
+        return rollbackAfterFailure(
+            fmt.Errorf("не удалось обновить версию программы в реестре: %w", err),
+            installDir, backupRoot, existingBefore, affected,
+        )
     }
     return nil
 }

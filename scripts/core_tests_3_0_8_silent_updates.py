@@ -83,10 +83,30 @@ assert "CreationFlags: createNoWindowFlag" in backend
 assert "CreationFlags: createNoWindowFlag" in patcher_main
 assert "exec.CommandContext" in patcher_main
 
+# Never pass a filesystem path after PowerShell -Command. That exact launch
+# shape broke the 2.0.2 updater when a path with spaces/non-ASCII text was
+# parsed as PowerShell syntax instead of data.
+for name, source in (("patcher", patcher_main), ("silent updater", updater)):
+    assert "LINKVIDEO_PRODUCT_VERSION_FILE" in source, name
+    assert '"-Command", script, path' not in source, name
+    assert "cmd.Env = append(os.Environ(), productVersionPathEnvKey+\"=\"+path)" in source, name
+
 assert "applyPatchSilently()" in patcher
 assert "messageBox(" not in patcher
 assert "launchApplication(" not in patcher
 assert "explorer.exe" not in patcher
+assert 'parameters, _ = syscall.UTF16PtrFromString("--silent")' in patcher_main
+assert "LpParameters: parameters" in patcher_main
+assert "errElevationDelegated" in patcher_main
+assert "rollbackAfterFailure(" in patcher_main
+assert "rollbackAfterFailure(" in patcher
+
+# Never advertise the target DisplayVersion before ProductVersion validation.
+for name, source in (("interactive patcher", patcher_main), ("silent patcher", patcher)):
+    version_probe = source.index("nextVersion")
+    registry_write = source.index('"DisplayVersion"', version_probe)
+    assert registry_write > version_probe, name
+    assert 'if err := runHidden(' in source[version_probe:registry_write + 500], name
 assert "LinkVideo.Helper.Updater.exe" in build
 assert "silent_updater" in build
 

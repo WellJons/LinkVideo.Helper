@@ -23,9 +23,14 @@ def main() -> None:
             suspicious.append(f"{lineno}: {line.strip()}")
     assert not suspicious, "unexpected LPARAM pointer conversion(s): " + "; ".join(suspicious)
 
+    audit = (ROOT / "scripts" / "audit_go.ps1").read_text(encoding="utf-8")
+    assert "go vet -unsafeptr=false ./..." in audit
+    assert audit.count("go vet ./...") == 2, "patcher/silent_updater must retain full vet"
+
     workflow = (ROOT / ".github" / "workflows" / "windows-build.yml").read_text(encoding="utf-8")
-    assert "go vet -unsafeptr=false ./..." in workflow
-    assert "go vet ./..." in workflow, "patcher/silent_updater must retain full vet"
+    assert "scripts/verify_release.ps1" in workflow
+    verifier = (ROOT / "scripts" / "verify_release.ps1").read_text(encoding="utf-8")
+    assert "scripts\\audit_go.ps1" in verifier, "CI must reach the authoritative Go audit"
 
     print("CORE TESTS 3.0.11 WIN32 POINTER BRIDGE OK")
 

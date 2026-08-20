@@ -10,37 +10,50 @@ SELFTEST = ROOT / "installer_next" / "selftest_windows.go"
 def main() -> None:
     source = BACKEND.read_text(encoding="utf-8")
 
-    assert "func cleanRuntimeBeforeInstall(dest string) error" in source
     install_body = source.split("func installProduct", 1)[1]
-    assert "cleanRuntimeBeforeInstall(dest)" in install_body
-    assert install_body.index("cleanRuntimeBeforeInstall(dest)") < install_body.index("extractPayload(dest, progress)")
+    for marker in (
+        "recoverInterruptedRuntimeUpgrade(dest)",
+        "stageRuntimeSnapshot(dest, progress)",
+        "activateStagedRuntime(dest, staging)",
+        "verifyRuntimeSnapshot(dest)",
+        "rollbackActivatedRuntime(dest, backup)",
+    ):
+        assert marker in install_body, f"transactional installer path missing {marker}"
+    assert install_body.index("stageRuntimeSnapshot(dest, progress)") < install_body.index(
+        "activateStagedRuntime(dest, staging)"
+    )
+    assert install_body.index("removeSilentUpdateTask()") < install_body.index("stopHelperProcesses()")
+    for process_name in (
+        '"LinkVideo.Helper.Updater.Worker.exe"',
+        '"official-patch.exe"',
+        '"LinkVideo.Helper_Patch_Update.exe"',
+    ):
+        assert process_name in source, f"installer does not stop update race process {process_name}"
 
-    cleanup = source.split("func cleanRuntimeBeforeInstall", 1)[1].split("func extractPayload", 1)[0]
+    transaction = source.split("func verifyRuntimeSnapshot", 1)[1].split("func extractPayload", 1)[0]
     for required in (
-        '"_internal"',
-        '"tools"',
-        '"linkvideo_vpn_helper"',
-        '"scripts"',
-        'appExeName',
         '"LinkVideo.Helper.Updater.exe"',
         '"LinkVideo VPN Helper.exe"',
-        '"updater.exe"',
         '"Uninstall.exe"',
+        'dest + ".rollback"',
+        'os.Rename(dest, backup)',
+        'os.Rename(staging, dest)',
     ):
-        assert required in cleanup, f"installer cleanup missing {required}"
+        assert required in transaction, f"installer transaction missing {required}"
 
-    # Full installer cleanup must be scoped to Program Files. User state and the
-    # downloaded FFmpeg cache live in LocalAppData and must survive an upgrade.
-    assert "LOCALAPPDATA" not in cleanup
-    assert "APPDATA" not in cleanup
-    assert "removeUserData" not in cleanup
+    # The runtime transaction is strictly scoped to Program Files. User state
+    # and the downloaded FFmpeg cache live in LocalAppData and survive upgrade.
+    assert "LOCALAPPDATA" not in transaction
+    assert "APPDATA" not in transaction
+    assert "removeUserData" not in transaction
 
     selftest = SELFTEST.read_text(encoding="utf-8")
     for marker in (
         'hasArg("--self-test")',
         "installerSelfTest()",
-        "cleanRuntimeBeforeInstall(dest)",
-        "extractPayload(dest, nil)",
+        "stageRuntimeSnapshot(dest, nil)",
+        "activateStagedRuntime(dest, staging)",
+        "recoverInterruptedRuntimeUpgrade(dest)",
         '"LinkVideo.Helper.Updater.exe"',
         '"Uninstall.exe"',
         'strings.EqualFold(entry.Name(), "ffmpeg.exe")',

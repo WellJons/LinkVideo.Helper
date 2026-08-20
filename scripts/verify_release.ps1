@@ -133,7 +133,7 @@ $report = [ordered]@{
     ruff_critical = 'passed'
     go_vet = 'passed'
     patch_pipeline_compile = 'passed'
-    live_routeros_google_archive_smoke = 'manual RC phase required'
+    live_routeros_google_archive_smoke = 'manual smoke of exact final draft Setup required before Publish Release'
 }
 $reportPath = Join-Path $outDir 'verification.json'
 $report | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $reportPath -Encoding utf8
@@ -147,4 +147,4 @@ Write-Host "Version: $version"
 Write-Host "SHA256:  $setupHash"
 Write-Host "Size:    $([math]::Round($setupItem.Length / 1MB, 2)) MB"
 Write-Host "Report:  $reportPath"
-Write-Host 'Next gate: manual RC smoke against real RouterOS / Google Sheets / archive endpoints.'
+Write-Host 'Next gate: manual smoke of this RC, then the exact final draft Setup, against real RouterOS / Google Sheets / archive endpoints.'

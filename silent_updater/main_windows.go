@@ -24,6 +24,7 @@ import (
 const (
     manifestURL = "https://raw.githubusercontent.com/WellJons/LinkVideo.Helper.Updates/main/update-manifest.json"
     appExeName   = "LinkVideo.Helper.exe"
+    productVersionPathEnvKey = "LINKVIDEO_PRODUCT_VERSION_FILE"
 
     createNewProcessGroup = 0x00000200
     detachedProcess       = 0x00000008
@@ -363,14 +364,15 @@ func productVersion(path string) (string, error) {
     if _, err := os.Stat(path); err != nil {
         return "", fmt.Errorf("не найден установленный %s", filepath.Base(path))
     }
-    script := `$ErrorActionPreference='Stop';[Console]::Out.Write([string](Get-Item -LiteralPath $args[0]).VersionInfo.ProductVersion)`
+    script := `$ErrorActionPreference='Stop';$p=[Environment]::GetEnvironmentVariable('LINKVIDEO_PRODUCT_VERSION_FILE','Process');if([string]::IsNullOrWhiteSpace($p)){throw 'version file path is empty'};[Console]::Out.Write([string](Get-Item -LiteralPath $p).VersionInfo.ProductVersion)`
     ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
     defer cancel()
     cmd := exec.CommandContext(
         ctx,
         "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-        "-Command", script, path,
+        "-Command", script,
     )
+    cmd.Env = append(os.Environ(), productVersionPathEnvKey+"="+path)
     cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
     out, err := cmd.CombinedOutput()
     if errors.Is(ctx.Err(), context.DeadlineExceeded) {

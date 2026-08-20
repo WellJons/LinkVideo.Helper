@@ -24,7 +24,12 @@ import (
     "unsafe"
 )
 
-const createNoWindowFlag = 0x08000000
+const (
+    createNoWindowFlag       = 0x08000000
+    productVersionPathEnvKey = "LINKVIDEO_PRODUCT_VERSION_FILE"
+)
+
+var errElevationDelegated = errors.New("применение патча передано процессу с правами администратора")
 
 type changedFile struct {
     SHA256 string `json:"sha256"`
@@ -42,6 +47,9 @@ type manifest struct {
 
 func main() {
     if err := applyPatch(); err != nil {
+        if errors.Is(err, errElevationDelegated) {
+            return
+        }
         messageBox("Обновление LinkVideo.Helper", "Не удалось применить патч:\n\n"+err.Error(), 0x10)
         os.Exit(1)
     }
@@ -69,7 +77,10 @@ func applyPatch() error {
         return err
     }
     if !elevated {
-        return nil
+        // The elevated child owns the result UI. The non-elevated bootstrap
+        // must not report a false success before that child has applied the
+        // patch.
+        return errElevationDelegated
     }
 
     installDir := defaultInstallDir()
@@ -119,26 +130,40 @@ func applyPatch() error {
     }
 
     if err := applyChangedFiles(installDir, m); err != nil {
-        _ = rollback(installDir, backupRoot, existingBefore, affected)
-        return err
+        return rollbackAfterFailure(err, installDir, backupRoot, existingBefore, affected)
     }
     if err := applyDeletes(installDir, m.Deleted); err != nil {
-        _ = rollback(installDir, backupRoot, existingBefore, affected)
-        return err
+        return rollbackAfterFailure(err, installDir, backupRoot, existingBefore, affected)
     }
     if err := verifyChangedFiles(installDir, m.Changed); err != nil {
-        _ = rollback(installDir, backupRoot, existingBefore, affected)
-        return err
+        return rollbackAfterFailure(err, installDir, backupRoot, existingBefore, affected)
     }
 
-    _ = runHidden("reg.exe", "add", `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\LinkVideo.Helper`, "/v", "DisplayVersion", "/t", "REG_SZ", "/d", m.ToVersion, "/f")
-
     if nextVersion, err := productVersion(appPath); err != nil || !sameVersion(nextVersion, m.ToVersion) {
-        _ = rollback(installDir, backupRoot, existingBefore, affected)
         if err != nil {
-            return fmt.Errorf("после патча не удалось прочитать версию приложения: %w", err)
+            return rollbackAfterFailure(
+                fmt.Errorf("после патча не удалось прочитать версию приложения: %w", err),
+                installDir, backupRoot, existingBefore, affected,
+            )
         }
-        return fmt.Errorf("после патча приложение сообщает версию %s вместо %s; выполнен откат", nextVersion, m.ToVersion)
+        return rollbackAfterFailure(
+            fmt.Errorf("после патча приложение сообщает версию %s вместо %s", nextVersion, m.ToVersion),
+            installDir, backupRoot, existingBefore, affected,
+        )
+    }
+
+    // Update Add/Remove Programs only after the installed executable has
+    // proved its ProductVersion. Otherwise a failed patch could leave Windows
+    // claiming the new version while the files were rolled back to the old one.
+    if err := runHidden(
+        "reg.exe", "add",
+        `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\LinkVideo.Helper`,
+        "/v", "DisplayVersion", "/t", "REG_SZ", "/d", m.ToVersion, "/f",
+    ); err != nil {
+        return rollbackAfterFailure(
+            fmt.Errorf("не удалось обновить версию программы в реестре: %w", err),
+            installDir, backupRoot, existingBefore, affected,
+        )
     }
 
     cmd := exec.Command("explorer.exe", appPath)
@@ -337,6 +362,13 @@ func rollback(installDir, backupRoot string, existingBefore map[string]bool, aff
     return first
 }
 
+func rollbackAfterFailure(cause error, installDir, backupRoot string, existingBefore map[string]bool, affected map[string]struct{}) error {
+    if rollbackErr := rollback(installDir, backupRoot, existingBefore, affected); rollbackErr != nil {
+        return fmt.Errorf("%v; откат предыдущей версии также не удался: %w", cause, rollbackErr)
+    }
+    return fmt.Errorf("%w; предыдущая версия восстановлена", cause)
+}
+
 func copyFile(src, dst string) error {
     in, err := os.Open(src)
     if err != nil {
@@ -369,10 +401,11 @@ func productVersion(path string) (string, error) {
     if _, err := os.Stat(path); err != nil {
         return "", fmt.Errorf("не найден установленный %s", filepath.Base(path))
     }
-    script := `$ErrorActionPreference='Stop';[Console]::Out.Write([string](Get-Item -LiteralPath $args[0]).VersionInfo.ProductVersion)`
+    script := `$ErrorActionPreference='Stop';$p=[Environment]::GetEnvironmentVariable('LINKVIDEO_PRODUCT_VERSION_FILE','Process');if([string]::IsNullOrWhiteSpace($p)){throw 'version file path is empty'};[Console]::Out.Write([string](Get-Item -LiteralPath $p).VersionInfo.ProductVersion)`
     ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
     defer cancel()
-    cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script, path)
+    cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
+    cmd.Env = append(os.Environ(), productVersionPathEnvKey+"="+path)
     cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindowFlag}
     out, err := cmd.CombinedOutput()
     if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -430,10 +463,26 @@ func ensureElevated() (bool, error) {
     }
     verb, _ := syscall.UTF16PtrFromString("runas")
     file, _ := syscall.UTF16PtrFromString(self)
-    info := shellExecuteInfoW{CBSize: uint32(unsafe.Sizeof(shellExecuteInfoW{})), FMask: 0x40, LpVerb: verb, LpFile: file, NShow: 1}
+    var parameters *uint16
+    if patchHasArg("--silent") {
+        // Only forward the one supported flag; never relay arbitrary command
+        // line text into an elevated process.
+        parameters, _ = syscall.UTF16PtrFromString("--silent")
+    }
+    info := shellExecuteInfoW{
+        CBSize:       uint32(unsafe.Sizeof(shellExecuteInfoW{})),
+        FMask:        0x40,
+        LpVerb:       verb,
+        LpFile:       file,
+        LpParameters: parameters,
+        NShow:        1,
+    }
     ok, _, callErr := shell32.NewProc("ShellExecuteExW").Call(uintptr(unsafe.Pointer(&info)))
     if ok == 0 {
         return false, fmt.Errorf("повышение прав отменено: %v", callErr)
+    }
+    if info.HProcess != 0 {
+        syscall.NewLazyDLL("kernel32.dll").NewProc("CloseHandle").Call(info.HProcess)
     }
     return false, nil
 }

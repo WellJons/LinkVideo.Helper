@@ -99,8 +99,8 @@ def install_silent_patch_updates() -> None:
     MainWindow.closeEvent = patched_close
 
     # Install these wrappers after the silent-patch handler so the manual update
-    # UX can sit outside it and expose real patch download progress. The process
-    # guard is global and also protects FFmpeg/PowerShell subprocesses.
+    # UX can sit outside it and expose real patch download progress. Archive
+    # FFmpeg/Curl children use their own explicit cancellable process guard.
     from linkvideo_vpn_helper.ui.update_ux_integration import install_update_ux
     from linkvideo_vpn_helper.ui.background_ux_integration import install_background_ux
 

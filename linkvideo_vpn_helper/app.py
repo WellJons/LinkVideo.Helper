@@ -133,12 +133,8 @@ def main() -> int:
     install_routeros_search_compat()
     from linkvideo_vpn_helper.services.runtime_hardening import install_service_runtime_hardening
     install_service_runtime_hardening()
-    from linkvideo_vpn_helper.services.archive_process_hardening import install_archive_process_hardening
-    install_archive_process_hardening()
     from linkvideo_vpn_helper.services.vpn_automation_resilience import install_vpn_automation_resilience
     install_vpn_automation_resilience()
-    from linkvideo_vpn_helper.services.update_version_probe_compat import install_update_version_probe_compat
-    install_update_version_probe_compat()
     # 3.0.10 uses one authoritative retention implementation. It owns script
     # sources, LV2 metadata migration and immediate postcondition verification.
     from linkvideo_vpn_helper.services.vpn_retention_policy import install_retention_policy
@@ -159,8 +155,6 @@ def main() -> int:
     # ArchiveDownloadPage methods. FFmpeg is downloaded/cached only on first use.
     from linkvideo_vpn_helper.services.archive_download_methods import install_archive_download_methods
     install_archive_download_methods()
-    from linkvideo_vpn_helper.services.archive_download_process_guard import install_archive_download_process_guard
-    install_archive_download_process_guard()
     from linkvideo_vpn_helper.ui.archive_download_ux import install_archive_download_ux
     install_archive_download_ux()
     from linkvideo_vpn_helper.ui.silent_update_integration import install_silent_patch_updates
