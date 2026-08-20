@@ -148,7 +148,7 @@ jobs:
             $oldProcess = Start-Process -FilePath $app -PassThru
             Start-Sleep -Seconds 3
             if ($oldProcess.HasExited) { throw "Attempt $attempt old Helper exited before updater test" }
-            Write-Host "Attempt $attempt: started old Helper PID $($oldProcess.Id)."
+            Write-Host "Attempt ${attempt}: started old Helper PID $($oldProcess.Id)."
 
             $patchProcess = Start-Process -FilePath $patch -ArgumentList '--silent' -Wait -PassThru
             if ($patchProcess.ExitCode -ne 0) { throw "Attempt $attempt updater exited with $($patchProcess.ExitCode)" }
