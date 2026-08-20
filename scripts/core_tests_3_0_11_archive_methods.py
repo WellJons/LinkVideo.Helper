@@ -118,16 +118,22 @@ def test_release_packaging_contract() -> None:
     build = (ROOT / "scripts" / "build_next_installer.ps1").read_text(encoding="utf-8")
     workflow = (ROOT / ".github" / "workflows" / "windows-build.yml").read_text(encoding="utf-8")
     app = (ROOT / "linkvideo_vpn_helper" / "app.py").read_text(encoding="utf-8")
+    selftest = (ROOT / "installer_next" / "selftest_windows.go").read_text(encoding="utf-8")
 
     assert "ffmpeg = root /" not in spec
     assert "installer payload correctly excludes ffmpeg.exe" in build
     assert "LinkVideo.Helper_Setup.exe" in build
     assert "LinkVideo.Helper_Setup_Next.exe" not in build
-    assert '$setup = "installer_next/output/LinkVideo.Helper_Setup.exe"' in workflow
-    assert 'LinkVideo.Helper_Payload_${version}.zip' in workflow
-    assert 'LinkVideo.Helper_Payload_${version}.json' in workflow
-    assert "continue-on-error: true" in workflow
-    assert "release_upload/LinkVideo_VPN_Helper_Setup.exe\"\n          $notes" not in workflow
+    assert "actions/upload-artifact" not in workflow
+    assert "build_setup.bat" not in workflow
+    assert "Create or update private RC draft" in workflow
+    assert '"rc-$version"' in workflow
+    assert "Self-test exact produced Setup payload" in workflow
+    assert "--self-test" in workflow
+    assert "LinkVideo.Helper_Payload_${version}.zip" in workflow
+    assert "LinkVideo.Helper_Payload_${version}.json" in workflow
+    assert 'hasArg("--self-test")' in selftest
+    assert 'strings.EqualFold(entry.Name(), "ffmpeg.exe")' in selftest
     assert "install_archive_download_methods()" in app
     assert app.index("install_archive_download_methods()") < app.index("install_archive_download_ux()")
 
