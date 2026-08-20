@@ -17,7 +17,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "linkvideo_vpn_helper"
 SCRIPTS = ROOT / "scripts"
-RUNTIME_ROOTS = (PACKAGE,)
 
 SKIP_DIRS = {
     ".git",
@@ -74,21 +73,18 @@ def _has_timeout(call: ast.Call) -> bool:
     if any(keyword.arg == "timeout" for keyword in call.keywords):
         return True
     name = _call_name(call)
-    # urllib.request.urlopen(url, data=None, timeout=...) accepts timeout as the
-    # third positional parameter. Our runtime consistently uses keyword/second
-    # parameter only for wrappers; allow any explicit extra positional value.
     if name.endswith("urlopen") and len(call.args) >= 2:
         return True
     return False
 
 
 def audit_python(audit: Audit) -> None:
-    runtime_files = list(_files({".py"}))
-    audit.stats["python_files"] = len(runtime_files)
+    python_files = list(_files({".py"}))
+    audit.stats["python_files"] = len(python_files)
     broad_pass: list[str] = []
     todo_hits: list[str] = []
 
-    for path in runtime_files:
+    for path in python_files:
         text = path.read_text(encoding="utf-8", errors="replace")
         try:
             tree = ast.parse(text, filename=str(path))
@@ -142,6 +138,7 @@ def audit_release_chain(audit: Audit) -> None:
         "archive_methods": ROOT / "linkvideo_vpn_helper" / "services" / "archive_download_methods.py",
         "spec": ROOT / "LinkVideo.Helper.spec",
         "build_next": ROOT / "scripts" / "build_next_installer.ps1",
+        "installer_backend": ROOT / "installer_next" / "backend_windows.go",
         "windows_workflow": ROOT / ".github" / "workflows" / "windows-build.yml",
         "publish_workflow": ROOT / ".github" / "workflows" / "publish-public-update.yml",
     }
@@ -156,6 +153,7 @@ def audit_release_chain(audit: Audit) -> None:
     methods = required["archive_methods"].read_text(encoding="utf-8")
     spec = required["spec"].read_text(encoding="utf-8")
     build = required["build_next"].read_text(encoding="utf-8")
+    backend = required["installer_backend"].read_text(encoding="utf-8")
     workflow = required["windows_workflow"].read_text(encoding="utf-8")
     publish = required["publish_workflow"].read_text(encoding="utf-8")
 
@@ -169,6 +167,7 @@ def audit_release_chain(audit: Audit) -> None:
         ("FFmpeg absent from PyInstaller spec", "ffmpeg = root /" not in spec),
         ("payload explicitly rejects FFmpeg", "installer payload correctly excludes ffmpeg.exe" in build),
         ("authoritative Setup filename", "LinkVideo.Helper_Setup.exe" in build and "LinkVideo.Helper_Setup_Next.exe" not in build),
+        ("full installer removes stale runtime", "cleanRuntimeBeforeInstall(dest)" in backend),
         ("draft release uses authoritative Setup", '$asset = "installer_next/output/LinkVideo.Helper_Setup.exe"' in workflow),
         ("public publisher downloads Setup", "--pattern '*Setup.exe'" in publish),
         ("public manifest writes SHA", '"sha256": setup_sha' in publish),
@@ -180,7 +179,19 @@ def audit_release_chain(audit: Audit) -> None:
     if app.index("install_archive_download_methods()") > app.index("install_archive_download_ux()"):
         audit.error("Archive method integration must install before archive_download_ux")
 
-    # A release publication workflow must never point at the legacy Inno output.
+    install_section = backend.split("func installProduct", 1)[-1]
+    if "cleanRuntimeBeforeInstall(dest)" not in install_section or "extractPayload(dest, progress)" not in install_section:
+        audit.error("Installer full-upgrade cleanup/extraction sequence is incomplete")
+    elif install_section.index("cleanRuntimeBeforeInstall(dest)") > install_section.index("extractPayload(dest, progress)"):
+        audit.error("Installer must remove stale runtime before extracting the authoritative payload")
+
+    cleanup_section = backend.split("func cleanRuntimeBeforeInstall", 1)[-1].split("func extractPayload", 1)[0]
+    for marker in ("_internal", "tools", "linkvideo_vpn_helper", "scripts", "LinkVideo.Helper.Updater.exe"):
+        if marker not in cleanup_section:
+            audit.error(f"Installer stale-runtime cleanup misses: {marker}")
+    if "LOCALAPPDATA" in cleanup_section or "APPDATA" in cleanup_section:
+        audit.error("Full installer cleanup must not delete LocalAppData/AppData user cache")
+
     draft_section = workflow.split("Create or update private draft Release", 1)[-1]
     if "release_upload/LinkVideo_VPN_Helper_Setup.exe" in draft_section:
         audit.error("Private draft Release still references legacy Inno Setup")
@@ -212,8 +223,6 @@ def audit_sensitive_literals(audit: Audit) -> None:
         re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
     ]
     for path in _files({".py", ".ps1", ".bat", ".yml", ".yaml", ".json", ".txt", ".md", ".go"}):
-        # Release notes/docs can contain examples, but a real private key must
-        # never exist anywhere in the source checkout.
         text = path.read_text(encoding="utf-8", errors="replace")
         if private_key in text:
             audit.error(f"Private key material committed: {_rel(path)}")
