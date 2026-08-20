@@ -1,0 +1,118 @@
+name: Publish LinkVideo.Helper 3.0.11 once
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/release-3.0.11-once.yml'
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      TARGET_SHA: 6335326ece03475b62d5a615ee59b00ff9038360
+      RELEASE_TAG: v3.0.11
+      RELEASE_VERSION: 3.0.11
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout exact merged release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 1
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.x'
+          cache-dependency-path: |
+            installer_next/go.mod
+            patcher/go.mod
+            silent_updater/go.mod
+
+      - name: Verify exact final source and build release
+        shell: pwsh
+        run: |
+          $head = (git rev-parse HEAD).Trim()
+          if ($head -ne $env:TARGET_SHA) { throw "Wrong checkout: $head" }
+          $version = (python -c "from linkvideo_vpn_helper.version import APP_VERSION; print(APP_VERSION)").Trim()
+          if ($version -ne $env:RELEASE_VERSION) { throw "APP_VERSION $version does not match $env:RELEASE_VERSION" }
+          ./scripts/verify_release.ps1
+
+          $report = Get-Content -Raw -LiteralPath 'release_candidate/verification.json' | ConvertFrom-Json
+          if ([string]$report.source_commit -ne $env:TARGET_SHA) { throw 'verification.json source_commit mismatch' }
+          if ([string]$report.version -notmatch '^3\.0\.11(?:\.0)?$') { throw 'verification.json version mismatch' }
+
+          $setup = 'installer_next/output/LinkVideo.Helper_Setup.exe'
+          $setupHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash.ToLowerInvariant()
+          if ([string]$report.setup_sha256 -ne $setupHash) { throw 'Final Setup SHA-256 mismatch' }
+          Write-Host "FINAL SETUP SHA256: $setupHash"
+
+      - name: Publish final GitHub Release
+        shell: pwsh
+        run: |
+          $tag = $env:RELEASE_TAG
+          $setup = 'installer_next/output/LinkVideo.Helper_Setup.exe'
+          $uninstall = 'installer_next/output/Uninstall.exe'
+          $payloadZip = "release_payload/LinkVideo.Helper_Payload_$($env:RELEASE_VERSION).zip"
+          $payloadJson = "release_payload/LinkVideo.Helper_Payload_$($env:RELEASE_VERSION).json"
+          $verification = 'release_candidate/verification.json'
+          $notes = "RELEASE_$($env:RELEASE_VERSION)_RU.txt"
+          $assets = @($setup, $uninstall, $payloadZip, $payloadJson, $verification)
+          foreach ($required in @($assets + $notes)) {
+            if (-not (Test-Path $required)) { throw "Required release file not found: $required" }
+          }
+
+          gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            $state = gh release view $tag --repo $env:GITHUB_REPOSITORY --json isDraft,isPrerelease,targetCommitish | ConvertFrom-Json
+            if (-not [bool]$state.isDraft) { throw "Release $tag is already published; refusing to replace it" }
+            gh release upload $tag $assets --repo $env:GITHUB_REPOSITORY --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Could not upload final release assets' }
+            gh release edit $tag --repo $env:GITHUB_REPOSITORY --draft=false --prerelease=false --title "LinkVideo.Helper $($env:RELEASE_VERSION)" --notes-file $notes
+            if ($LASTEXITCODE -ne 0) { throw 'Could not publish final release' }
+          } else {
+            gh release create $tag $assets --repo $env:GITHUB_REPOSITORY --target $env:TARGET_SHA --title "LinkVideo.Helper $($env:RELEASE_VERSION)" --notes-file $notes
+            if ($LASTEXITCODE -ne 0) { throw 'Could not create final release' }
+          }
+
+          $tagSha = (gh api "repos/$env:GITHUB_REPOSITORY/commits/$tag" --jq '.sha').Trim()
+          if ($tagSha -ne $env:TARGET_SHA) { throw "Release tag points to $tagSha instead of $env:TARGET_SHA" }
+
+      - name: Remove temporary RC
+        shell: pwsh
+        run: |
+          gh release view 'rc-3.0.11' --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release delete 'rc-3.0.11' --repo $env:GITHUB_REPOSITORY --yes --cleanup-tag
+            if ($LASTEXITCODE -ne 0) { throw 'Could not remove temporary RC release/tag' }
+          }
+
+      - name: Start public update publication
+        shell: pwsh
+        run: |
+          gh workflow run publish-public-update.yml --repo $env:GITHUB_REPOSITORY --ref main -f "tag=$($env:RELEASE_TAG)"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not dispatch public update workflow' }
+
+      - name: Remove one-time workflow from main
+        if: success()
+        shell: pwsh
+        run: |
+          $path = '.github/workflows/release-3.0.11-once.yml'
+          $encoded = $path -replace '/', '%2F'
+          $sha = (gh api "repos/$env:GITHUB_REPOSITORY/contents/$encoded?ref=main" --jq '.sha').Trim()
+          if ([string]::IsNullOrWhiteSpace($sha)) { throw 'Could not resolve one-time workflow blob SHA' }
+          gh api --method DELETE "repos/$env:GITHUB_REPOSITORY/contents/$encoded" -f message='Remove one-time 3.0.11 release workflow' -f sha=$sha -f branch=main | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Could not remove one-time release workflow' }
