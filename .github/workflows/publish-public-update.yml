@@ -9,13 +9,9 @@ on:
         description: Release tag to publish, for example v3.0.8
         required: true
         type: string
-  push:
-    branches:
-      - 'release/public-update-3.0.11'
 
 permissions:
-  contents: write
-  statuses: write
+  contents: read
 
 concurrency:
   group: publish-public-update
@@ -27,8 +23,6 @@ jobs:
     env:
       UPDATES_REPO: WellJons/LinkVideo.Helper.Updates
       GH_TOKEN: ${{ secrets.UPDATES_REPO_TOKEN }}
-      SOURCE_RELEASE_SHA: 6335326ece03475b62d5a615ee59b00ff9038360
-      PUBLIC_STATUS_CONTEXT: release/3.0.11-public-channel
 
     steps:
       - name: Resolve source release tag
@@ -37,8 +31,6 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TAG="${{ inputs.tag }}"
-          elif [ "${{ github.event_name }}" = "push" ]; then
-            TAG="v3.0.11"
           else
             TAG="${{ github.event.release.tag_name }}"
           fi
@@ -49,17 +41,6 @@ jobs:
           VERSION="${TAG#v}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Mark public publication pending
-        env:
-          SOURCE_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          GH_TOKEN="$SOURCE_TOKEN" gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$SOURCE_RELEASE_SHA" \
-            -f state='pending' \
-            -f context="$PUBLIC_STATUS_CONTEXT" \
-            -f description='Publishing LinkVideo.Helper 3.0.11 public update channel' \
-            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
 
       - name: Check update repository token
         shell: bash
@@ -248,6 +229,7 @@ jobs:
           VERSION="${{ steps.release.outputs.version }}"
           DOWNLOAD_URL="https://github.com/$UPDATES_REPO/releases/download/$TAG/$SETUP_NAME"
           rm -rf updates-repo
+          gh auth setup-git
           gh repo clone "$UPDATES_REPO" updates-repo
           python3 - "$VERSION" "$TAG" "$DOWNLOAD_URL" "$SETUP_SHA256" "$UPDATES_REPO" <<'PY'
           import json
@@ -263,6 +245,10 @@ jobs:
               "sha256": setup_sha,
               "notes": f"Доступна версия LinkVideo.Helper {version}.",
               "mandatory": False,
+              # 3.0.11 production rollout is deliberately full-Setup-only.
+              # The full installer performs a staged atomic directory switch;
+              # the dormant differential patch pipeline is not published until
+              # it has equivalent crash/power-loss recovery.
               "patches": {},
           }
           output = pathlib.Path("updates-repo/update-manifest.json")
@@ -337,30 +323,3 @@ jobs:
             exit 1
           fi
           echo "Public update verified: $VERSION $PUBLIC_SHA256"
-
-      - name: Mark public publication success
-        if: success()
-        env:
-          SOURCE_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          GH_TOKEN="$SOURCE_TOKEN" gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$SOURCE_RELEASE_SHA" \
-            -f state='success' \
-            -f context="$PUBLIC_STATUS_CONTEXT" \
-            -f description='LinkVideo.Helper 3.0.11 public update verified' \
-            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
-          if [ "${{ github.event_name }}" = "push" ]; then
-            GH_TOKEN="$SOURCE_TOKEN" gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/release/public-update-3.0.11" >/dev/null
-          fi
-
-      - name: Mark public publication failure
-        if: failure()
-        env:
-          SOURCE_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          GH_TOKEN="$SOURCE_TOKEN" gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$SOURCE_RELEASE_SHA" \
-            -f state='failure' \
-            -f context="$PUBLIC_STATUS_CONTEXT" \
-            -f description='LinkVideo.Helper 3.0.11 public update publication failed' \
-            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null
