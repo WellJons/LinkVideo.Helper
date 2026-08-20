@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
   group: fix-3.0.11-runtime-update
@@ -25,8 +26,20 @@ jobs:
       RELEASE_TAG: v3.0.11
       PATCH_NAME: LinkVideo.Helper_Patch_3.0.10_to_3.0.11.exe
       SETUP_SHA256: fb0d4094bee7ed409c7d6ce05296b0e3c44133db4a83e39b2707b71678bba6dc
+      STATUS_CONTEXT: release/3.0.11-runtime-update
 
     steps:
+      - name: Mark runtime update verification pending
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "repos/$env:GITHUB_REPOSITORY/statuses/${{ github.sha }}" `
+            -f state=pending `
+            -f context=$env:STATUS_CONTEXT `
+            -f description='Verifying installed 3.0.10 -> runtime updater -> 3.0.11' `
+            -f target_url="$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" | Out-Null
+
       - name: Checkout updater tooling
         uses: actions/checkout@v4
         with:
@@ -215,3 +228,49 @@ jobs:
           $hash = (Get-FileHash -Algorithm SHA256 verify-public-patch.exe).Hash.ToLowerInvariant()
           if ($hash -ne $env:PATCH_SHA256) { throw 'Live updater asset hash does not match manifest' }
           Write-Host "PUBLIC UPDATE READY: 3.0.10 -> 3.0.11 $hash"
+
+      - name: Mark runtime update verification success
+        if: success()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "repos/$env:GITHUB_REPOSITORY/statuses/${{ github.sha }}" `
+            -f state=success `
+            -f context=$env:STATUS_CONTEXT `
+            -f description='Verified 3.0.10 -> full-runtime updater -> 3.0.11' `
+            -f target_url="$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" | Out-Null
+
+      - name: Pause rollout again on failure
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.UPDATES_REPO_TOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) { exit 0 }
+          $apiPath = "repos/$($env:UPDATES_REPO)/contents/update-manifest.json"
+          $current = gh api "$apiPath?ref=main" | ConvertFrom-Json
+          $raw = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($current.content -replace '\s','')))
+          $manifest = $raw | ConvertFrom-Json
+          if ([string]$manifest.version -eq $env:TO_VERSION) {
+            $manifest.version = $env:FROM_VERSION
+            $manifest.notes = 'Обновление 3.0.11 временно приостановлено: проверка встроенного updater не завершилась успешно.'
+            $manifest.patches = [ordered]@{}
+            $json = ($manifest | ConvertTo-Json -Depth 8) + "`n"
+            $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
+            gh api --method PUT $apiPath -f message='Pause 3.0.11 updater rollout after failed verification' -f content=$encoded -f sha=$current.sha -f branch=main | Out-Null
+          }
+
+      - name: Mark runtime update verification failure
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "repos/$env:GITHUB_REPOSITORY/statuses/${{ github.sha }}" `
+            -f state=failure `
+            -f context=$env:STATUS_CONTEXT `
+            -f description='3.0.11 installed-app updater verification failed' `
+            -f target_url="$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" | Out-Null
