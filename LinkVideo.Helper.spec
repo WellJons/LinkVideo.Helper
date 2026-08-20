@@ -3,11 +3,8 @@ from pathlib import Path
 
 root = Path(SPEC).resolve().parent if 'SPEC' in globals() else Path.cwd()
 datas = [(str(root / "icon.ico"), ".")]
-# Если перед сборкой положить ffmpeg.exe в tools, он попадёт в установку и
-# пользователю не потребуется первая загрузка компонента из интернета.
-ffmpeg = root / "tools" / "ffmpeg.exe"
-if ffmpeg.exists():
-    datas.append((str(ffmpeg), "tools"))
+# FFmpeg is intentionally not bundled. Archive downloads fetch and validate it
+# on first FFmpeg-based use, then reuse the per-user LocalAppData cache.
 
 excludes = [
     "PySide6.QtWebEngine", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets",
