@@ -6,30 +6,32 @@
 
 ## RC
 
-На активной release-ветке CI после полного успешного прогона поддерживает **один** приватный draft/prerelease с тегом `rc-<version>`.
+Тяжёлая Windows release-проверка не запускается на каждом development-коммите. Когда код готов к кандидату, создаётся/перемещается временная ветка `rc/<version>` на проверяемый commit. Только она запускает полный CI и создаёт RC.
 
-Каждая следующая успешная RC-сборка:
+Каждая успешная RC-проверка:
 
-1. пересобирает runtime и Setup с нуля;
-2. запускает source-аудит, regressions, Ruff и `go vet`;
-3. запускает `LinkVideo.Helper_Setup.exe --self-test` на точном произведённом EXE;
-4. пересчитывает SHA-256;
-5. заменяет Setup в существующем `rc-<version>` вместо накопления Actions artifacts/старых RC.
+1. выполняет единый `scripts/verify_release.ps1`;
+2. пересобирает runtime и Setup с нуля;
+3. запускает source-аудит, regressions, Ruff и `go vet`;
+4. компилирует differential patch pipeline;
+5. запускает `LinkVideo.Helper_Setup.exe --self-test` на точном произведённом EXE;
+6. проверяет ProductVersion и SHA-256;
+7. создаёт `verification.json`;
+8. заменяет Setup/отчёт в **одном** приватном draft/prerelease `rc-<version>`.
 
-RC не является публичным обновлением и требует ручной проверки на Windows.
+Actions artifacts для RC не используются. RC не является публичным обновлением и требует ручной проверки на Windows против реальных RouterOS, Google Sheets и архивных endpoint'ов.
 
 ## Финальный релиз
 
-Только version tag `vX.Y.Z` создаёт/обновляет приватный final draft Release. В нём сохраняются:
+Только version tag `vX.Y.Z` повторно проходит тот же verifier и создаёт/обновляет приватный final draft Release. В нём сохраняются:
 
 - точный `LinkVideo.Helper_Setup.exe`;
 - `Uninstall.exe`;
+- `verification.json`;
 - приватный payload ZIP;
 - payload manifest для будущих дифференциальных патчей.
 
-После создания final draft временный `rc-<version>` удаляется вместе с RC-тегом.
-
-Публичная публикация выполняется отдельно и переносит проверенный Setup/manifest в `WellJons/LinkVideo.Helper.Updates`.
+После создания final draft временный `rc-<version>` удаляется вместе с RC-тегом. Публичная публикация выполняется отдельно и только после ручного принятия RC.
 
 ## Production update-channel
 
@@ -48,4 +50,4 @@ Google Drive сохраняется только как переходный fal
 
 ## Почему не GitHub Actions artifacts
 
-Actions artifacts — временное CI-хранилище с квотой и не должны быть частью production release-chain. Они больше не используются для RC LinkVideo.Helper. Это одновременно устраняет зависимость от квоты и не создаёт множество временных сборок.
+Actions artifacts — временное CI-хранилище с квотой и не должны быть частью production release-chain. RC хранится одним приватным draft Release, а generated-файлы остаются вне Git благодаря `.gitignore`.
