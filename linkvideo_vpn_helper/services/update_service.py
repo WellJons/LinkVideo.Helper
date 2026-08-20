@@ -19,8 +19,8 @@ GITHUB_UPDATE_MANIFEST_URL = (
     "https://raw.githubusercontent.com/WellJons/LinkVideo.Helper.Updates/main/update-manifest.json"
 )
 
-# Transition/fallback channel. Keep this URL until the installed 3.0.7-and-older
-# population has had enough time to move to a GitHub-aware build.
+# Transition/fallback channel. GitHub is authoritative for 3.0.10+; Drive stays
+# available as an emergency fallback while the migrated fleet settles.
 LEGACY_GOOGLE_DRIVE_MANIFEST_URL = (
     "https://drive.google.com/uc?export=download&id=1uHMqX7hyyERZRhOPG7jojcVKaa5e2AOR"
 )
@@ -77,13 +77,26 @@ def _validate_sha256(value: str, *, field_name: str = "sha256") -> str:
 
 
 def _windows_product_version(path: Path) -> str:
-    """Read ProductVersion from an EXE without third-party dependencies."""
+    """Read ProductVersion without passing a filesystem path through -Command.
+
+    Windows PowerShell 5.1 parses tokens following ``-Command <script>`` as more
+    PowerShell syntax in this launch shape.  That was the 2.0.2 updater failure:
+    a downloaded ``C:\\...\\Setup.exe.download`` path became a ParserError before
+    the new installer could start.  The path now travels only through the child
+    process environment, so spaces, non-ASCII user names and the .download
+    suffix cannot change the command grammar.
+    """
     if os.name != "nt":
         return ""
+
+    env = os.environ.copy()
+    env["LINKVIDEO_UPDATE_FILE"] = str(Path(path))
     script = (
         "$ErrorActionPreference='Stop';"
-        "$p=(Get-Item -LiteralPath $args[0]).VersionInfo.ProductVersion;"
-        "[Console]::Out.Write([string]$p)"
+        "$p=[Environment]::GetEnvironmentVariable('LINKVIDEO_UPDATE_FILE');"
+        "if([string]::IsNullOrWhiteSpace($p)){throw 'update file path is empty'};"
+        "$v=(Get-Item -LiteralPath $p).VersionInfo.ProductVersion;"
+        "[Console]::Out.Write([string]$v)"
     )
     result = subprocess.run(
         [
@@ -94,7 +107,6 @@ def _windows_product_version(path: Path) -> str:
             "Bypass",
             "-Command",
             script,
-            str(path),
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -103,12 +115,14 @@ def _windows_product_version(path: Path) -> str:
         errors="replace",
         timeout=15,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        env=env,
     )
     if result.returncode != 0:
-        raise RuntimeError(
-            "Не удалось проверить версию скачанного установщика: "
-            + (result.stderr or "PowerShell error").strip()
-        )
+        detail = (result.stderr or "").replace("\x00", "").strip()
+        if detail:
+            detail = detail.splitlines()[0][:180]
+            raise RuntimeError(f"Не удалось определить версию скачанного установщика ({detail})")
+        raise RuntimeError("Не удалось определить версию скачанного установщика")
     return (result.stdout or "").replace("\x00", "").strip()
 
 
@@ -167,7 +181,7 @@ class UpdateService:
 
         # Optional differential patch. The public manifest may contain:
         # "patches": {
-        #   "3.0.7": {"url": "...exe", "sha256": "..."}
+        #   "3.0.10": {"url": "...exe", "sha256": "..."}
         # }
         # The patch is selected only for an exact current-version match. Any
         # other client automatically receives the full setup, so old versions
@@ -219,8 +233,8 @@ class UpdateService:
         artifact_kind: str = "",
     ) -> Path:
         # Older UI code does not pass artifact_kind yet. Infer a differential
-        # patch from the published asset name so 3.0.8 remains drop-in
-        # compatible with the existing MainWindow update flow.
+        # patch from the published asset name so current MainWindow integration
+        # remains compatible with both full and differential updates.
         if artifact_kind not in {"setup", "patch"}:
             artifact_kind = "patch" if re.search(r"(?:^|[/_.-])patch(?:[/_.-]|$)", setup_url, re.I) else "setup"
         target_dir = Path(tempfile.gettempdir()) / "LinkVideoHelperUpdate"
