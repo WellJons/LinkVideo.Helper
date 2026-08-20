@@ -19,8 +19,10 @@ func init() {
         return
     }
     if err := applyPatchSilently(); err != nil {
+        recordSilentPatchError(err)
         os.Exit(1)
     }
+    recordSilentPatchError(nil)
     os.Exit(0)
 }
 

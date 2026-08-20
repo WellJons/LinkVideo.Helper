@@ -133,11 +133,13 @@ jobs:
           $install = Join-Path $env:ProgramFiles 'LinkVideo.Helper'
           $patch = Join-Path $PWD "tools\patch_output\$($env:PATCH_NAME)"
           $targetRoot = (Resolve-Path "$PWD\target-runtime").Path
+          $errorPath = Join-Path $env:ProgramData 'LinkVideo.Helper\Updates\patch-error.txt'
 
           for ($attempt = 1; $attempt -le 3; $attempt++) {
             Get-Process -Name 'LinkVideo.Helper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
             Start-Sleep -Milliseconds 300
             Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $install
+            Remove-Item -Force -ErrorAction SilentlyContinue $errorPath
             New-Item -ItemType Directory -Force $install | Out-Null
             Copy-Item -Path "$PWD\old\dist\LinkVideo.Helper\*" -Destination $install -Recurse -Force
 
@@ -151,7 +153,11 @@ jobs:
             Write-Host "Attempt ${attempt}: started old Helper PID $($oldProcess.Id)."
 
             $patchProcess = Start-Process -FilePath $patch -ArgumentList '--silent' -Wait -PassThru
-            if ($patchProcess.ExitCode -ne 0) { throw "Attempt $attempt updater exited with $($patchProcess.ExitCode)" }
+            if ($patchProcess.ExitCode -ne 0) {
+              $detail = 'patch-error.txt was not created'
+              if (Test-Path -LiteralPath $errorPath) { $detail = (Get-Content -Raw -LiteralPath $errorPath).Trim() }
+              throw "Attempt $attempt updater exited with $($patchProcess.ExitCode): $detail"
+            }
 
             if (Get-Process -Name 'LinkVideo.Helper' -ErrorAction SilentlyContinue) {
               throw "Attempt $attempt old Helper process is still running after updater completed"
