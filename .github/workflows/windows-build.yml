@@ -1,14 +1,13 @@
-name: Build LinkVideo.Helper
+name: Verify LinkVideo.Helper Release
 
 on:
-  workflow_dispatch:
   pull_request:
     branches:
       - main
+  workflow_dispatch:
   push:
     branches:
-      - main
-      - 'fix/**'
+      - 'rc/**'
     tags:
       - 'v*'
 
@@ -16,64 +15,131 @@ permissions:
   contents: write
 
 concurrency:
-  group: linkvideo-helper-build-${{ github.ref }}
+  group: linkvideo-helper-release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build:
+  verify:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
-      - name: Checkout
+      - name: Checkout exact release source
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: 'pip'
 
-      - name: Install Python dependencies
-        shell: pwsh
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pyinstaller
-
-      - name: Complete release preflight
-        shell: pwsh
-        run: python scripts/release_preflight.py
-
-      - name: Install Inno Setup
-        shell: pwsh
-        run: choco install innosetup --no-progress -y
-
-      - name: Build and verify full Setup
-        shell: cmd
-        run: build_setup.bat
-
-      - name: Upload verified Windows build artifact
-        uses: actions/upload-artifact@v4
+      - name: Set up Go
+        uses: actions/setup-go@v6
         with:
-          name: LinkVideo.Helper-build-${{ github.run_number }}-${{ github.sha }}
-          path: |
-            release_upload/LinkVideo_VPN_Helper_Setup.exe
-            release_upload/version.json
-          if-no-files-found: error
+          go-version: '1.24.x'
+          cache-dependency-path: |
+            installer_next/go.mod
+            patcher/go.mod
+            silent_updater/go.mod
 
-      # Only a version tag may create/update the private draft release.
-      # Branch and PR builds validate the exact same full Setup before a tag exists.
-      - name: Create or update private draft Release
+      # This is deliberately the same entry point that can be executed on any
+      # local Windows machine. CI does not have a second, divergent release path.
+      - name: Full release verification
+        shell: pwsh
+        run: ./scripts/verify_release.ps1
+
+      # RC builds do not use Actions artifacts. One private draft RC is replaced
+      # in-place, so quota and historical build clutter are not part of the
+      # release chain.
+      - name: Create or update private RC draft
+        if: startsWith(github.ref, 'refs/heads/rc/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (python -c "from linkvideo_vpn_helper.version import APP_VERSION; print(APP_VERSION)").Trim()
+          if ([string]::IsNullOrWhiteSpace($version)) { throw 'APP_VERSION not found' }
+          $tag = "rc-$version"
+          $setup = "release_candidate/LinkVideo.Helper_Setup_${version}_RC.exe"
+          $report = 'release_candidate/verification.json'
+          foreach ($required in @($setup, $report)) {
+            if (-not (Test-Path $required)) { throw "Verified RC output not found: $required" }
+          }
+          $hash = (Get-FileHash -Algorithm SHA256 $setup).Hash.ToLowerInvariant()
+          $verification = Get-Content -Raw -LiteralPath $report | ConvertFrom-Json
+          if ([string]$verification.source_commit -ne $env:GITHUB_SHA) {
+            throw "RC verification source_commit does not match GITHUB_SHA"
+          }
+          if ([string]$verification.setup_sha256 -ne $hash) {
+            throw "RC verification SHA-256 does not match the uploaded Setup"
+          }
+          $body = "Временная приватная RC-сборка LinkVideo.Helper $version.`n`nCommit: $env:GITHUB_SHA`nSHA-256: $hash`n`nСледующая успешная RC-проверка заменяет этот файл."
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -f $tag $env:GITHUB_SHA
+          git push origin "refs/tags/$tag" --force
+
+          gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $setup $report --repo $env:GITHUB_REPOSITORY --clobber
+            gh release edit $tag --repo $env:GITHUB_REPOSITORY --draft --prerelease --title "LinkVideo.Helper $version RC" --notes $body
+          } else {
+            gh release create $tag $setup $report --repo $env:GITHUB_REPOSITORY --draft --prerelease --target $env:GITHUB_SHA --title "LinkVideo.Helper $version RC" --notes $body
+          }
+
+      # A real version tag is the final private draft gate. Public publication is
+      # still a separate explicit action after manual RC acceptance.
+      - name: Create or update private final draft Release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "${{ github.ref_name }}"
-          $asset = "release_upload/LinkVideo_VPN_Helper_Setup.exe"
-          $notes = "RELEASE_3.0.8_RU.txt"
+          if ($tag -notmatch '^v\d+\.\d+\.\d+(?:\.\d+)?$') { throw "Invalid final release tag: $tag" }
+          $version = $tag.TrimStart('v')
+          $appVersion = (python -c "from linkvideo_vpn_helper.version import APP_VERSION; print(APP_VERSION)").Trim()
+          if ($version -ne $appVersion) { throw "Tag version $version does not match APP_VERSION $appVersion" }
+          $setup = 'installer_next/output/LinkVideo.Helper_Setup.exe'
+          $uninstall = 'installer_next/output/Uninstall.exe'
+          $payloadZip = "release_payload/LinkVideo.Helper_Payload_${version}.zip"
+          $payloadJson = "release_payload/LinkVideo.Helper_Payload_${version}.json"
+          $verification = 'release_candidate/verification.json'
+          $notes = "RELEASE_${version}_RU.txt"
+          foreach ($required in @($setup, $uninstall, $payloadZip, $payloadJson, $verification, $notes)) {
+            if (-not (Test-Path $required)) { throw "Required release file not found: $required" }
+          }
+          $verificationData = Get-Content -Raw -LiteralPath $verification | ConvertFrom-Json
+          $setupHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash.ToLowerInvariant()
+          if ([string]$verificationData.source_commit -ne $env:GITHUB_SHA) {
+            throw "Final verification source_commit does not match GITHUB_SHA"
+          }
+          if ([string]$verificationData.setup_sha256 -ne $setupHash) {
+            throw "Final verification SHA-256 does not match LinkVideo.Helper_Setup.exe"
+          }
+          $assets = @($setup, $uninstall, $payloadZip, $payloadJson, $verification)
           gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $asset --repo $env:GITHUB_REPOSITORY --clobber
+            $state = gh release view $tag --repo $env:GITHUB_REPOSITORY --json isDraft,isPrerelease | ConvertFrom-Json
+            if (-not [bool]$state.isDraft) {
+              throw "Refusing to replace assets of an already published release: $tag"
+            }
+            if ([bool]$state.isPrerelease) {
+              throw "Final release draft must not be marked as a prerelease: $tag"
+            }
+            gh release upload $tag $assets --repo $env:GITHUB_REPOSITORY --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Could not update final draft assets: $tag" }
+            gh release edit $tag --repo $env:GITHUB_REPOSITORY --draft --title "LinkVideo.Helper $version" --notes-file $notes
+            if ($LASTEXITCODE -ne 0) { throw "Could not update final draft metadata: $tag" }
           } else {
-            gh release create $tag $asset --repo $env:GITHUB_REPOSITORY --draft --title "LinkVideo.Helper $($tag.TrimStart('v'))" --notes-file $notes
+            gh release create $tag $assets --repo $env:GITHUB_REPOSITORY --draft --title "LinkVideo.Helper $version" --notes-file $notes
+            if ($LASTEXITCODE -ne 0) { throw "Could not create final draft: $tag" }
+          }
+
+          # Keep Releases clean: the single temporary RC release/tag is removed
+          # after the final draft was created successfully.
+          $rcTag = "rc-$version"
+          gh release view $rcTag --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release delete $rcTag --repo $env:GITHUB_REPOSITORY --yes --cleanup-tag
           }

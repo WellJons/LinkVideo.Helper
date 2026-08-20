@@ -10,5 +10,5 @@ for token in ['Светлая LinkVideo','QPushButton[nav="true"]','QTableWidget
 create=(ROOT/'linkvideo_vpn_helper/ui/pages/create_client_page.py').read_text(encoding='utf-8')
 assert 'self.workspace = QBoxLayout' in create
 assert 'Порты' in create and 'Учётки' in create
-assert (ROOT/'GOOGLE_SHEETS_SYNC_SCHEMA_3.0.md').exists()
+assert (ROOT / "docs" / "GOOGLE_SHEETS_SYNC.md").exists()
 print('CORE TESTS 3.0 UI FOUNDATION OK')

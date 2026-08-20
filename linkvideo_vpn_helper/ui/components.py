@@ -50,8 +50,6 @@ class Card(QFrame):
             self.setObjectName("SuccessCard")
         else:
             self.setObjectName("SubtleCard" if subtle else "Card")
-        # A very light desktop elevation makes the surface hierarchy read like a
-        # modern web app instead of a stack of bordered group boxes.
         if not subtle and kind not in {"accent", "danger", "success"}:
             try:
                 shadow = QGraphicsDropShadowEffect(self)
@@ -266,7 +264,6 @@ class ServerPicker(QWidget):
         self._sync()
 
     def _sync(self):
-        # No decorative arrows/tooltips: the whole field is visibly clickable.
         if self._host == self.AUTO:
             self.host_label.setText(self.auto_text)
             self.country_label.setText("")
@@ -307,13 +304,6 @@ class ServerPicker(QWidget):
 
 
 def build_page_scaffold(parent: QWidget, *, max_width: int = 1440, min_width: int = 820, margins: int = 28, spacing: int = 16):
-    """Create the common centered/responsive page surface used by Helper 2.2.
-
-    Pages no longer stretch every card across ultra-wide screens. The viewport
-    stays fluid, the useful work area is capped, and narrow windows get a
-    horizontal scrollbar only when they truly cannot fit the minimum desktop
-    layout.
-    """
     host = QVBoxLayout(parent)
     host.setContentsMargins(0, 0, 0, 0)
     host.setSpacing(0)
@@ -378,14 +368,7 @@ class Spinner(QWidget):
         painter.drawArc(rect, int((90 - self._angle) * 16), int(-245 * 16))
 
 
-
-
 class BusyDialog(QDialog):
-    """Неблокирующее модальное окно ожидания поверх рабочего интерфейса.
-
-    Длинные операции больше не встраиваются карточкой между содержимым страницы.
-    Диалог остаётся поверх родительского окна, а worker-поток продолжает работу.
-    """
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("BusyDialog")
@@ -417,7 +400,6 @@ class BusyDialog(QDialog):
         self.detail.setObjectName("Muted")
         self.detail.setWordWrap(True)
         lay.addWidget(self.detail)
-
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setTextVisible(False)
@@ -437,8 +419,6 @@ class BusyDialog(QDialog):
         outer.addWidget(card)
 
     def reject(self):
-        # Операция управляется worker-потоком страницы. Случайный Esc не должен
-        # скрывать ожидание и создавать впечатление, что задача завершилась.
         return
 
     def update_busy(self, title: str, detail: str = "", progress: int | None = None, progress_text: str = ""):
@@ -468,7 +448,6 @@ class BusyDialog(QDialog):
 
 
 class TaskStatus(Card):
-    """Понятное состояние фоновой операции без вывода технического лога."""
     retryRequested = Signal()
 
     def __init__(self, parent=None):
@@ -494,9 +473,6 @@ class TaskStatus(Card):
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
-        # Процент не рисуется внутри полосы высотой несколько пикселей: на
-        # Windows текст обрезался и визуально ломал индикатор. Процент выводим
-        # отдельной подписью ниже.
         self.progress.setTextVisible(False)
         self.progress.setMinimumHeight(10)
         self.progress.setMaximumHeight(10)
@@ -536,14 +512,32 @@ class TaskStatus(Card):
                 pass
 
     def busy(self, title: str, detail: str = "", progress: int | None = None, progress_text: str = ""):
-        # Ожидание теперь показывается поверх окна, а не вставляется между
-        # рабочими карточками страницы. Сам TaskStatus остаётся только для
-        # результата/ошибки после завершения.
         self.hide()
         dlg = self._ensure_busy_dialog()
         dlg.spinner.start()
         dlg.update_busy(title, detail, progress, progress_text)
         dlg.show_centered()
+
+    def busy_inline(self, title: str, detail: str = "", progress: int | None = None, progress_text: str = ""):
+        """Show long-running progress inside the page instead of a floating dialog."""
+        self._close_busy_dialog()
+        self.show()
+        self._reset_title()
+        self.icon.hide()
+        self.retry.hide()
+        self.spinner.start()
+        self.title.setText(str(title or "Выполняю операцию"))
+        self.detail.setText(str(detail or ""))
+        if progress is None:
+            self.progress.hide()
+            self.progress_text.hide()
+        else:
+            value = max(0, min(100, int(progress)))
+            self.progress.setRange(0, 100)
+            self.progress.setValue(value)
+            self.progress.show()
+            self.progress_text.setText(progress_text or f"{value}%")
+            self.progress_text.show()
 
     def done(self, title: str, detail: str = ""):
         self._close_busy_dialog()
@@ -557,7 +551,6 @@ class TaskStatus(Card):
         self.icon.setObjectName("SuccessText")
         self.icon.show()
         self.title.setText(title)
-
         self.detail.setText(detail)
         self._refresh_icon()
 
@@ -705,78 +698,56 @@ class Switch(QWidget):
     offset = Property(float, getOffset, setOffset)
 
 
-class AnimatedStack(QWidget):
-    """Лёгкий контейнер страниц с коротким fade без тяжёлого QStackedWidget."""
-    def __init__(self, parent=None):
+class DateTimePopup(QDialog):
+    valueApplied = Signal(object)
+
+    def __init__(self, value, parent=None):
         super().__init__(parent)
-        self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(0, 0, 0, 0)
-        self._pages: dict[str, QWidget] = {}
-        self._current: str | None = None
-        self._animation = None
+        self.setObjectName("DateTimePopup")
+        self.setWindowFlags(Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        self.setMinimumWidth(390)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(12)
+        self.calendar = QCalendarWidget()
+        self.calendar.setGridVisible(False)
+        self.time = QTimeEdit()
+        self.time.setDisplayFormat("HH:mm:ss")
+        self.time.setTime(value.time())
+        root.addWidget(self.calendar)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Время"))
+        row.addWidget(self.time, 1)
+        root.addLayout(row)
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel = QPushButton("Отмена")
+        apply = QPushButton("Применить")
+        apply.setProperty("role", "primary")
+        cancel.clicked.connect(self.close)
+        apply.clicked.connect(self._apply)
+        buttons.addWidget(cancel)
+        buttons.addWidget(apply)
+        root.addLayout(buttons)
+        self.calendar.setSelectedDate(value.date())
 
-    def addPage(self, key: str, widget: QWidget):
-        widget.hide()
-        self._pages[key] = widget
-        self._layout.addWidget(widget)
-
-    def page(self, key: str) -> QWidget | None:
-        return self._pages.get(key)
-
-    def setCurrent(self, key: str):
-        if key not in self._pages or key == self._current:
-            return
-        if self._current and self._current in self._pages:
-            self._pages[self._current].hide()
-        new = self._pages[key]
-        new.show()
-        effect = QGraphicsOpacityEffect(new)
-        effect.setOpacity(0.0)
-        new.setGraphicsEffect(effect)
-        animation = QPropertyAnimation(effect, b"opacity", new)
-        animation.setDuration(170)
-        animation.setStartValue(0.0)
-        animation.setEndValue(1.0)
-        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
-
-        def clear_effect():
-            try:
-                new.setGraphicsEffect(None)
-            except Exception:
-                pass
-
-        animation.finished.connect(clear_effect)
-        new._page_fade_animation = animation
-        animation.start()
-        self._animation = animation
-        self._current = key
-
-
-class DateTimePickerButton(QWidget):
-    """Компактный выбор даты/времени без нативного Windows time spinbox.
-
-    Открывается как popover под полем. Время вводится тремя обычными полями,
-    поэтому никаких системных стрелок рядом со значениями нет.
-    """
-
-    changed = Signal()
-    MONTHS = (
-        "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
-        "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
-    )
-
-    def __init__(self, value=None, parent=None):
-        super().__init__(parent)
+    def _apply(self):
         from PySide6.QtCore import QDateTime
-        self._value = value or QDateTime.currentDateTime()
-        self._popup = None
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        self.button = QPushButton()
-        self.button.setObjectName("DateTimeField")
-        self.button.setMinimumHeight(44)
-        self.button.clicked.connect(self._open)
-        lay.addWidget(self.button)
+        result = QDateTime(self.calendar.selectedDate(), self.time.time())
+        self.valueApplied.emit(result)
+        self.close()
+
+
+class DateTimePickerButton(QPushButton):
+    changed = Signal(object)
+
+    def __init__(self, value, parent=None):
+        super().__init__(parent)
+        self._value = value
+        self.setObjectName("DateTimeField")
+        self.setMinimumHeight(44)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.clicked.connect(self._open)
         self._sync()
 
     def value(self):
@@ -785,267 +756,13 @@ class DateTimePickerButton(QWidget):
     def setValue(self, value):
         self._value = value
         self._sync()
-        self.changed.emit()
+        self.changed.emit(value)
 
     def _sync(self):
-        self.button.setText(self._value.toString("dd.MM.yyyy    HH:mm:ss"))
-
-    @staticmethod
-    def _two(value: int) -> str:
-        return f"{int(value):02d}"
-
-    def _close_popup(self):
-        popup = self._popup
-        if popup is None:
-            return
-        app = QApplication.instance()
-        if app is not None:
-            try:
-                app.removeEventFilter(self)
-            except Exception:
-                pass
-        self._popup = None
-        try:
-            popup.close()
-        except RuntimeError:
-            pass
-
-    def eventFilter(self, watched, event):
-        popup = self._popup
-        if popup is not None and popup.isVisible():
-            if event.type() == QEvent.Type.MouseButtonPress:
-                widget = QApplication.widgetAt(event.globalPosition().toPoint()) if hasattr(event, "globalPosition") else None
-                inside_popup = widget is not None and (widget is popup or popup.isAncestorOf(widget))
-                inside_button = widget is not None and (widget is self.button or self.button.isAncestorOf(widget))
-                if not inside_popup and not inside_button:
-                    self._close_popup()
-            elif event.type() in (QEvent.Type.ApplicationDeactivate, QEvent.Type.WindowDeactivate):
-                self._close_popup()
-        return super().eventFilter(watched, event)
+        self.setText(self._value.toString("dd.MM.yyyy     HH:mm:ss"))
 
     def _open(self):
-        from PySide6.QtCore import QDateTime, QTime
-        from PySide6.QtGui import QGuiApplication
-
-        if self._popup is not None:
-            self._close_popup()
-
-        popup = QFrame(None, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
-        popup.setObjectName("DateTimePopup")
-        popup.setMinimumWidth(380)
-        popup.setMaximumWidth(430)
-        root = QVBoxLayout(popup)
-        root.setContentsMargins(14, 14, 14, 14)
-        root.setSpacing(10)
-
-        month_row = QHBoxLayout()
-        prev_btn = QPushButton("‹")
-        prev_btn.setProperty("role", "icon")
-        prev_btn.setFixedSize(38, 36)
-        month_label = QLabel()
-        month_label.setObjectName("SectionTitle")
-        month_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        next_btn = QPushButton("›")
-        next_btn.setProperty("role", "icon")
-        next_btn.setFixedSize(38, 36)
-        month_row.addWidget(prev_btn)
-        month_row.addWidget(month_label, 1)
-        month_row.addWidget(next_btn)
-        root.addLayout(month_row)
-
-        cal = QCalendarWidget()
-        cal.setObjectName("CompactCalendar")
-        cal.setNavigationBarVisible(False)
-        cal.setGridVisible(False)
-        cal.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
-        cal.setHorizontalHeaderFormat(QCalendarWidget.HorizontalHeaderFormat.ShortDayNames)
-        cal.setLocale(QLocale("ru_RU"))
-        cal.setFirstDayOfWeek(Qt.DayOfWeek.Monday)
-        cal.setSelectedDate(self._value.date())
-        cal.setMinimumHeight(270)
-        cal.setMaximumHeight(300)
-        root.addWidget(cal)
-
-        def update_month(year: int, month: int):
-            month_label.setText(f"{self.MONTHS[max(1, min(12, month)) - 1]}  {year}")
-
-        update_month(cal.yearShown(), cal.monthShown())
-        cal.currentPageChanged.connect(update_month)
-        prev_btn.clicked.connect(cal.showPreviousMonth)
-        next_btn.clicked.connect(cal.showNextMonth)
-
-        time_caption = QLabel("Время")
-        time_caption.setObjectName("CardTitle")
-        root.addWidget(time_caption)
-
-        time_row = QHBoxLayout()
-        time_row.setSpacing(7)
-        parts = []
-        current_time = self._value.time()
-        for initial, max_value in ((current_time.hour(), 23), (current_time.minute(), 59), (current_time.second(), 59)):
-            edit = QLineEdit(self._two(initial))
-            edit.setObjectName("TimePart")
-            edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            edit.setMaxLength(2)
-            edit.setValidator(QIntValidator(0, max_value, edit))
-            edit.setFixedWidth(58)
-            edit.setMinimumHeight(42)
-            parts.append(edit)
-        time_row.addStretch(1)
-        time_row.addWidget(parts[0])
-        colon1 = QLabel(":")
-        colon1.setObjectName("BigValue")
-        time_row.addWidget(colon1)
-        time_row.addWidget(parts[1])
-        colon2 = QLabel(":")
-        colon2.setObjectName("BigValue")
-        time_row.addWidget(colon2)
-        time_row.addWidget(parts[2])
-        time_row.addStretch(1)
-        root.addLayout(time_row)
-
-        quick = QHBoxLayout()
-        quick.setSpacing(6)
-        now_btn = QPushButton("Сейчас")
-        zero_btn = QPushButton("00:00:00")
-        end_btn = QPushButton("23:59:59")
-        for b in (now_btn, zero_btn, end_btn):
-            b.setProperty("role", "ghost")
-        quick.addWidget(now_btn)
-        quick.addWidget(zero_btn)
-        quick.addWidget(end_btn)
-        quick.addStretch(1)
-        root.addLayout(quick)
-
-        def set_time(qtime):
-            parts[0].setText(self._two(qtime.hour()))
-            parts[1].setText(self._two(qtime.minute()))
-            parts[2].setText(self._two(qtime.second()))
-
-        def set_now_minute():
-            t = QTime.currentTime()
-            set_time(QTime(t.hour(), t.minute(), 0))
-
-        now_btn.clicked.connect(set_now_minute)
-        zero_btn.clicked.connect(lambda: set_time(QTime(0, 0, 0)))
-        end_btn.clicked.connect(lambda: set_time(QTime(23, 59, 59)))
-
-        buttons = QHBoxLayout()
-        buttons.addStretch(1)
-        cancel = QPushButton("Отмена")
-        ok = QPushButton("Готово")
-        ok.setProperty("role", "primary")
-        buttons.addWidget(cancel)
-        buttons.addWidget(ok)
-        root.addLayout(buttons)
-        cancel.clicked.connect(self._close_popup)
-
-        def accept_value():
-            values = []
-            maxima = (23, 59, 59)
-            for edit, maximum in zip(parts, maxima):
-                raw = edit.text().strip()
-                if not raw:
-                    edit.setFocus()
-                    return
-                value = int(raw)
-                if not 0 <= value <= maximum:
-                    edit.setFocus()
-                    edit.selectAll()
-                    return
-                values.append(value)
-            qtime = QTime(values[0], values[1], values[2])
-            self.setValue(QDateTime(cal.selectedDate(), qtime))
-            self._close_popup()
-
-        ok.clicked.connect(accept_value)
-        for edit in parts:
-            edit.returnPressed.connect(accept_value)
-
-        popup.adjustSize()
-        pos = self.button.mapToGlobal(QPoint(0, self.button.height() + 5))
-        screen = QGuiApplication.screenAt(pos) or QGuiApplication.primaryScreen()
-        if screen:
-            area = screen.availableGeometry()
-            popup.adjustSize()
-            x = min(max(area.left() + 8, pos.x()), area.right() - popup.width() - 8)
-            y = pos.y()
-            if y + popup.height() > area.bottom() - 8:
-                y = self.button.mapToGlobal(QPoint(0, -popup.height() - 5)).y()
-            pos = QPoint(x, max(area.top() + 8, y))
-        popup.move(pos)
-        self._popup = popup
-        app = QApplication.instance()
-        if app is not None:
-            app.installEventFilter(self)
-
-        def _popup_destroyed(*_):
-            if self._popup is popup:
-                self._popup = None
-            app2 = QApplication.instance()
-            if app2 is not None:
-                try:
-                    app2.removeEventFilter(self)
-                except Exception:
-                    pass
-
-        popup.destroyed.connect(_popup_destroyed)
-        popup.show()
-        popup.raise_()
-        popup.activateWindow()
-
-
-class Toast(Card):
-    def __init__(self, parent=None):
-        super().__init__(parent, kind="hero")
-        self.setVisible(False)
-        self.setMinimumWidth(330)
-        self.setMaximumWidth(520)
-        self._opacity = QGraphicsOpacityEffect(self)
-        self.setGraphicsEffect(self._opacity)
-        self._fade = QPropertyAnimation(self._opacity, b"opacity", self)
-        self._fade.setDuration(160)
-        self._fade.finished.connect(self._fade_finished)
-        self._hiding = False
-        self._timer = QTimer(self)
-        self._timer.setSingleShot(True)
-        self._timer.timeout.connect(self.hideAnimated)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(15, 12, 15, 12)
-        lay.setSpacing(3)
-        self.title = QLabel("")
-        self.title.setObjectName("Value")
-        self.text = QLabel("")
-        self.text.setObjectName("Muted")
-        self.text.setWordWrap(True)
-        lay.addWidget(self.title)
-        lay.addWidget(self.text)
-
-    def showMessage(self, title: str, text: str = "", timeout_ms: int = 3500):
-        self._hiding = False
-        self.title.setText(title)
-        self.text.setText(text)
-        self.adjustSize()
-        self.setVisible(True)
-        self.raise_()
-        self._fade.stop()
-        self._opacity.setOpacity(0.0)
-        self._fade.setStartValue(0.0)
-        self._fade.setEndValue(1.0)
-        self._fade.start()
-        self._timer.start(max(500, int(timeout_ms)))
-
-    def hideAnimated(self):
-        if not self.isVisible():
-            return
-        self._hiding = True
-        self._fade.stop()
-        self._fade.setStartValue(self._opacity.opacity())
-        self._fade.setEndValue(0.0)
-        self._fade.start()
-
-    def _fade_finished(self):
-        if self._hiding:
-            self._hiding = False
-            self.setVisible(False)
-
+        popup = DateTimePopup(self._value, self)
+        popup.valueApplied.connect(self.setValue)
+        popup.move(self.mapToGlobal(self.rect().bottomLeft()))
+        popup.exec()

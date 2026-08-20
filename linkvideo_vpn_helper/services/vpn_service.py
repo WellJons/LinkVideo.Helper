@@ -922,17 +922,26 @@ class VPNService:
                             progress_callback(create_index, total_planned, login)
                         except Exception:
                             pass
-        except Exception:
+        except Exception as operation_error:
             # Rollback всего batch, включая объект, на котором ошибка произошла
             # между созданием Profile/Secret/NAT.
+            rollback_errors: list[str] = []
             for item in reversed(created_ids):
-                self._rollback_create(
-                    server,
-                    creds,
-                    str(item.get("profile_id", "") or ""),
-                    str(item.get("secret_id", "") or ""),
-                    list(item.get("nat_ids", []) or []),
-                )
+                try:
+                    self._rollback_create(
+                        server,
+                        creds,
+                        str(item.get("profile_id", "") or ""),
+                        str(item.get("secret_id", "") or ""),
+                        list(item.get("nat_ids", []) or []),
+                    )
+                except Exception as rollback_error:
+                    rollback_errors.append(str(rollback_error))
+            if rollback_errors:
+                raise RuntimeError(
+                    f"{operation_error}. Автоматический откат выполнен не полностью: "
+                    + "; ".join(rollback_errors)
+                ) from operation_error
             raise
 
         return created
@@ -967,15 +976,21 @@ class VPNService:
                         "to-addresses": client.remote_address, "to-ports": str(external_port),
                         "comment": login, "disabled": "no",
                     }))
-            except Exception:
+            except Exception as operation_error:
                 # Операция добавления нескольких портов атомарна для Helper:
                 # если один add не прошёл, удаляем всё, что добавили в этой операции.
+                rollback_errors: list[str] = []
                 for rid in reversed(added_ids):
                     try:
                         if rid:
                             api.remove("/ip/firewall/nat", rid)
-                    except Exception:
-                        pass
+                    except Exception as rollback_error:
+                        rollback_errors.append(f"NAT {rid}: {rollback_error}")
+                if rollback_errors:
+                    raise RuntimeError(
+                        f"{operation_error}. Автоматический откат портов выполнен не полностью: "
+                        + "; ".join(rollback_errors)
+                    ) from operation_error
                 raise
 
         refreshed = self.get_client(server, creds, login)
@@ -1474,17 +1489,27 @@ class VPNService:
         return payload
 
     def _rollback_create(self, server: str, creds: SessionCredentials, profile_id: str, secret_id: str, nat_ids: List[str]) -> None:
-        try:
-            with RouterOSAPIClient(server, creds.username, creds.password, port=creds.port, timeout=creds.timeout) as api:
-                for rid in nat_ids:
-                    if rid:
-                        api.remove("/ip/firewall/nat", rid)
-                if secret_id:
+        errors: list[str] = []
+        with RouterOSAPIClient(server, creds.username, creds.password, port=creds.port, timeout=creds.timeout) as api:
+            for rid in nat_ids:
+                if not rid:
+                    continue
+                try:
+                    api.remove("/ip/firewall/nat", rid)
+                except Exception as exc:
+                    errors.append(f"NAT {rid}: {exc}")
+            if secret_id:
+                try:
                     api.remove("/ppp/secret", secret_id)
-                if profile_id:
+                except Exception as exc:
+                    errors.append(f"Secret {secret_id}: {exc}")
+            if profile_id:
+                try:
                     api.remove("/ppp/profile", profile_id)
-        except Exception:
-            pass
+                except Exception as exc:
+                    errors.append(f"Profile {profile_id}: {exc}")
+        if errors:
+            raise RuntimeError("не удалось полностью удалить созданные объекты: " + "; ".join(errors))
 
     def _find_next_ip(self, used_ips: set[str]) -> str:
         ip = DEFAULT_START_IP

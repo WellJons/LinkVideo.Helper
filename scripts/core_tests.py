@@ -333,6 +333,8 @@ try:
             return "id-created"
         def remove(self, path, item_id):
             type(self).removed.append((path, item_id))
+            if type(self).mode == "rollback_fail" and item_id == "nat-fail":
+                raise RuntimeError("simulated rollback failure")
         def set(self, path, item_id, data):
             pass
 
@@ -393,6 +395,21 @@ try:
         check("simulated recreate failure" in str(exc), "recreate rollback test trigger")
     check(("/ip/firewall/nat", "old-nat") in _RollbackRouter.removed, "old NAT removed before recreate")
     check(_RollbackRouter.recreate_add_count == 2, "old NAT restored after recreate failure")
+
+    # Rollback must continue after one failed deletion and must report the
+    # incomplete cleanup instead of silently claiming the original operation
+    # was atomic.
+    _RollbackRouter.mode = "rollback_fail"
+    _RollbackRouter.removed = []
+    v = VPNService()
+    try:
+        v._rollback_create("vpn-test", creds, "profile-created", "secret-created", ["nat-fail", "nat-ok"])
+        raise AssertionError("expected simulated rollback failure")
+    except RuntimeError as exc:
+        check("simulated rollback failure" in str(exc), "rollback failure is surfaced")
+    check(("/ip/firewall/nat", "nat-ok") in _RollbackRouter.removed, "rollback continues after NAT removal failure")
+    check(("/ppp/secret", "secret-created") in _RollbackRouter.removed, "rollback still removes Secret")
+    check(("/ppp/profile", "profile-created") in _RollbackRouter.removed, "rollback still removes Profile")
 finally:
     vpn_module.RouterOSAPIClient = _original_router_client
 

@@ -13,6 +13,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: publish-public-update
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -30,8 +34,8 @@ jobs:
           else
             TAG="${{ github.event.release.tag_name }}"
           fi
-          if [ -z "$TAG" ]; then
-            echo "Release tag is empty" >&2
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "Release tag must match vX.Y.Z or vX.Y.Z.W, got: $TAG" >&2
             exit 1
           fi
           VERSION="${TAG#v}"
@@ -46,7 +50,20 @@ jobs:
             exit 1
           fi
 
-      - name: Download private release assets
+      - name: Require an already published final source release
+        env:
+          SOURCE_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          TAG="${{ steps.release.outputs.tag }}"
+          IS_DRAFT="$(GH_TOKEN="$SOURCE_TOKEN" gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')"
+          IS_PRERELEASE="$(GH_TOKEN="$SOURCE_TOKEN" gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq '.isPrerelease')"
+          if [ "$IS_DRAFT" != "false" ] || [ "$IS_PRERELEASE" != "false" ]; then
+            echo "Only a published, non-prerelease source Release may enter the public update channel." >&2
+            exit 1
+          fi
+
+      - name: Download source release assets
         env:
           SOURCE_TOKEN: ${{ github.token }}
         shell: bash
@@ -55,15 +72,19 @@ jobs:
           GH_TOKEN="$SOURCE_TOKEN" gh release download "${{ steps.release.outputs.tag }}" \
             --repo "$GITHUB_REPOSITORY" \
             --dir release-files \
-            --pattern '*Setup.exe'
+            --pattern 'LinkVideo.Helper_Setup.exe'
           GH_TOKEN="$SOURCE_TOKEN" gh release download "${{ steps.release.outputs.tag }}" \
             --repo "$GITHUB_REPOSITORY" \
             --dir release-files \
-            --pattern 'LinkVideo.Helper_Patch_*.exe' || true
+            --pattern 'verification.json'
           ls -lah release-files
-          SETUP_FILE="$(find release-files -maxdepth 1 -type f -name '*Setup.exe' | head -n 1)"
-          if [ -z "$SETUP_FILE" ]; then
-            echo "Setup executable was not found in the source release." >&2
+          SETUP_FILE="release-files/LinkVideo.Helper_Setup.exe"
+          if [ ! -f "$SETUP_FILE" ]; then
+            echo "Authoritative LinkVideo.Helper_Setup.exe was not found in the source release." >&2
+            exit 1
+          fi
+          if [ ! -f "release-files/verification.json" ]; then
+            echo "Authoritative verification.json was not found in the source release." >&2
             exit 1
           fi
           echo "SETUP_FILE=$SETUP_FILE" >> "$GITHUB_ENV"
@@ -75,6 +96,93 @@ jobs:
           SHA256="$(sha256sum "$SETUP_FILE" | awk '{print $1}')"
           echo "SETUP_SHA256=$SHA256" >> "$GITHUB_ENV"
           echo "$SHA256  $SETUP_NAME"
+
+      - name: Validate source verification evidence
+        env:
+          SOURCE_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          TAG="${{ steps.release.outputs.tag }}"
+          VERSION="${{ steps.release.outputs.version }}"
+          SOURCE_COMMIT="$(GH_TOKEN="$SOURCE_TOKEN" gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq '.sha')"
+          if [[ ! "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve source tag commit: $TAG" >&2
+            exit 1
+          fi
+          python3 - "$VERSION" "$SETUP_SHA256" "$SOURCE_COMMIT" <<'PY'
+          import json
+          import pathlib
+          import re
+          import sys
+
+          version, setup_sha, source_commit = sys.argv[1:4]
+          report = json.loads(pathlib.Path("release-files/verification.json").read_text(encoding="utf-8-sig"))
+
+          def normalized(value):
+              text = str(value or "").strip()
+              if not re.fullmatch(r"\d+(?:\.\d+){1,3}", text):
+                  raise AssertionError(f"invalid verification version: {text!r}")
+              parts = [int(part) for part in text.split(".")]
+              while len(parts) > 1 and parts[-1] == 0:
+                  parts.pop()
+              return tuple(parts)
+
+          assert normalized(report.get("version")) == normalized(version), report
+          assert normalized(report.get("setup_product_version")) == normalized(version), report
+          assert str(report.get("setup_sha256", "")).lower() == setup_sha.lower(), report
+          assert str(report.get("source_commit", "")).lower() == source_commit.lower(), report
+          for field in (
+              "exact_setup_self_test",
+              "python_release_preflight",
+              "ruff_critical",
+              "go_vet",
+              "patch_pipeline_compile",
+          ):
+              assert report.get(field) == "passed", (field, report.get(field))
+          PY
+
+      - name: Protect public channel from rollback or same-version rebuild
+        shell: bash
+        run: |
+          VERSION="${{ steps.release.outputs.version }}"
+          CURRENT=/tmp/current-update-manifest.json
+          MANIFEST_URL="https://raw.githubusercontent.com/$UPDATES_REPO/main/update-manifest.json?preflight=${{ github.run_id }}-${{ github.run_attempt }}"
+          HTTP_CODE="$(curl --silent --show-error --location --output "$CURRENT" --write-out '%{http_code}' "$MANIFEST_URL")"
+          case "$HTTP_CODE" in
+            200)
+              python3 - "$VERSION" "$SETUP_SHA256" "$CURRENT" <<'PY'
+          import json
+          import pathlib
+          import re
+          import sys
+
+          target, target_sha, path = sys.argv[1:4]
+          current = json.loads(pathlib.Path(path).read_text(encoding="utf-8-sig"))
+
+          def version_tuple(value):
+              text = str(value or "").strip()
+              if not re.fullmatch(r"\d+(?:\.\d+){1,3}", text):
+                  raise SystemExit(f"Public manifest has an invalid version: {text!r}")
+              return tuple(int(part) for part in text.split(".")) + (0,) * (4 - len(text.split(".")))
+
+          target_tuple = version_tuple(target)
+          current_tuple = version_tuple(current.get("version"))
+          if target_tuple < current_tuple:
+              raise SystemExit(f"Refusing public channel rollback: {target} < {current.get('version')}")
+          if target_tuple == current_tuple:
+              current_sha = str(current.get("sha256", "")).strip().lower()
+              if current_sha != target_sha.lower():
+                  raise SystemExit("Refusing to replace an already published version with different Setup bytes")
+          PY
+              ;;
+            404)
+              echo "No public manifest exists yet; this will be the baseline release."
+              ;;
+            *)
+              echo "Could not safely read current public manifest (HTTP $HTTP_CODE)." >&2
+              exit 1
+              ;;
+          esac
 
       - name: Publish public release assets
         shell: bash
@@ -89,11 +197,29 @@ jobs:
           if gh release view "$TAG" --repo "$UPDATES_REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" "${ASSETS[@]}" --repo "$UPDATES_REPO" --clobber
           else
-            ARGS=(release create "$TAG" "${ASSETS[@]}" --repo "$UPDATES_REPO" --title "LinkVideo.Helper $VERSION" --notes "Публичный канал обновлений LinkVideo.Helper. Исходный код хранится в приватном репозитории.")
+            ARGS=(release create "$TAG" "${ASSETS[@]}" --repo "$UPDATES_REPO" --title "LinkVideo.Helper $VERSION" --notes "Публичный канал обновлений LinkVideo.Helper. Исходный код: https://github.com/WellJons/LinkVideo.Helper")
             if [[ "$TAG" == *-* ]]; then
               ARGS+=(--prerelease)
             fi
             gh "${ARGS[@]}"
+          fi
+
+      - name: Verify uploaded Setup before exposing manifest
+        shell: bash
+        run: |
+          TAG="${{ steps.release.outputs.tag }}"
+          VERSION="${{ steps.release.outputs.version }}"
+          DOWNLOAD_URL="https://github.com/$UPDATES_REPO/releases/download/$TAG/$SETUP_NAME"
+          curl --fail --silent --show-error --location --retry 3 \
+            "$DOWNLOAD_URL" -o /tmp/LinkVideo.Helper_Setup.prepublish.exe
+          if [ "$(head -c 2 /tmp/LinkVideo.Helper_Setup.prepublish.exe)" != "MZ" ]; then
+            echo "Public release asset is not a Windows EXE." >&2
+            exit 1
+          fi
+          PUBLIC_SHA256="$(sha256sum /tmp/LinkVideo.Helper_Setup.prepublish.exe | awk '{print $1}')"
+          if [ "$PUBLIC_SHA256" != "$SETUP_SHA256" ]; then
+            echo "Pre-publish Setup SHA-256 mismatch: $PUBLIC_SHA256 != $SETUP_SHA256" >&2
+            exit 1
           fi
 
       - name: Update public manifest
@@ -104,27 +230,13 @@ jobs:
           DOWNLOAD_URL="https://github.com/$UPDATES_REPO/releases/download/$TAG/$SETUP_NAME"
           rm -rf updates-repo
           gh repo clone "$UPDATES_REPO" updates-repo
-          python3 - "$VERSION" "$TAG" "$DOWNLOAD_URL" "$SETUP_SHA256" "$UPDATES_REPO" "$PWD/release-files" <<'PY'
-          import hashlib
+          python3 - "$VERSION" "$TAG" "$DOWNLOAD_URL" "$SETUP_SHA256" "$UPDATES_REPO" <<'PY'
           import json
           import pathlib
           import re
           import sys
 
-          version, tag, setup_url, setup_sha, repo, assets_dir = sys.argv[1:7]
-          patches = {}
-          assets = pathlib.Path(assets_dir)
-          pattern = re.compile(r"^LinkVideo\.Helper_Patch_(\d+(?:\.\d+){1,3})_to_(\d+(?:\.\d+){1,3})\.exe$")
-          for path in assets.glob("LinkVideo.Helper_Patch_*.exe"):
-              match = pattern.match(path.name)
-              if not match:
-                  continue
-              from_version, to_version = match.groups()
-              if to_version != version:
-                  continue
-              digest = hashlib.sha256(path.read_bytes()).hexdigest()
-              url = f"https://github.com/{repo}/releases/download/{tag}/{path.name}"
-              patches[from_version] = {"download_url": url, "sha256": digest}
+          version, tag, setup_url, setup_sha, repo = sys.argv[1:6]
 
           manifest = {
               "version": version,
@@ -132,9 +244,29 @@ jobs:
               "sha256": setup_sha,
               "notes": f"Доступна версия LinkVideo.Helper {version}.",
               "mandatory": False,
-              "patches": patches,
+              # 3.0.11 production rollout is deliberately full-Setup-only.
+              # The full installer performs a staged atomic directory switch;
+              # the dormant differential patch pipeline is not published until
+              # it has equivalent crash/power-loss recovery.
+              "patches": {},
           }
           output = pathlib.Path("updates-repo/update-manifest.json")
+          if output.exists():
+              previous = json.loads(output.read_text(encoding="utf-8-sig"))
+
+              def version_tuple(value):
+                  text = str(value or "").strip()
+                  if not re.fullmatch(r"\d+(?:\.\d+){1,3}", text):
+                      raise SystemExit(f"Existing public manifest version is invalid: {text!r}")
+                  parts = [int(part) for part in text.split(".")]
+                  return tuple(parts + [0] * (4 - len(parts)))
+
+              target_version = version_tuple(version)
+              previous_version = version_tuple(previous.get("version"))
+              if target_version < previous_version:
+                  raise SystemExit(f"Refusing manifest rollback: {version} < {previous.get('version')}")
+              if target_version == previous_version and str(previous.get("sha256", "")).lower() != setup_sha.lower():
+                  raise SystemExit("Refusing same-version manifest with a different Setup SHA-256")
           output.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
           PY
           cd updates-repo
@@ -151,6 +283,42 @@ jobs:
       - name: Verify public manifest
         shell: bash
         run: |
-          curl --fail --silent --show-error \
-            "https://raw.githubusercontent.com/$UPDATES_REPO/main/update-manifest.json" \
-            | python3 -m json.tool
+          TAG="${{ steps.release.outputs.tag }}"
+          VERSION="${{ steps.release.outputs.version }}"
+          MANIFEST_URL="https://raw.githubusercontent.com/$UPDATES_REPO/main/update-manifest.json"
+          DOWNLOAD_URL="https://github.com/$UPDATES_REPO/releases/download/$TAG/$SETUP_NAME"
+          VERIFIED=0
+          for attempt in {1..12}; do
+            if curl --fail --silent --show-error --location "$MANIFEST_URL?release=$TAG&attempt=$attempt" -o /tmp/update-manifest.json \
+              && python3 - "$VERSION" "$DOWNLOAD_URL" "$SETUP_SHA256" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          version, download_url, sha256 = sys.argv[1:4]
+          manifest = json.loads(pathlib.Path("/tmp/update-manifest.json").read_text(encoding="utf-8"))
+          assert manifest.get("version") == version, manifest
+          assert manifest.get("download_url") == download_url, manifest
+          assert manifest.get("sha256") == sha256, manifest
+          assert isinstance(manifest.get("patches"), dict), manifest
+          PY
+            then
+              VERIFIED=1
+              break
+            fi
+            echo "Public manifest has not propagated yet (attempt $attempt/12)."
+            sleep 5
+          done
+          if [ "$VERIFIED" -ne 1 ]; then
+            echo "Public manifest verification failed." >&2
+            exit 1
+          fi
+
+          curl --fail --silent --show-error --location --retry 3 \
+            "$DOWNLOAD_URL" -o /tmp/LinkVideo.Helper_Setup.exe
+          PUBLIC_SHA256="$(sha256sum /tmp/LinkVideo.Helper_Setup.exe | awk '{print $1}')"
+          if [ "$PUBLIC_SHA256" != "$SETUP_SHA256" ]; then
+            echo "Public Setup SHA-256 mismatch: $PUBLIC_SHA256 != $SETUP_SHA256" >&2
+            exit 1
+          fi
+          echo "Public update verified: $VERSION $PUBLIC_SHA256"

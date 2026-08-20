@@ -7,6 +7,7 @@ import re
 import subprocess
 import tempfile
 import time
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,14 +20,29 @@ GITHUB_UPDATE_MANIFEST_URL = (
     "https://raw.githubusercontent.com/WellJons/LinkVideo.Helper.Updates/main/update-manifest.json"
 )
 
-# Transition/fallback channel. Keep this URL until the installed 3.0.7-and-older
-# population has had enough time to move to a GitHub-aware build.
+# Transition/fallback channel. GitHub is authoritative for 3.0.10+; Drive stays
+# available as an emergency fallback while the migrated fleet settles.
 LEGACY_GOOGLE_DRIVE_MANIFEST_URL = (
     "https://drive.google.com/uc?export=download&id=1uHMqX7hyyERZRhOPG7jojcVKaa5e2AOR"
 )
 
 # Backward compatibility for code/tests that imported the old constant.
 UPDATE_MANIFEST_URL = GITHUB_UPDATE_MANIFEST_URL
+
+_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:\.\d+)?$")
+_MAX_MANIFEST_BYTES = 1024 * 1024
+_MAX_SETUP_BYTES = 1536 * 1024 * 1024
+_MAX_PATCH_BYTES = 768 * 1024 * 1024
+_TRUSTED_UPDATE_HOSTS = frozenset(
+    {
+        "github.com",
+        "raw.githubusercontent.com",
+        "objects.githubusercontent.com",
+        "release-assets.githubusercontent.com",
+        "drive.google.com",
+        "drive.usercontent.google.com",
+    }
+)
 
 
 @dataclass(slots=True)
@@ -69,21 +85,57 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest().lower()
 
 
-def _validate_sha256(value: str, *, field_name: str = "sha256") -> str:
+def _validate_sha256(value: str, *, field_name: str = "sha256", required: bool = False) -> str:
     value = str(value or "").strip().lower()
+    if required and not value:
+        raise RuntimeError(f"В манифесте обновления не указан {field_name}")
     if value and not re.fullmatch(r"[0-9a-f]{64}", value):
         raise RuntimeError(f"В манифесте обновления указан некорректный {field_name}")
     return value
 
 
+def _validate_version(value: str, *, field_name: str = "version") -> str:
+    value = str(value or "").replace("\x00", "").strip()
+    if not _VERSION_RE.fullmatch(value):
+        raise RuntimeError(f"В манифесте обновления указана некорректная {field_name}")
+    return value
+
+
+def _validate_update_url(value: str, *, source: str = "") -> str:
+    value = str(value or "").strip()
+    parsed = urllib.parse.urlsplit(value)
+    host = (parsed.hostname or "").lower()
+    if source == "custom" and parsed.scheme.lower() == "file":
+        return value
+    if parsed.scheme.lower() != "https" or not host:
+        raise RuntimeError("Ссылка обновления должна использовать HTTPS")
+    trusted = host in _TRUSTED_UPDATE_HOSTS or host.endswith((".githubusercontent.com", ".googleusercontent.com"))
+    if source in {"github", "google_drive", "fallback"} and not trusted:
+        raise RuntimeError("Манифест вернул недоверенный адрес обновления")
+    return urllib.parse.urlunsplit(parsed)
+
+
 def _windows_product_version(path: Path) -> str:
-    """Read ProductVersion from an EXE without third-party dependencies."""
+    """Read ProductVersion without passing a filesystem path through -Command.
+
+    Windows PowerShell 5.1 parses tokens following ``-Command <script>`` as more
+    PowerShell syntax in this launch shape.  That was the 2.0.2 updater failure:
+    a downloaded ``C:\\...\\Setup.exe.download`` path became a ParserError before
+    the new installer could start.  The path now travels only through the child
+    process environment, so spaces, non-ASCII user names and the .download
+    suffix cannot change the command grammar.
+    """
     if os.name != "nt":
         return ""
+
+    env = os.environ.copy()
+    env["LINKVIDEO_UPDATE_FILE"] = str(Path(path))
     script = (
         "$ErrorActionPreference='Stop';"
-        "$p=(Get-Item -LiteralPath $args[0]).VersionInfo.ProductVersion;"
-        "[Console]::Out.Write([string]$p)"
+        "$p=[Environment]::GetEnvironmentVariable('LINKVIDEO_UPDATE_FILE');"
+        "if([string]::IsNullOrWhiteSpace($p)){throw 'update file path is empty'};"
+        "$v=(Get-Item -LiteralPath $p).VersionInfo.ProductVersion;"
+        "[Console]::Out.Write([string]$v)"
     )
     result = subprocess.run(
         [
@@ -94,7 +146,6 @@ def _windows_product_version(path: Path) -> str:
             "Bypass",
             "-Command",
             script,
-            str(path),
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -103,12 +154,14 @@ def _windows_product_version(path: Path) -> str:
         errors="replace",
         timeout=15,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        env=env,
     )
     if result.returncode != 0:
-        raise RuntimeError(
-            "Не удалось проверить версию скачанного установщика: "
-            + (result.stderr or "PowerShell error").strip()
-        )
+        detail = (result.stderr or "").replace("\x00", "").strip()
+        if detail:
+            detail = detail.splitlines()[0][:180]
+            raise RuntimeError(f"Не удалось определить версию скачанного установщика ({detail})")
+        raise RuntimeError("Не удалось определить версию скачанного установщика")
     return (result.stdout or "").replace("\x00", "").strip()
 
 
@@ -143,22 +196,22 @@ class UpdateService:
             },
         )
         with urllib.request.urlopen(request, timeout=15) as response:
-            raw = response.read().decode("utf-8-sig")
+            payload = response.read(_MAX_MANIFEST_BYTES + 1)
+        if len(payload) > _MAX_MANIFEST_BYTES:
+            raise RuntimeError("Манифест обновления превышает 1 МБ")
+        raw = payload.decode("utf-8-sig")
         data = json.loads(raw)
         if not isinstance(data, dict):
             raise RuntimeError("Манифест обновления должен содержать JSON-объект")
         return data
 
     def _parse_manifest(self, data: dict, *, source: str) -> UpdateInfo:
-        latest = str(data.get("version", "")).strip()
+        latest = _validate_version(data.get("version", ""))
         # GitHub channel uses download_url like LinkVideo.Monitor. Legacy Drive
         # manifests use url. Accept both during and after migration.
         full_setup_url = str(data.get("download_url") or data.get("url") or "").strip()
         notes = str(data.get("notes", "")).strip()
         full_setup_hash = _validate_sha256(data.get("sha256", ""))
-
-        if not latest:
-            raise RuntimeError("В файле обновления не указана версия")
 
         has_update = _version_tuple(latest) > _version_tuple(APP_VERSION)
         selected_url = full_setup_url
@@ -167,14 +220,21 @@ class UpdateService:
 
         # Optional differential patch. The public manifest may contain:
         # "patches": {
-        #   "3.0.7": {"url": "...exe", "sha256": "..."}
+        #   "3.0.10": {"url": "...exe", "sha256": "..."}
         # }
         # The patch is selected only for an exact current-version match. Any
         # other client automatically receives the full setup, so old versions
         # can never be stranded by a missing patch.
         patches = data.get("patches") or {}
         if has_update and isinstance(patches, dict):
-            patch = patches.get(APP_VERSION)
+            patch = next(
+                (
+                    candidate
+                    for from_version, candidate in patches.items()
+                    if _same_version(str(from_version), APP_VERSION)
+                ),
+                None,
+            )
             if isinstance(patch, dict):
                 patch_url = str(patch.get("download_url") or patch.get("url") or "").strip()
                 patch_hash = _validate_sha256(patch.get("sha256", ""), field_name="patch sha256")
@@ -185,6 +245,13 @@ class UpdateService:
 
         if has_update and not selected_url:
             raise RuntimeError("Для новой версии не указана ссылка на установщик или патч")
+        if has_update:
+            selected_url = _validate_update_url(selected_url, source=source)
+            selected_hash = _validate_sha256(
+                selected_hash,
+                field_name="patch sha256" if artifact_kind == "patch" else "sha256",
+                required=True,
+            )
 
         return UpdateInfo(
             has_update,
@@ -219,10 +286,14 @@ class UpdateService:
         artifact_kind: str = "",
     ) -> Path:
         # Older UI code does not pass artifact_kind yet. Infer a differential
-        # patch from the published asset name so 3.0.8 remains drop-in
-        # compatible with the existing MainWindow update flow.
+        # patch from the published asset name so current MainWindow integration
+        # remains compatible with both full and differential updates.
         if artifact_kind not in {"setup", "patch"}:
             artifact_kind = "patch" if re.search(r"(?:^|[/_.-])patch(?:[/_.-]|$)", setup_url, re.I) else "setup"
+        channel_source = self.channels[0][0] if self.channels else ""
+        setup_url = _validate_update_url(setup_url, source=channel_source)
+        expected_hash = _validate_sha256(expected_sha256, required=True)
+        max_bytes = _MAX_PATCH_BYTES if artifact_kind == "patch" else _MAX_SETUP_BYTES
         target_dir = Path(tempfile.gettempdir()) / "LinkVideoHelperUpdate"
         target_dir.mkdir(parents=True, exist_ok=True)
         basename = "LinkVideo.Helper_Patch_Update.exe" if artifact_kind == "patch" else "LinkVideo.Helper_Setup_Update.exe"
@@ -235,8 +306,16 @@ class UpdateService:
             headers={"User-Agent": f"LinkVideo.Helper/{APP_VERSION}", "Cache-Control": "no-cache"},
         )
         try:
+            if progress_callback:
+                progress_callback(0)
             with urllib.request.urlopen(request, timeout=60) as response:
-                total = int(response.headers.get("Content-Length", 0) or 0)
+                _validate_update_url(response.geturl(), source=channel_source)
+                try:
+                    total = int(response.headers.get("Content-Length", 0) or 0)
+                except (TypeError, ValueError, OverflowError):
+                    total = 0
+                if total > max_bytes:
+                    raise RuntimeError("Файл обновления имеет недопустимый размер")
                 done = 0
                 with temp_file.open("wb") as handle:
                     while True:
@@ -245,8 +324,10 @@ class UpdateService:
                             break
                         handle.write(chunk)
                         done += len(chunk)
+                        if done > max_bytes:
+                            raise RuntimeError("Файл обновления превысил допустимый размер")
                         if progress_callback and total:
-                            progress_callback(min(100, int(done * 100 / total)))
+                            progress_callback(min(99, int(done * 100 / total)))
 
             if not temp_file.exists() or temp_file.stat().st_size < 64 * 1024:
                 raise RuntimeError("Сервер обновлений вернул слишком маленький файл")
@@ -254,14 +335,12 @@ class UpdateService:
                 if handle.read(2) != b"MZ":
                     raise RuntimeError("По ссылке обновления получен не Windows EXE-файл")
 
-            expected_hash = _validate_sha256(expected_sha256)
-            if expected_hash:
-                actual_hash = _sha256(temp_file)
-                if actual_hash != expected_hash:
-                    raise RuntimeError(
-                        "Проверка целостности обновления не пройдена. "
-                        "SHA-256 скачанного файла отличается от манифеста."
-                    )
+            actual_hash = _sha256(temp_file)
+            if actual_hash != expected_hash:
+                raise RuntimeError(
+                    "Проверка целостности обновления не пройдена. "
+                    "SHA-256 скачанного файла отличается от манифеста."
+                )
 
             # Full installers carry ProductVersion and are checked against the
             # target release. Differential patch executables are authenticated
@@ -285,13 +364,22 @@ class UpdateService:
             raise
 
     def run_setup(self, setup_path: Path) -> None:
+        """Launch the GUI installer without ever creating an intermediate console."""
         setup_path = Path(setup_path)
         if not setup_path.exists():
             raise FileNotFoundError(f"Файл обновления не найден: {setup_path}")
-        subprocess.Popen(
-            ["cmd", "/c", "start", "", str(setup_path)],
-            shell=False,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
-        )
-        time.sleep(1.5)
+
+        if os.name == "nt":
+            try:
+                os.startfile(str(setup_path))
+            except OSError:
+                flags = (
+                    int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                    | int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+                    | int(getattr(subprocess, "DETACHED_PROCESS", 0))
+                )
+                subprocess.Popen([str(setup_path)], shell=False, creationflags=flags)
+        else:
+            subprocess.Popen([str(setup_path)], shell=False)
+        time.sleep(1.0)
         os._exit(0)

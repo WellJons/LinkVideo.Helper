@@ -1,7 +1,9 @@
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 comp=(ROOT/'linkvideo_vpn_helper/ui/components.py').read_text(encoding='utf-8')
-auto=(ROOT/'linkvideo_vpn_helper/services/vpn_automation_service.py').read_text(encoding='utf-8')
+auto_public=(ROOT/'linkvideo_vpn_helper/services/vpn_automation_service.py').read_text(encoding='utf-8')
+auto_core=(ROOT/'linkvideo_vpn_helper/services/vpn_automation_service_core.py').read_text(encoding='utf-8')
+auto=auto_public+'\n'+auto_core
 theme=(ROOT/'linkvideo_vpn_helper/theme.py').read_text(encoding='utf-8')
 assert 'class BusyDialog(QDialog):' in comp
 assert 'self.hide()' in comp and 'dlg.show_centered()' in comp

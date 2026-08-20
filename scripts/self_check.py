@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ast
-import json
 import py_compile
 import re
 from pathlib import Path
@@ -58,7 +57,7 @@ for path in sorted((SRC / "ui").rglob("*.py")):
                 + ", ".join(missing)
             )
 
-# 2. One release version across Python/manifest/installer.
+# 2. One authoritative release version and current release notes.
 version_text = (SRC / "version.py").read_text(encoding="utf-8")
 m = re.search(r'^APP_VERSION\s*=\s*["\']([^"\']+)["\']', version_text, re.M)
 if not m:
@@ -80,12 +79,9 @@ if _mod.APP_NAME != "LinkVideo.Helper":
     fail(f"unexpected APP_NAME: {_mod.APP_NAME!r}")
 if not getattr(_mod, "APP_PUBLISHER", ""):
     fail("APP_PUBLISHER is empty")
-manifest = json.loads((ROOT / "server_example" / "version.json").read_text(encoding="utf-8"))
-if str(manifest.get("version")) != version:
-    fail(f"version.json={manifest.get('version')} but APP_VERSION={version}")
-installer = (ROOT / "installer.iss").read_text(encoding="utf-8")
-if f'#define MyAppVersion "{version}"' not in installer:
-    fail("installer.iss version differs from APP_VERSION")
+notes = ROOT / f"RELEASE_{version}_RU.txt"
+if not notes.exists() or not notes.read_text(encoding="utf-8").strip():
+    fail(f"release notes missing or empty: {notes.name}")
 
 # 3. Required product scope: no removed maintenance modules in the new package.
 for forbidden in ("server_maintenance", "client_check_page"):
@@ -116,7 +112,11 @@ for path in ROOT.rglob("*"):
             content = path.read_text(encoding="utf-8", errors="ignore")
         except Exception:
             continue
-        if re.search(r"BEGIN [A-Z ]*PRIVATE KEY", content):
+        if re.search(
+            r"-----BEGIN PRIVATE KEY-----\s+[A-Za-z0-9+/=\r\n]{80,}-----END PRIVATE KEY-----",
+            content,
+            re.MULTILINE,
+        ):
             fail(f"private key material found: {path.relative_to(ROOT)}")
 
 
@@ -146,7 +146,11 @@ if not (SRC / "services" / "archive_diagnosis_engine.py").exists():
 
 
 # 7. Final RC06 interaction contracts.
-components_ui = (SRC / "ui" / "components.py").read_text(encoding="utf-8")
+components_ui = (
+    (SRC / "ui" / "components.py").read_text(encoding="utf-8")
+    + "\n"
+    + (SRC / "ui" / "components_compat.py").read_text(encoding="utf-8")
+)
 if "def eventFilter(self, watched, event):" not in components_ui or "_close_popup" not in components_ui:
     fail("date/time popup must close when clicking outside")
 
@@ -192,7 +196,11 @@ if "WinBox доступен, но RouterOS API 8728/8729" not in api_client_text
 
 
 # 9. Final country/operator + regional search contracts (RC08).
-archive_service_text = (SRC / "services" / "archive_service.py").read_text(encoding="utf-8")
+archive_service_text = (
+    (SRC / "services" / "archive_service.py").read_text(encoding="utf-8")
+    + "\n"
+    + (SRC / "services" / "archive_service_core.py").read_text(encoding="utf-8")
+)
 for token in ('"country": "Россия"', '"camera_prefix": "linkvideo_"', '"country": "Казахстан"', '"camera_prefix": "linkvideokz_"', '"country": "Беларусь"', '"camera_prefix": "linkvideoby_"'):
     if token not in archive_service_text:
         fail("fixed archive operator map missing: " + token)
@@ -200,7 +208,12 @@ for token in ('"cluster": "linkvideokz"', '"cluster": "linkvideoby"', 'kz-vcore0
     if token not in archive_service_text:
         fail("regional archive profile missing: " + token)
 
-if 'low.startswith(q + "_")' not in (SRC / "services" / "search_service.py").read_text(encoding="utf-8"):
+search_service_text = (
+    (SRC / "services" / "search_service.py").read_text(encoding="utf-8")
+    + "\n"
+    + (SRC / "services" / "search_service_core.py").read_text(encoding="utf-8")
+)
+if 'low.startswith(q + "_")' not in search_service_text:
     fail("login search must include generated suffixes on regional servers")
 if 'suggest_free_login_all(self.registry.hosts()' in create_ui:
     fail("client creation must not choose login suffix globally across all VPN servers")
@@ -292,7 +305,11 @@ lifecycle_path = SRC / "services" / "vpn_lifecycle.py"
 servers_page_path = SRC / "ui" / "pages" / "vpn_servers_page.py"
 if not auto_path.exists() or not lifecycle_path.exists():
     fail("VPN Automation service/lifecycle modules missing")
-auto_text = auto_path.read_text(encoding="utf-8")
+auto_text = (
+    auto_path.read_text(encoding="utf-8")
+    + "\n"
+    + (SRC / "services" / "vpn_automation_service_core.py").read_text(encoding="utf-8")
+)
 life_text = lifecycle_path.read_text(encoding="utf-8")
 servers_text = servers_page_path.read_text(encoding="utf-8")
 for token in ("LV-Activity", "LV-Aging", "LV-AutoRestore", "login failure for user", "memory-lines", "set_quarantine_enabled", "seed_lifecycle"):

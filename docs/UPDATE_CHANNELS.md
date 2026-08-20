@@ -1,72 +1,57 @@
 # Каналы обновлений LinkVideo.Helper
 
-## Цель
+## Исходный репозиторий
 
-Перевести обновления LinkVideo.Helper с Google Drive на GitHub без поломки уже установленных версий.
+`WellJons/LinkVideo.Helper` является публичным и содержит исходный код, тесты и release-автоматику. Секреты, пароли, Google service-account JSON и другие закрытые данные в Git не хранятся. Desktop-приложению не требуется GitHub token для доступа к исходному репозиторию; production-обновления всё равно выдаются только через отдельный проверяемый update-channel.
 
-## Переходная схема
+## RC
 
-1. Старые версии Helper продолжают читать старый `version.json` из Google Drive.
-2. Переходный релиз получает через Google Drive обычным способом.
-3. В переходном релизе обновлятор уже знает два канала:
-   - основной: GitHub release channel;
-   - резервный: старый Google Drive manifest.
-4. После того как переходный релиз установлен у сотрудников, новые версии публикуются через GitHub.
-5. Google Drive оставляется fallback-каналом на ограниченный переходный период.
+Тяжёлая Windows release-проверка не запускается на каждом development-коммите. Она обязательна для PR в `main`, чтобы результат был виден до merge. Когда код готов к кандидату, создаётся/перемещается временная ветка `rc/<version>` на тот же проверяемый commit; только эта ветка после успешного полного CI создаёт или заменяет приватный RC.
 
-## Важно про приватный репозиторий
+Каждая успешная RC-проверка:
 
-Исходный код `WellJons/LinkVideo.Helper` остаётся приватным.
+1. выполняет единый `scripts/verify_release.ps1`;
+2. пересобирает runtime и Setup с нуля;
+3. запускает source-аудит, regressions, Ruff и `go vet`;
+4. компилирует differential patch pipeline;
+5. запускает `LinkVideo.Helper_Setup.exe --self-test` на точном произведённом EXE;
+6. проверяет ProductVersion и SHA-256;
+7. создаёт `verification.json`;
+8. заменяет Setup/отчёт в **одном** приватном draft/prerelease `rc-<version>`.
 
-Нельзя встраивать персональный GitHub token в desktop-приложение только ради скачивания assets приватного release: токен можно извлечь из установленной программы.
+Actions artifacts для RC не используются. RC не является публичным обновлением и требует ручной проверки на Windows против реальных RouterOS, Google Sheets и архивных endpoint'ов.
 
-Поэтому бинарный update-channel должен быть доступен клиенту без секрета. Практичные варианты:
+## Финальный релиз
 
-### Вариант A — отдельный публичный release-репозиторий
+Только version tag `vX.Y.Z` повторно проходит тот же verifier и создаёт/обновляет приватный final draft Release. В нём сохраняются:
 
-Например `WellJons/LinkVideo.Helper.Releases`:
+- точный `LinkVideo.Helper_Setup.exe`;
+- `Uninstall.exe`;
+- `verification.json`;
+- приватный payload ZIP;
+- payload manifest для будущих дифференциальных патчей.
 
-- исходников нет;
-- Issues/Wiki можно отключить;
-- публикуются только manifest и release assets;
-- приватный исходный репозиторий остаётся закрытым.
+После создания final draft временный `rc-<version>` удаляется вместе с RC-тегом. Final tag повторно собирает Setup, поэтому перед **Publish Release** обязательна ручная smoke-проверка именно точного `LinkVideo.Helper_Setup.exe` из final draft. Только нечерновой и не prerelease-релиз может попасть в публичный update-channel.
 
-### Вариант B — update endpoint LinkVideo
+## Production update-channel
 
-Например `https://updates.linkvideo.ru/helper/...`:
+Desktop Helper читает публичный manifest из:
 
-- backend может забирать артефакты из приватного GitHub;
-- desktop Helper не хранит GitHub credentials;
-- можно централизованно управлять каналами stable/beta и отзывом релизов.
+`WellJons/LinkVideo.Helper.Updates/main/update-manifest.json`
 
-Для текущего этапа проще начать с отдельного публичного release-репозитория и позднее при необходимости перенести выдачу на собственный endpoint.
+Перед запуском скачанного обновления Helper обязан проверить:
 
-## Manifest
-
-Рекомендуемый manifest:
-
-```json
-{
-  "version": "3.0.8",
-  "channel": "stable",
-  "setup_url": "https://.../LinkVideo_VPN_Helper_Setup.exe",
-  "patch_url": "https://.../LinkVideo.Helper_Patch.exe",
-  "sha256": "...",
-  "notes": "...",
-  "min_patch_from": "3.0.7",
-  "published_at": "2026-08-15T00:00:00Z"
-}
-```
-
-`patch_url` может быть `null`, если версия распространяется только полным Setup.
-
-## Безопасность
-
-Helper перед запуском скачанного файла обязан проверить:
-
-1. HTTP status / фактическую загрузку файла;
+1. успешную загрузку файла;
 2. SHA-256 из manifest;
 3. Windows ProductVersion;
-4. что версия файла соответствует `version` из manifest.
+4. совпадение версии файла с `version` из manifest.
 
-Только после этого разрешается запуск Setup/Patch.
+Публикатор до записи manifest сверяет Setup с `verification.json` и commit финального тега, затем скачивает Setup уже из публичного Release и повторно проверяет SHA-256. Он блокирует откат manifest на более старую версию и замену уже опубликованной версии другими байтами. Manifest после публикации также проходит проверку версии, URL и SHA-256.
+
+Для 3.0.11 production manifest всегда содержит пустой объект `patches`. Все 3.0.10 получают полный Setup с атомарной заменой runtime. Дифференциальные патчи не публикуются до появления эквивалентного восстановления после сбоя питания в середине операции.
+
+Google Drive сохраняется только как переходный fallback для старых установок и не является основным каналом новых версий.
+
+## Почему не GitHub Actions artifacts
+
+Actions artifacts — временное CI-хранилище с квотой и не должны быть частью production release-chain. RC хранится одним приватным draft Release, а generated-файлы остаются вне Git благодаря `.gitignore`.

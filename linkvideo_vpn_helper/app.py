@@ -53,8 +53,6 @@ class StartupSplash(QWidget):
 
 
 def _migrate_settings(settings: QSettings):
-    # 1.1.x уже использовал то же имя QSettings. Сохраняем логин/пароль/B2O.
-    # Тема имела другие названия — переводим их в компактную схему 2.0.
     if not settings.contains("ui/theme_v2"):
         old = str(settings.value("ui/theme", "", str) or "").lower()
         if any(x in old for x in ("dark", "night", "graphite")):
@@ -64,10 +62,8 @@ def _migrate_settings(settings: QSettings):
         else:
             legacy = QSettings("LinkVideo", "VPNHelper")
             legacy_theme = str(legacy.value("ui/theme", "", str) or "").lower()
-            settings.setValue("ui/theme_v2", "dark" if "dark" in legacy_theme else "system")
+            settings.setValue("ui/theme_v2", "dark" if "dark" in legacy_theme else "linkvideo_2026")
 
-    # Если приложение когда-то хранило учётные данные в старом VPNHelper,
-    # переносим их только когда актуальные значения отсутствуют.
     if not str(settings.value("username", "", str) or "").strip():
         legacy = QSettings("LinkVideo", "VPNHelper")
         old_user = str(legacy.value("username", "", str) or "").strip()
@@ -89,38 +85,114 @@ def main() -> int:
     settings = QSettings("LinkVideo", "LinkVideo.Helper")
     _migrate_settings(settings)
 
+    from linkvideo_vpn_helper.services.app_logging import event, install_runtime_logging, shutdown_runtime_logging
+    install_runtime_logging()
+    app.aboutToQuit.connect(shutdown_runtime_logging)
+    event("APP", "Запуск Helper", f"версия {APP_VERSION}")
+
+    from linkvideo_vpn_helper.brand_theme import install_linkvideo_brand_theme
+    install_linkvideo_brand_theme()
+    from linkvideo_vpn_helper.ui.visual_density import install_visual_density
+    install_visual_density()
+    from linkvideo_vpn_helper.ui.components_compat import install_components_compat
+    install_components_compat()
+
     from linkvideo_vpn_helper.theme import get_theme_style
-    theme_style = get_theme_style(str(settings.value("ui/theme_v2", "rose_milk", str) or "system"))
+    theme_style = get_theme_style(str(settings.value("ui/theme_v2", "linkvideo_2026", str) or "linkvideo_2026"))
     app.setStyleSheet(theme_style)
 
     saved_username = str(settings.value("username", "", str) or "").strip()
     saved_password = str(settings.value("password", "", str) or "")
     remember = bool(settings.value("remember", True, bool))
-
     if remember and saved_username and saved_password:
         credential_values = (saved_username, saved_password)
     else:
         from linkvideo_vpn_helper.ui.login_window import LoginWindow
         login = LoginWindow(settings)
         if login.exec() != QDialog.DialogCode.Accepted or login.payload is None:
+            event("APP", "Авторизация отменена")
+            shutdown_runtime_logging()
             return 0
         credential_values = (login.payload.username, login.payload.password)
+    event("APP", "Авторизация RouterOS", credential_values[0])
 
-    # Тяжёлые страницы по-прежнему не импортируются здесь — MainWindow создаёт
-    # их только при первом открытии соответствующего раздела.
     splash = StartupSplash(theme_style)
     splash.show()
+    splash.raise_()
     splash.set_status("Загружаю ядро…")
 
     from linkvideo_vpn_helper.services.vpn_service import SessionCredentials, VPNService
     credentials = SessionCredentials(credential_values[0], credential_values[1], 8728, 4.5)
     service = VPNService()
 
-    splash.set_status("Открываю интерфейс…")
+    from linkvideo_vpn_helper.ui.operation_cancel_guard import install_operation_cancel_guard
+    install_operation_cancel_guard()
+    from linkvideo_vpn_helper.ui.search_visual_fixes import install_search_visual_fixes
+    install_search_visual_fixes()
+    from linkvideo_vpn_helper.services.routeros_search_compat import install_routeros_search_compat
+    install_routeros_search_compat()
+    from linkvideo_vpn_helper.services.runtime_hardening import install_service_runtime_hardening
+    install_service_runtime_hardening()
+    from linkvideo_vpn_helper.services.vpn_automation_resilience import install_vpn_automation_resilience
+    install_vpn_automation_resilience()
+    # 3.0.10 uses one authoritative retention implementation. It owns script
+    # sources, LV2 metadata migration and immediate postcondition verification.
+    from linkvideo_vpn_helper.services.vpn_retention_policy import install_retention_policy
+    install_retention_policy()
+    # The legacy seed routine only understands state/last and would drop the LV2
+    # creation/reference day. Replace that one entry point after policy install.
+    from linkvideo_vpn_helper.services.vpn_retention_seed_guard import install_retention_seed_guard
+    install_retention_seed_guard()
+    from linkvideo_vpn_helper.services.vpn_sheets_retention_compat import install_vpn_sheets_retention_compat
+    install_vpn_sheets_retention_compat()
+    from linkvideo_vpn_helper.services.vpn_sheets_resilience import install_vpn_sheets_resilience
+    install_vpn_sheets_resilience()
+    from linkvideo_vpn_helper.ui.background_ux_integration import install_background_ux
+    install_background_ux()
+    from linkvideo_vpn_helper.ui.manual_scan_feedback import install_manual_scan_feedback
+    install_manual_scan_feedback()
+    # Restore the three archive download transports before the UX wrapper captures
+    # ArchiveDownloadPage methods. FFmpeg is downloaded/cached only on first use.
+    from linkvideo_vpn_helper.services.archive_download_methods import install_archive_download_methods
+    install_archive_download_methods()
+    from linkvideo_vpn_helper.ui.archive_download_ux import install_archive_download_ux
+    install_archive_download_ux()
+    from linkvideo_vpn_helper.ui.silent_update_integration import install_silent_patch_updates
+    install_silent_patch_updates()
+    from linkvideo_vpn_helper.ui.access_policy_integration import install_access_policy
+    install_access_policy()
+    from linkvideo_vpn_helper.ui.update_ux_integration import install_update_ux
+    install_update_ux()
+    from linkvideo_vpn_helper.ui.runtime_log_integration import install_runtime_log_ui
+    install_runtime_log_ui()
+    from linkvideo_vpn_helper.ui.nat_counter_integration import install_nat_counter_ui
+    install_nat_counter_ui()
+    from linkvideo_vpn_helper.ui.uptime_ru_compat import install_uptime_ru
+    install_uptime_ru()
+    from linkvideo_vpn_helper.ui.vpn_servers_status_ui import install_vpn_servers_status_ui
+    install_vpn_servers_status_ui()
+    from linkvideo_vpn_helper.ui.vpn_servers_manual_refresh import install_vpn_servers_manual_refresh
+    install_vpn_servers_manual_refresh()
+    from linkvideo_vpn_helper.ui.search_escape_compat import install_search_escape_compat
+    install_search_escape_compat()
+    from linkvideo_vpn_helper.ui.nested_scroll_guard import install_nested_scroll_guard
+    install_nested_scroll_guard()
+    from linkvideo_vpn_helper.ui.vpn_automation_sheets_bridge import install_vpn_automation_sheets_bridge
+    install_vpn_automation_sheets_bridge()
+    from linkvideo_vpn_helper.ui.vpn_sheets_coordinator_resilience import install_vpn_sheets_coordinator_resilience
+    install_vpn_sheets_coordinator_resilience()
+
     from linkvideo_vpn_helper.ui.main_window import MainWindow
+    splash.set_status("Открываю интерфейс…")
     window = MainWindow(service, credentials, settings)
-    window.show()
+    # Google Sheets — вторичное зеркало/аварийная база. Подключаем его уже
+    # после создания основного окна, чтобы отсутствие ключа или сети никогда
+    # не мешало запуску Helper и работе с RouterOS.
+    from linkvideo_vpn_helper.ui.vpn_sheets_sync_integration import attach_vpn_sheets_sync
+    attach_vpn_sheets_sync(window, service, credentials, settings)
     splash.close()
+    window.show()
+    event("APP", "Интерфейс открыт")
     return app.exec()
 
 
