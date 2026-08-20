@@ -42,7 +42,7 @@ jobs:
             installer_next/go.mod
             patcher/go.mod
 
-      - name: Install Python audit/build dependencies
+      - name: Install audit/build dependencies
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
@@ -68,16 +68,15 @@ jobs:
           }
 
           # Embedded payload files are generated later by the normal builders.
-          # Create harmless temporary fixtures so go vet can compile every Go
-          # module before any release artifact is produced.
+          # Harmless fixtures let go vet compile every module before a release
+          # installer is produced.
           python -c "import zipfile; zipfile.ZipFile(r'installer_next/payload.zip','w').close(); zipfile.ZipFile(r'patcher/patch_payload.zip','w').close()"
           Set-Content -LiteralPath 'patcher/patch_manifest.json' -Value '{}' -Encoding utf8NoBOM
           try {
             Push-Location installer_next
             try {
-              # WM_DRAWITEM lParam is a Windows ABI pointer to DRAWITEMSTRUCT.
-              # core_tests_3_0_11_win32_pointer_bridge.py allowlists exactly that
-              # one uintptr -> pointer conversion. Keep every other vet analyzer.
+              # WM_DRAWITEM lParam is the one intentional Windows ABI pointer
+              # conversion; its exact site is regression-tested separately.
               go vet -unsafeptr=false ./...
               if ($LASTEXITCODE -ne 0) { throw 'installer_next go vet failed' }
             } finally { Pop-Location }
@@ -91,15 +90,9 @@ jobs:
             Remove-Item -Force -ErrorAction SilentlyContinue 'patcher/patch_manifest.json'
           }
 
-      # Keep the historical Inno build as a compatibility/build-health check,
-      # but it is never a release asset again.
-      - name: Install Inno Setup
-        shell: pwsh
-        run: choco install innosetup --no-progress -y
-
-      - name: Build legacy Inno compatibility installer
+      - name: Build application runtime from scratch
         shell: cmd
-        run: build_setup.bat
+        run: build_onedir.bat
 
       - name: Build authoritative LinkVideo installer and uninstaller
         shell: pwsh
@@ -109,37 +102,53 @@ jobs:
         shell: pwsh
         run: ./scripts/test_patch_builder.ps1
 
-      # Actions artifact storage is only a convenience for manual RC downloads.
-      # Hitting the repository/account storage quota must not turn a fully
-      # verified build into a false code failure. Tags persist the authoritative
-      # Setup + private payload baseline in the private draft Release below.
-      - name: Upload authoritative Windows RC (best effort)
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: LinkVideo.Helper-release-${{ github.run_number }}-${{ github.sha }}
-          path: |
-            installer_next/output/LinkVideo.Helper_Setup.exe
-            installer_next/output/Uninstall.exe
-          if-no-files-found: error
-          retention-days: 3
+      - name: Self-test exact produced Setup payload
+        shell: pwsh
+        run: |
+          & '.\installer_next\output\LinkVideo.Helper_Setup.exe' --self-test
+          if ($LASTEXITCODE -ne 0) {
+            throw "Produced Setup self-test failed with exit code $LASTEXITCODE"
+          }
+          $setup = Get-Item '.\installer_next\output\LinkVideo.Helper_Setup.exe'
+          $hash = (Get-FileHash -Algorithm SHA256 $setup.FullName).Hash.ToLowerInvariant()
+          Write-Host "RC Setup verified: $([math]::Round($setup.Length/1MB,2)) MB | SHA256 $hash"
 
-      - name: Upload legacy Inno diagnostic (best effort)
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: LinkVideo.Helper-legacy-inno-${{ github.run_number }}-${{ github.sha }}
-          path: |
-            release_upload/LinkVideo_VPN_Helper_Setup.exe
-            release_upload/version.json
-          if-no-files-found: error
-          retention-days: 1
+      # Actions artifact storage is deliberately not used. A single private
+      # draft RC Release is overwritten on every successful push to the active
+      # release branch, so testing remains available without filling artifact
+      # quota or leaving dozens of old builds around.
+      - name: Create or update private RC draft
+        if: github.event_name == 'push' && github.ref == 'refs/heads/feature/3.0.8-vpn-sheets-sync'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (python -c "from linkvideo_vpn_helper.version import APP_VERSION; print(APP_VERSION)").Trim()
+          if ([string]::IsNullOrWhiteSpace($version)) { throw 'APP_VERSION not found' }
+          $tag = "rc-$version"
+          $setup = 'installer_next/output/LinkVideo.Helper_Setup.exe'
+          if (-not (Test-Path $setup)) { throw "RC Setup not found: $setup" }
+          $hash = (Get-FileHash -Algorithm SHA256 $setup).Hash.ToLowerInvariant()
+          $body = "Временная приватная RC-сборка LinkVideo.Helper $version.`n`nCommit: $env:GITHUB_SHA`nSHA-256: $hash`n`nФайл заменяется следующей успешной RC-сборкой."
 
-      # Only a version tag may create/update the private draft release. The same
-      # exact Setup is later copied by publish-public-update.yml to the public
-      # WellJons/LinkVideo.Helper.Updates repository. Private payload metadata is
-      # kept here as the trustworthy baseline for future differential patches.
-      - name: Create or update private draft Release
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -f $tag $env:GITHUB_SHA
+          git push origin "refs/tags/$tag" --force
+
+          gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $setup --repo $env:GITHUB_REPOSITORY --clobber
+            gh release edit $tag --repo $env:GITHUB_REPOSITORY --draft --prerelease --title "LinkVideo.Helper $version RC" --notes $body
+          } else {
+            gh release create $tag $setup --repo $env:GITHUB_REPOSITORY --draft --prerelease --target $env:GITHUB_SHA --title "LinkVideo.Helper $version RC" --notes $body
+          }
+
+      # Only a real version tag prepares the private final draft. The public
+      # update workflow later copies the exact verified Setup into
+      # WellJons/LinkVideo.Helper.Updates. Private payload metadata remains here
+      # as the baseline for future differential patches.
+      - name: Create or update private final draft Release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         env:
@@ -147,8 +156,8 @@ jobs:
         run: |
           $tag = "${{ github.ref_name }}"
           $version = $tag.TrimStart('v')
-          $setup = "installer_next/output/LinkVideo.Helper_Setup.exe"
-          $uninstall = "installer_next/output/Uninstall.exe"
+          $setup = 'installer_next/output/LinkVideo.Helper_Setup.exe'
+          $uninstall = 'installer_next/output/Uninstall.exe'
           $payloadZip = "release_payload/LinkVideo.Helper_Payload_${version}.zip"
           $payloadJson = "release_payload/LinkVideo.Helper_Payload_${version}.json"
           $notes = "RELEASE_${version}_RU.txt"
@@ -161,4 +170,12 @@ jobs:
             gh release upload $tag $assets --repo $env:GITHUB_REPOSITORY --clobber
           } else {
             gh release create $tag $assets --repo $env:GITHUB_REPOSITORY --draft --title "LinkVideo.Helper $version" --notes-file $notes
+          }
+
+          # The RC is temporary by design. Once the final draft exists, remove
+          # the single RC release/tag so Releases also stays clean.
+          $rcTag = "rc-$version"
+          gh release view $rcTag --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release delete $rcTag --repo $env:GITHUB_REPOSITORY --yes --cleanup-tag
           }
