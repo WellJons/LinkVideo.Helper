@@ -47,7 +47,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify_release.ps1
 
 ## CI и RC
 
-Обычные development-коммиты больше не запускают тяжёлую Windows release-сборку и не расходуют Actions-квоту. Полный CI запускается только для отдельной временной ветки `rc/**`, для `v*` final tag либо вручную через `workflow_dispatch`.
+Обычные development-коммиты вне PR больше не запускают тяжёлую Windows release-сборку. Полный CI запускается для PR в `main`, отдельной временной ветки `rc/**`, `v*` final tag либо вручную через `workflow_dispatch`. PR-проверка только подтверждает код; приватный RC создаётся исключительно из ветки `rc/**`.
 
 Actions artifacts для RC не используются. У версии существует один приватный draft Release `rc-<version>`; следующая успешно проверенная RC-сборка заменяет его содержимое вместо накопления старых сборок.
 
