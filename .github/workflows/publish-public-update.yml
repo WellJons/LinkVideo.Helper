@@ -63,7 +63,7 @@ jobs:
             exit 1
           fi
 
-      - name: Download private release assets
+      - name: Download source release assets
         env:
           SOURCE_TOKEN: ${{ github.token }}
         shell: bash
@@ -197,7 +197,7 @@ jobs:
           if gh release view "$TAG" --repo "$UPDATES_REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" "${ASSETS[@]}" --repo "$UPDATES_REPO" --clobber
           else
-            ARGS=(release create "$TAG" "${ASSETS[@]}" --repo "$UPDATES_REPO" --title "LinkVideo.Helper $VERSION" --notes "Публичный канал обновлений LinkVideo.Helper. Исходный код хранится в приватном репозитории.")
+            ARGS=(release create "$TAG" "${ASSETS[@]}" --repo "$UPDATES_REPO" --title "LinkVideo.Helper $VERSION" --notes "Публичный канал обновлений LinkVideo.Helper. Исходный код: https://github.com/WellJons/LinkVideo.Helper")
             if [[ "$TAG" == *-* ]]; then
               ARGS+=(--prerelease)
             fi
@@ -208,6 +208,7 @@ jobs:
         shell: bash
         run: |
           TAG="${{ steps.release.outputs.tag }}"
+          VERSION="${{ steps.release.outputs.version }}"
           DOWNLOAD_URL="https://github.com/$UPDATES_REPO/releases/download/$TAG/$SETUP_NAME"
           curl --fail --silent --show-error --location --retry 3 \
             "$DOWNLOAD_URL" -o /tmp/LinkVideo.Helper_Setup.prepublish.exe
