@@ -21,7 +21,8 @@ def _refresh_automation_cells(page) -> None:
         if auto is None:
             continue
 
-        # AutomationStatus.state_text already contains the quarantine state.
+        # AutomationStatus.state_text is the single authoritative UI text and
+        # already contains the factual LV-Aging/quarantine state.
         status_item.setText(auto.state_text)
         if auto.installed and not auto.paused:
             status_item.setToolTip(
@@ -47,6 +48,7 @@ def install_vpn_servers_status_ui() -> None:
 
     original_build = VPNServersPage._build
     original_on_stats = VPNServersPage._on_stats
+    original_on_action = VPNServersPage._on_action
     original_inactive_build = InactiveClientsPage._build
 
     def patched_build(self):
@@ -120,8 +122,19 @@ def install_vpn_servers_status_ui() -> None:
         original_on_stats(self, rows)
         _refresh_automation_cells(self)
 
+    def patched_on_action(self, name: str, payload, error):
+        # The service returns an AutomationStatus only after RouterOS has been
+        # re-read and the requested state was verified. Reflect that verified
+        # state in the table immediately instead of waiting for the asynchronous
+        # follow-up refresh started by the original handler.
+        original_on_action(self, name, payload, error)
+        if error:
+            return
+        _refresh_automation_cells(self)
+
     VPNServersPage._build = patched_build
     VPNServersPage._on_stats = patched_on_stats
+    VPNServersPage._on_action = patched_on_action
     VPNServersPage._toggle_quarantine = patched_toggle_quarantine
     InactiveClientsPage._build = patched_inactive_build
     _INSTALLED = True
