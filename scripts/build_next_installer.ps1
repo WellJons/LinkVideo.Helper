@@ -58,7 +58,7 @@ function New-VersionResource([string]$Description, [string]$OriginalName, [strin
 }
 
 Write-Host "[Next installer] Version $version"
-Write-Host '[1/7] Building standalone uninstaller...'
+Write-Host '[1/6] Building standalone uninstaller...'
 python -c "import zipfile; zipfile.ZipFile(r'$payloadPath','w').close()"
 New-VersionResource 'LinkVideo.Helper Uninstaller' 'Uninstall.exe' 'LinkVideo.Helper.Uninstall'
 Push-Location $installerDir
@@ -70,7 +70,7 @@ try {
     Remove-Item -Force -ErrorAction SilentlyContinue $resourcePath
 }
 
-Write-Host '[2/7] Building privileged silent updater...'
+Write-Host '[2/6] Building privileged silent updater...'
 $updaterOutput = Join-Path $appDir 'LinkVideo.Helper.Updater.exe'
 Remove-Item -Force -ErrorAction SilentlyContinue $updaterOutput
 Push-Location $silentUpdaterDir
@@ -84,31 +84,29 @@ if (-not (Test-Path $updaterOutput) -or (Get-Item $updaterOutput).Length -lt 200
     throw 'Silent updater output is missing or unexpectedly small'
 }
 
-Write-Host '[3/7] Bundling FFmpeg for archive downloads...'
-& (Join-Path $root 'scripts\prepare_bundled_ffmpeg.ps1') -AppDir $appDir
-if ($LASTEXITCODE -ne 0) { throw 'Failed to prepare bundled FFmpeg' }
-$bundledFfmpeg = Join-Path $appDir '_internal\tools\ffmpeg.exe'
-if (-not (Test-Path $bundledFfmpeg)) { throw 'Bundled FFmpeg is missing from application payload' }
-
-Write-Host '[4/7] Preparing application payload...'
+Write-Host '[3/6] Preparing lean application payload...'
+# FFmpeg must stay outside the installer. Remove any developer/stale copy before
+# packaging, then verify the payload so this cannot silently regress again.
+Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $appDir '_internal\tools\ffmpeg.exe')
+Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $appDir 'tools\ffmpeg.exe')
 Copy-Item -Force (Join-Path $outputDir 'Uninstall.exe') (Join-Path $appDir 'Uninstall.exe')
 python -c "import pathlib,zipfile; root=pathlib.Path(r'$appDir'); out=pathlib.Path(r'$payloadPath'); z=zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED,compresslevel=9); [(z.write(p,p.relative_to(root).as_posix())) for p in root.rglob('*') if p.is_file()]; z.close()"
-python -c "import zipfile; p=r'$payloadPath'; z=zipfile.ZipFile(p); names={n.replace('\\','/').lower() for n in z.namelist()}; assert '_internal/tools/ffmpeg.exe' in names, 'FFmpeg missing from installer payload'; z.close(); print('[FFmpeg] payload entry verified')"
-if ($LASTEXITCODE -ne 0) { throw 'FFmpeg is missing from installer payload zip' }
+python -c "import zipfile; p=r'$payloadPath'; z=zipfile.ZipFile(p); names={n.replace('\\','/').lower() for n in z.namelist()}; bad=[n for n in names if n.endswith('/ffmpeg.exe') or n=='ffmpeg.exe']; z.close(); assert not bad, 'FFmpeg must not be bundled: '+repr(bad); print('[FFmpeg] installer payload correctly excludes ffmpeg.exe')"
+if ($LASTEXITCODE -ne 0) { throw 'FFmpeg unexpectedly present in installer payload' }
 
-Write-Host '[5/7] Building one-file LinkVideo installer...'
+Write-Host '[4/6] Building authoritative one-file LinkVideo installer...'
 New-VersionResource 'LinkVideo.Helper Setup' 'LinkVideo.Helper_Setup.exe' 'LinkVideo.Helper.Setup'
 Push-Location $installerDir
 try {
-    go build -trimpath -ldflags "-H=windowsgui -X main.version=$version -X main.buildMode=installer" -o (Join-Path $outputDir 'LinkVideo.Helper_Setup_Next.exe') .
-    if ($LASTEXITCODE -ne 0) { throw 'Failed to build LinkVideo.Helper_Setup_Next.exe' }
+    go build -trimpath -ldflags "-H=windowsgui -X main.version=$version -X main.buildMode=installer" -o (Join-Path $outputDir 'LinkVideo.Helper_Setup.exe') .
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to build LinkVideo.Helper_Setup.exe' }
 } finally {
     Pop-Location
     Remove-Item -Force -ErrorAction SilentlyContinue $resourcePath
 }
 
-Write-Host '[6/7] Verifying installer files, updater and ProductVersion...'
-$setup = Join-Path $outputDir 'LinkVideo.Helper_Setup_Next.exe'
+Write-Host '[5/6] Verifying installer files, updater and ProductVersion...'
+$setup = Join-Path $outputDir 'LinkVideo.Helper_Setup.exe'
 $uninstall = Join-Path $outputDir 'Uninstall.exe'
 foreach ($file in @($setup, $uninstall)) {
     if (-not (Test-Path $file)) { throw "Missing build output: $file" }
@@ -132,7 +130,7 @@ $updaterItem = Get-Item $updaterOutput
 $updaterHash = (Get-FileHash -Algorithm SHA256 $updaterOutput).Hash.ToLowerInvariant()
 Write-Host "$($updaterItem.Name): $([math]::Round($updaterItem.Length/1MB,2)) MB | SHA256 $updaterHash"
 
-Write-Host '[7/7] Creating private payload baseline for future patches...'
+Write-Host '[6/6] Creating private payload baseline for future patches...'
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $root 'release_payload')
 python scripts/make_release_payload.py --source $appDir --version $version --out-dir (Join-Path $root 'release_payload')
 
