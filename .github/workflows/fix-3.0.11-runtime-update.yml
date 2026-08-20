@@ -1,0 +1,217 @@
+name: Fix 3.0.11 installed-app update
+
+on:
+  push:
+    branches:
+      - fix/3.0.11-runtime-update
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fix-3.0.11-runtime-update
+  cancel-in-progress: false
+
+jobs:
+  verify-and-publish:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      SOURCE_REPO: WellJons/LinkVideo.Helper
+      UPDATES_REPO: WellJons/LinkVideo.Helper.Updates
+      FROM_VERSION: 3.0.10
+      TO_VERSION: 3.0.11
+      OLD_SOURCE_SHA: 23c7c9f376acd505a34464967b2ccab5c936957d
+      RELEASE_TAG: v3.0.11
+      PATCH_NAME: LinkVideo.Helper_Patch_3.0.10_to_3.0.11.exe
+      SETUP_SHA256: fb0d4094bee7ed409c7d6ce05296b0e3c44133db4a83e39b2707b71678bba6dc
+
+    steps:
+      - name: Checkout updater tooling
+        uses: actions/checkout@v4
+        with:
+          path: tools
+
+      - name: Checkout representative 3.0.10 runtime source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.OLD_SOURCE_SHA }}
+          path: old
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.x'
+          cache: false
+
+      - name: Test full-runtime bundle semantics
+        shell: pwsh
+        working-directory: tools
+        run: |
+          python scripts/core_tests_3_0_11_full_runtime_update.py
+
+      - name: Download exact published 3.0.11 runtime payload
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force release-source | Out-Null
+          gh release download $env:RELEASE_TAG --repo $env:SOURCE_REPO --dir release-source --pattern "LinkVideo.Helper_Payload_$($env:TO_VERSION).zip"
+          $zip = Join-Path $PWD "release-source\LinkVideo.Helper_Payload_$($env:TO_VERSION).zip"
+          if (-not (Test-Path $zip)) { throw "Published 3.0.11 runtime payload is missing" }
+          New-Item -ItemType Directory -Force target-runtime | Out-Null
+          Expand-Archive -LiteralPath $zip -DestinationPath target-runtime -Force
+          $app = Join-Path $PWD 'target-runtime\LinkVideo.Helper.exe'
+          if (-not (Test-Path $app)) { throw 'Target runtime does not contain LinkVideo.Helper.exe' }
+          $version = [string](Get-Item $app).VersionInfo.ProductVersion
+          if ($version -notmatch '^3\.0\.11(?:\.0)?$') { throw "Published runtime ProductVersion is $version" }
+          if (Get-ChildItem target-runtime -Recurse -File | Where-Object { $_.Name -ieq 'ffmpeg.exe' }) {
+            throw 'Published runtime unexpectedly contains ffmpeg.exe'
+          }
+
+      - name: Build representative 3.0.10 runtime
+        shell: pwsh
+        working-directory: old
+        run: |
+          python -m pip install -r requirements.txt pyinstaller
+          $env:PYTHONPATH = "$PWD;$env:PYTHONPATH"
+          python scripts/sync_release_version.py
+          if ($LASTEXITCODE -ne 0) { throw '3.0.10 version sync failed' }
+          python scripts/generate_version_info.py
+          if ($LASTEXITCODE -ne 0) { throw '3.0.10 version resource generation failed' }
+          python -m PyInstaller --noconfirm --clean LinkVideo.Helper.spec
+          if ($LASTEXITCODE -ne 0) { throw '3.0.10 runtime build failed' }
+          $app = Join-Path $PWD 'dist\LinkVideo.Helper\LinkVideo.Helper.exe'
+          $version = [string](Get-Item $app).VersionInfo.ProductVersion
+          if ($version -notmatch '^3\.0\.10(?:\.0)?$') { throw "Old runtime ProductVersion is $version" }
+          python -c "import pathlib,zipfile; root=pathlib.Path(r'dist/LinkVideo.Helper'); out=pathlib.Path(r'../old-runtime.zip'); z=zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED,compresslevel=9); [(z.write(p,p.relative_to(root).as_posix())) for p in root.rglob('*') if p.is_file()]; z.close()"
+
+      - name: Build full-runtime 3.0.10 to 3.0.11 updater
+        shell: pwsh
+        working-directory: tools
+        run: |
+          ./scripts/build_patch.ps1 `
+            -FromZip "$PWD\..\old-runtime.zip" `
+            -FromVersion $env:FROM_VERSION `
+            -ToVersion $env:TO_VERSION `
+            -ToDir "$PWD\..\target-runtime" `
+            -FullRuntime
+          $patch = Join-Path $PWD "patch_output\$($env:PATCH_NAME)"
+          if (-not (Test-Path $patch)) { throw 'Full-runtime updater EXE was not built' }
+          $manifest = Get-Content -Raw -LiteralPath 'patch_output\bundle\patch_manifest.json' | ConvertFrom-Json
+          if ([string]$manifest.mode -ne 'full-runtime') { throw 'Patch manifest is not full-runtime' }
+          $targetCount = @(Get-ChildItem "$PWD\..\target-runtime" -Recurse -File).Count
+          $changedCount = @($manifest.changed.PSObject.Properties).Count
+          if ($changedCount -ne $targetCount) { throw "Full-runtime updater contains $changedCount/$targetCount target files" }
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $patch).Hash.ToLowerInvariant()
+          "PATCH_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Full-runtime updater: $([math]::Round((Get-Item $patch).Length/1MB,2)) MB"
+          Write-Host "SHA256: $hash"
+
+      - name: Apply updater while 3.0.10 is running
+        shell: pwsh
+        run: |
+          $install = Join-Path $env:ProgramFiles 'LinkVideo.Helper'
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $install
+          New-Item -ItemType Directory -Force $install | Out-Null
+          Copy-Item -Path "$PWD\old\dist\LinkVideo.Helper\*" -Destination $install -Recurse -Force
+
+          $app = Join-Path $install 'LinkVideo.Helper.exe'
+          $before = [string](Get-Item $app).VersionInfo.ProductVersion
+          if ($before -notmatch '^3\.0\.10(?:\.0)?$') { throw "Test install is not 3.0.10: $before" }
+
+          $oldProcess = Start-Process -FilePath $app -PassThru
+          Start-Sleep -Seconds 3
+          Write-Host "Started old Helper PID $($oldProcess.Id); updater must terminate it before replacing runtime."
+
+          $patch = Join-Path $PWD "tools\patch_output\$($env:PATCH_NAME)"
+          $patchProcess = Start-Process -FilePath $patch -ArgumentList '--silent' -Wait -PassThru
+          if ($patchProcess.ExitCode -ne 0) { throw "Updater exited with $($patchProcess.ExitCode)" }
+          Start-Sleep -Milliseconds 500
+
+          if (Get-Process -Name 'LinkVideo.Helper' -ErrorAction SilentlyContinue) {
+            throw 'Old Helper process is still running after updater completed'
+          }
+          $after = [string](Get-Item $app).VersionInfo.ProductVersion
+          if ($after -notmatch '^3\.0\.11(?:\.0)?$') { throw "Updater left ProductVersion $after" }
+
+          $targetRoot = (Resolve-Path "$PWD\target-runtime").Path
+          foreach ($source in Get-ChildItem $targetRoot -Recurse -File) {
+            $relative = $source.FullName.Substring($targetRoot.Length).TrimStart('\')
+            $installed = Join-Path $install $relative
+            if (-not (Test-Path -LiteralPath $installed)) { throw "Missing installed target file: $relative" }
+            $expected = (Get-FileHash -Algorithm SHA256 -LiteralPath $source.FullName).Hash
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $installed).Hash
+            if ($expected -ne $actual) { throw "Installed file hash mismatch: $relative" }
+          }
+          Write-Host 'Installed runtime matches the exact published 3.0.11 payload.'
+
+      - name: Publish updater asset
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.UPDATES_REPO_TOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) { throw 'UPDATES_REPO_TOKEN is not configured' }
+          $patch = Join-Path $PWD "tools\patch_output\$($env:PATCH_NAME)"
+          gh release upload $env:RELEASE_TAG $patch --repo $env:UPDATES_REPO --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Could not upload runtime updater asset' }
+          $url = "https://github.com/$($env:UPDATES_REPO)/releases/download/$($env:RELEASE_TAG)/$($env:PATCH_NAME)"
+          Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile public-patch.exe
+          $publicHash = (Get-FileHash -Algorithm SHA256 public-patch.exe).Hash.ToLowerInvariant()
+          if ($publicHash -ne $env:PATCH_SHA256) { throw "Public updater hash mismatch: $publicHash" }
+
+      - name: Re-enable 3.0.11 through installed-app updater
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.UPDATES_REPO_TOKEN }}
+        run: |
+          $apiPath = "repos/$($env:UPDATES_REPO)/contents/update-manifest.json"
+          $current = gh api "$apiPath?ref=main" | ConvertFrom-Json
+          $raw = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($current.content -replace '\s','')))
+          $manifest = $raw | ConvertFrom-Json
+          $manifest.version = $env:TO_VERSION
+          $manifest.notes = 'Доступна версия LinkVideo.Helper 3.0.11. Для установленной 3.0.10 обновление применяется встроенным updater без мастера установки.'
+          $manifest.mandatory = $false
+          $patchUrl = "https://github.com/$($env:UPDATES_REPO)/releases/download/$($env:RELEASE_TAG)/$($env:PATCH_NAME)"
+          $manifest.patches = [ordered]@{
+            '3.0.10' = [ordered]@{
+              download_url = $patchUrl
+              sha256 = $env:PATCH_SHA256
+            }
+          }
+          $json = ($manifest | ConvertTo-Json -Depth 8) + "`n"
+          $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
+          gh api --method PUT $apiPath `
+            -f message='Route LinkVideo.Helper 3.0.10 through runtime updater' `
+            -f content=$encoded `
+            -f sha=$current.sha `
+            -f branch=main | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Could not publish updater manifest' }
+
+      - name: Verify live update route
+        shell: pwsh
+        run: |
+          $manifestUrl = "https://raw.githubusercontent.com/$($env:UPDATES_REPO)/main/update-manifest.json"
+          $ok = $false
+          for ($i = 1; $i -le 12; $i++) {
+            try {
+              $live = Invoke-RestMethod -Headers @{ 'Cache-Control'='no-cache' } -Uri "$manifestUrl?verify=$($env:GITHUB_RUN_ID)-$i"
+              $entry = $live.patches.'3.0.10'
+              if ([string]$live.version -eq $env:TO_VERSION -and [string]$entry.sha256 -eq $env:PATCH_SHA256) {
+                $ok = $true
+                break
+              }
+            } catch {}
+            Start-Sleep -Seconds 5
+          }
+          if (-not $ok) { throw 'Live manifest did not expose the verified 3.0.10 runtime updater' }
+          $patchUrl = [string]$live.patches.'3.0.10'.download_url
+          Invoke-WebRequest -UseBasicParsing -Uri $patchUrl -OutFile verify-public-patch.exe
+          $hash = (Get-FileHash -Algorithm SHA256 verify-public-patch.exe).Hash.ToLowerInvariant()
+          if ($hash -ne $env:PATCH_SHA256) { throw 'Live updater asset hash does not match manifest' }
+          Write-Host "PUBLIC UPDATE READY: 3.0.10 -> 3.0.11 $hash"
