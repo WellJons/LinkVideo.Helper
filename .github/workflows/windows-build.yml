@@ -42,15 +42,20 @@ jobs:
             installer_next/go.mod
             patcher/go.mod
 
-      - name: Install Python dependencies
+      - name: Install Python audit/build dependencies
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pyinstaller
+          python -m pip install -r requirements.txt pyinstaller ruff
+          python -m pip check
 
       - name: Complete Python release preflight
         shell: pwsh
         run: python scripts/release_preflight.py
+
+      - name: Audit Python undefined names and invalid constructs
+        shell: pwsh
+        run: ruff check linkvideo_vpn_helper scripts --select E9,F63,F7,F82
 
       - name: Audit Go installer, patcher and updater sources
         shell: pwsh
