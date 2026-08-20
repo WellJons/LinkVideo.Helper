@@ -116,6 +116,7 @@ def test_ffmpeg_first_use_progress_and_cache() -> None:
 def test_release_packaging_contract() -> None:
     spec = (ROOT / "LinkVideo.Helper.spec").read_text(encoding="utf-8")
     build = (ROOT / "scripts" / "build_next_installer.ps1").read_text(encoding="utf-8")
+    verifier = (ROOT / "scripts" / "verify_release.ps1").read_text(encoding="utf-8")
     workflow = (ROOT / ".github" / "workflows" / "windows-build.yml").read_text(encoding="utf-8")
     app = (ROOT / "linkvideo_vpn_helper" / "app.py").read_text(encoding="utf-8")
     selftest = (ROOT / "installer_next" / "selftest_windows.go").read_text(encoding="utf-8")
@@ -126,10 +127,11 @@ def test_release_packaging_contract() -> None:
     assert "LinkVideo.Helper_Setup_Next.exe" not in build
     assert "actions/upload-artifact" not in workflow
     assert "build_setup.bat" not in workflow
+    assert "scripts/verify_release.ps1" in workflow
     assert "Create or update private RC draft" in workflow
     assert '"rc-$version"' in workflow
-    assert "Self-test exact produced Setup payload" in workflow
-    assert "--self-test" in workflow
+    assert "Self-test exact produced Setup payload" in verifier
+    assert "--self-test" in verifier
     assert "LinkVideo.Helper_Payload_${version}.zip" in workflow
     assert "LinkVideo.Helper_Payload_${version}.json" in workflow
     assert 'hasArg("--self-test")' in selftest
