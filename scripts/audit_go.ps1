@@ -16,7 +16,10 @@ if ($notFormatted.Count -gt 0) {
 # fixtures let go vet compile all three modules before an installer is produced.
 python -c "import zipfile; zipfile.ZipFile(r'installer_next/payload.zip','w').close(); zipfile.ZipFile(r'patcher/patch_payload.zip','w').close()"
 if ($LASTEXITCODE -ne 0) { throw 'Could not create Go vet payload fixtures' }
-Set-Content -LiteralPath 'patcher/patch_manifest.json' -Value '{}' -Encoding utf8NoBOM
+# Windows PowerShell 5.1 has no `utf8NoBOM` Set-Content encoding value.
+# Use .NET directly so the same release audit works under powershell.exe and pwsh.
+$manifestPath = Join-Path $root 'patcher/patch_manifest.json'
+[System.IO.File]::WriteAllText($manifestPath, '{}', (New-Object System.Text.UTF8Encoding($false)))
 
 try {
     Push-Location installer_next
