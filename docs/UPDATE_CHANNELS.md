@@ -1,72 +1,51 @@
 # Каналы обновлений LinkVideo.Helper
 
-## Цель
+## Исходный репозиторий
 
-Перевести обновления LinkVideo.Helper с Google Drive на GitHub без поломки уже установленных версий.
+`WellJons/LinkVideo.Helper` остаётся приватным и содержит только исходный код, тесты и release-автоматику. Desktop-приложение не получает GitHub token для доступа к приватному репозиторию.
 
-## Переходная схема
+## RC
 
-1. Старые версии Helper продолжают читать старый `version.json` из Google Drive.
-2. Переходный релиз получает через Google Drive обычным способом.
-3. В переходном релизе обновлятор уже знает два канала:
-   - основной: GitHub release channel;
-   - резервный: старый Google Drive manifest.
-4. После того как переходный релиз установлен у сотрудников, новые версии публикуются через GitHub.
-5. Google Drive оставляется fallback-каналом на ограниченный переходный период.
+На активной release-ветке CI после полного успешного прогона поддерживает **один** приватный draft/prerelease с тегом `rc-<version>`.
 
-## Важно про приватный репозиторий
+Каждая следующая успешная RC-сборка:
 
-Исходный код `WellJons/LinkVideo.Helper` остаётся приватным.
+1. пересобирает runtime и Setup с нуля;
+2. запускает source-аудит, regressions, Ruff и `go vet`;
+3. запускает `LinkVideo.Helper_Setup.exe --self-test` на точном произведённом EXE;
+4. пересчитывает SHA-256;
+5. заменяет Setup в существующем `rc-<version>` вместо накопления Actions artifacts/старых RC.
 
-Нельзя встраивать персональный GitHub token в desktop-приложение только ради скачивания assets приватного release: токен можно извлечь из установленной программы.
+RC не является публичным обновлением и требует ручной проверки на Windows.
 
-Поэтому бинарный update-channel должен быть доступен клиенту без секрета. Практичные варианты:
+## Финальный релиз
 
-### Вариант A — отдельный публичный release-репозиторий
+Только version tag `vX.Y.Z` создаёт/обновляет приватный final draft Release. В нём сохраняются:
 
-Например `WellJons/LinkVideo.Helper.Releases`:
+- точный `LinkVideo.Helper_Setup.exe`;
+- `Uninstall.exe`;
+- приватный payload ZIP;
+- payload manifest для будущих дифференциальных патчей.
 
-- исходников нет;
-- Issues/Wiki можно отключить;
-- публикуются только manifest и release assets;
-- приватный исходный репозиторий остаётся закрытым.
+После создания final draft временный `rc-<version>` удаляется вместе с RC-тегом.
 
-### Вариант B — update endpoint LinkVideo
+Публичная публикация выполняется отдельно и переносит проверенный Setup/manifest в `WellJons/LinkVideo.Helper.Updates`.
 
-Например `https://updates.linkvideo.ru/helper/...`:
+## Production update-channel
 
-- backend может забирать артефакты из приватного GitHub;
-- desktop Helper не хранит GitHub credentials;
-- можно централизованно управлять каналами stable/beta и отзывом релизов.
+Desktop Helper читает публичный manifest из:
 
-Для текущего этапа проще начать с отдельного публичного release-репозитория и позднее при необходимости перенести выдачу на собственный endpoint.
+`WellJons/LinkVideo.Helper.Updates/main/update-manifest.json`
 
-## Manifest
+Перед запуском скачанного обновления Helper обязан проверить:
 
-Рекомендуемый manifest:
-
-```json
-{
-  "version": "3.0.8",
-  "channel": "stable",
-  "setup_url": "https://.../LinkVideo_VPN_Helper_Setup.exe",
-  "patch_url": "https://.../LinkVideo.Helper_Patch.exe",
-  "sha256": "...",
-  "notes": "...",
-  "min_patch_from": "3.0.7",
-  "published_at": "2026-08-15T00:00:00Z"
-}
-```
-
-`patch_url` может быть `null`, если версия распространяется только полным Setup.
-
-## Безопасность
-
-Helper перед запуском скачанного файла обязан проверить:
-
-1. HTTP status / фактическую загрузку файла;
+1. успешную загрузку файла;
 2. SHA-256 из manifest;
 3. Windows ProductVersion;
-4. что версия файла соответствует `version` из manifest.
+4. совпадение версии файла с `version` из manifest.
 
-Только после этого разрешается запуск Setup/Patch.
+Google Drive сохраняется только как переходный fallback для старых установок и не является основным каналом новых версий.
+
+## Почему не GitHub Actions artifacts
+
+Actions artifacts — временное CI-хранилище с квотой и не должны быть частью production release-chain. Они больше не используются для RC LinkVideo.Helper. Это одновременно устраняет зависимость от квоты и не создаёт множество временных сборок.
