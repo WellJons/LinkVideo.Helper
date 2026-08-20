@@ -17,7 +17,15 @@ build/
 dist/
 installer_output/
 release_upload/
+release_payload/
 patch_output/
+installer_next/output/
+build_version_info.txt
+installer_next/payload.zip
+installer_next/resource.syso
+installer_next/versioninfo.generated.json
+patcher/patch_payload.zip
+patcher/patch_manifest.json
 *.spec.bak
 
 # Local logs / temp
