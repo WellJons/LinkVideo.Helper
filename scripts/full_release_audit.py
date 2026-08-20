@@ -10,7 +10,6 @@ constructs that deserve review. Critical findings block release preflight.
 
 import ast
 import re
-import sys
 from collections import Counter
 from pathlib import Path
 
@@ -82,6 +81,13 @@ def _has_timeout(call: ast.Call) -> bool:
     return False
 
 
+def _keyword_literal(call: ast.Call, name: str):
+    for keyword in call.keywords:
+        if keyword.arg == name and isinstance(keyword.value, ast.Constant):
+            return keyword.value.value
+    return None
+
+
 def audit_python(audit: Audit) -> None:
     python_files = list(_files({".py"}))
     audit.stats["python_files"] = len(python_files)
@@ -115,12 +121,28 @@ def audit_python(audit: Audit) -> None:
                     "session.delete",
                     "session.patch",
                     "session.request",
-                } and not _has_timeout(node):
-                    audit.error(f"HTTP request without timeout: {_rel(path)}:{node.lineno} ({name})")
+                }:
+                    if not _has_timeout(node):
+                        audit.error(f"HTTP request without timeout: {_rel(path)}:{node.lineno} ({name})")
+                    if _keyword_literal(node, "verify") is False:
+                        audit.error(f"TLS verification disabled: {_rel(path)}:{node.lineno} ({name})")
+                if name == "os.system":
+                    audit.error(f"os.system is forbidden in runtime code: {_rel(path)}:{node.lineno}")
+                if name in {"subprocess.run", "subprocess.call", "subprocess.check_call", "subprocess.check_output", "subprocess.Popen"}:
+                    if _keyword_literal(node, "shell") is True:
+                        audit.error(f"shell=True is forbidden in runtime code: {_rel(path)}:{node.lineno} ({name})")
+                if name == "tempfile.mktemp":
+                    audit.error(f"Insecure tempfile.mktemp use: {_rel(path)}:{node.lineno}")
 
             if isinstance(node, ast.ExceptHandler) and is_runtime:
-                if len(node.body) == 1 and isinstance(node.body[0], ast.Pass):
-                    broad_pass.append(f"{_rel(path)}:{node.lineno}")
+                pass_only = len(node.body) == 1 and isinstance(node.body[0], ast.Pass)
+                if pass_only:
+                    if node.type is None:
+                        audit.error(f"Bare except/pass hides every failure: {_rel(path)}:{node.lineno}")
+                    elif isinstance(node.type, ast.Name) and node.type.id == "BaseException":
+                        audit.error(f"BaseException/pass hides process-control failures: {_rel(path)}:{node.lineno}")
+                    else:
+                        broad_pass.append(f"{_rel(path)}:{node.lineno}")
 
         # Do not let the audit implementation's own marker vocabulary report
         # itself. Every product/runtime/test file is still checked.
@@ -131,7 +153,8 @@ def audit_python(audit: Audit) -> None:
 
     if broad_pass:
         audit.warn(
-            f"Broad exception/pass sites: {len(broad_pass)} (review sample: {', '.join(broad_pass[:8])})"
+            f"Intentional exception/pass sites to review: {len(broad_pass)} "
+            f"(sample: {', '.join(broad_pass[:8])})"
         )
     if todo_hits:
         audit.warn(f"TODO/FIXME markers: {len(todo_hits)} (sample: {', '.join(todo_hits[:8])})")
@@ -147,6 +170,7 @@ def audit_release_chain(audit: Audit) -> None:
         "spec": ROOT / "LinkVideo.Helper.spec",
         "build_next": ROOT / "scripts" / "build_next_installer.ps1",
         "installer_backend": ROOT / "installer_next" / "backend_windows.go",
+        "installer_selftest": ROOT / "installer_next" / "selftest_windows.go",
         "windows_workflow": ROOT / ".github" / "workflows" / "windows-build.yml",
         "publish_workflow": ROOT / ".github" / "workflows" / "publish-public-update.yml",
     }
@@ -163,6 +187,7 @@ def audit_release_chain(audit: Audit) -> None:
     spec = required["spec"].read_text(encoding="utf-8")
     build = required["build_next"].read_text(encoding="utf-8")
     backend = required["installer_backend"].read_text(encoding="utf-8")
+    selftest = required["installer_selftest"].read_text(encoding="utf-8")
     workflow = required["windows_workflow"].read_text(encoding="utf-8")
     publish = required["publish_workflow"].read_text(encoding="utf-8")
 
@@ -181,9 +206,14 @@ def audit_release_chain(audit: Audit) -> None:
         ("payload explicitly rejects FFmpeg", "installer payload correctly excludes ffmpeg.exe" in build),
         ("authoritative Setup filename", "LinkVideo.Helper_Setup.exe" in build and "LinkVideo.Helper_Setup_Next.exe" not in build),
         ("full installer removes stale runtime", "cleanRuntimeBeforeInstall(dest)" in backend),
-        ("draft release uses authoritative Setup", '$setup = "installer_next/output/LinkVideo.Helper_Setup.exe"' in workflow),
-        ("draft release keeps private patch baseline", 'LinkVideo.Helper_Payload_${version}.zip' in workflow and 'LinkVideo.Helper_Payload_${version}.json' in workflow),
-        ("Actions artifacts are non-authoritative", "continue-on-error: true" in workflow),
+        ("exact Setup has side-effect-free self-test", 'hasArg("--self-test")' in selftest and "installerSelfTest()" in selftest),
+        ("CI executes produced Setup self-test", "Self-test exact produced Setup payload" in workflow and "--self-test" in workflow),
+        ("RC is one private draft Release", "Create or update private RC draft" in workflow and '"rc-$version"' in workflow),
+        ("Actions artifact quota is not used", "actions/upload-artifact" not in workflow),
+        ("legacy Inno build is gone", "build_setup.bat" not in workflow and "innosetup" not in workflow.lower()),
+        ("final draft uses authoritative Setup", "Create or update private final draft Release" in workflow and "installer_next/output/LinkVideo.Helper_Setup.exe" in workflow),
+        ("final draft keeps private patch baseline", 'LinkVideo.Helper_Payload_${version}.zip' in workflow and 'LinkVideo.Helper_Payload_${version}.json' in workflow),
+        ("temporary RC is deleted on final draft", "gh release delete $rcTag" in workflow and "--cleanup-tag" in workflow),
         ("public publisher downloads Setup", "--pattern '*Setup.exe'" in publish),
         ("public manifest writes SHA", '"sha256": setup_sha' in publish),
     ]
@@ -209,9 +239,8 @@ def audit_release_chain(audit: Audit) -> None:
     if "LOCALAPPDATA" in cleanup_section or "APPDATA" in cleanup_section:
         audit.error("Full installer cleanup must not delete LocalAppData/AppData user cache")
 
-    draft_section = workflow.split("Create or update private draft Release", 1)[-1]
-    if "release_upload/LinkVideo_VPN_Helper_Setup.exe" in draft_section:
-        audit.error("Private draft Release still references legacy Inno Setup")
+    if "release_upload/LinkVideo_VPN_Helper_Setup.exe" in workflow:
+        audit.error("Windows workflow still references the retired Inno release path")
 
 
 def audit_archive_contract(audit: Audit) -> None:
@@ -258,10 +287,17 @@ def audit_obsolete_runtime(audit: Audit) -> None:
     forbidden = [
         PACKAGE / "services" / "vpn_quarantine_runtime_fix.py",
         SCRIPTS / "prepare_bundled_ffmpeg.ps1",
+        ROOT / "installer.iss",
+        ROOT / "build_setup.bat",
+        ROOT / "prepare_release.bat",
+        ROOT / "server_example" / "version.json",
     ]
     for path in forbidden:
         if path.exists():
-            audit.error(f"Obsolete/conflicting runtime file must be removed: {_rel(path)}")
+            audit.error(f"Obsolete/conflicting release file must be removed: {_rel(path)}")
+
+    for path in ROOT.glob("BUILD_RELEASE_*.bat"):
+        audit.error(f"Versioned build script must not live in repository root: {_rel(path)}")
 
 
 def main() -> None:
