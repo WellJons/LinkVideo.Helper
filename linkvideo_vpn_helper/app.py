@@ -155,6 +155,10 @@ def main() -> int:
     install_background_ux()
     from linkvideo_vpn_helper.ui.manual_scan_feedback import install_manual_scan_feedback
     install_manual_scan_feedback()
+    # Restore the three archive download transports before the UX wrapper captures
+    # ArchiveDownloadPage methods. FFmpeg is downloaded/cached only on first use.
+    from linkvideo_vpn_helper.services.archive_download_methods import install_archive_download_methods
+    install_archive_download_methods()
     from linkvideo_vpn_helper.ui.archive_download_ux import install_archive_download_ux
     install_archive_download_ux()
     from linkvideo_vpn_helper.ui.silent_update_integration import install_silent_patch_updates
