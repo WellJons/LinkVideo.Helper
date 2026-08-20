@@ -4,6 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "installer_next" / "backend_windows.go"
+SELFTEST = ROOT / "installer_next" / "selftest_windows.go"
 
 
 def main() -> None:
@@ -34,7 +35,24 @@ def main() -> None:
     assert "APPDATA" not in cleanup
     assert "removeUserData" not in cleanup
 
-    print("CORE TESTS 3.0.11 INSTALLER CLEANUP OK")
+    selftest = SELFTEST.read_text(encoding="utf-8")
+    for marker in (
+        'hasArg("--self-test")',
+        "installerSelfTest()",
+        "cleanRuntimeBeforeInstall(dest)",
+        "extractPayload(dest, nil)",
+        '"LinkVideo.Helper.Updater.exe"',
+        '"Uninstall.exe"',
+        'strings.EqualFold(entry.Name(), "ffmpeg.exe")',
+    ):
+        assert marker in selftest, f"installer self-test missing {marker}"
+
+    # Self-test must finish before main() can request elevation or touch the
+    # installed product. init() + os.Exit keeps this verification side-effect free.
+    assert "func init()" in selftest
+    assert "os.Exit(20)" in selftest and "os.Exit(0)" in selftest
+
+    print("CORE TESTS 3.0.11 INSTALLER CLEANUP/SELF-TEST OK")
 
 
 if __name__ == "__main__":
