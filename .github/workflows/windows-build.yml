@@ -74,7 +74,13 @@ jobs:
           Set-Content -LiteralPath 'patcher/patch_manifest.json' -Value '{}' -Encoding utf8NoBOM
           try {
             Push-Location installer_next
-            try { go vet ./...; if ($LASTEXITCODE -ne 0) { throw 'installer_next go vet failed' } } finally { Pop-Location }
+            try {
+              # WM_DRAWITEM lParam is a Windows ABI pointer to DRAWITEMSTRUCT.
+              # core_tests_3_0_11_win32_pointer_bridge.py allowlists exactly that
+              # one uintptr -> pointer conversion. Keep every other vet analyzer.
+              go vet -unsafeptr=false ./...
+              if ($LASTEXITCODE -ne 0) { throw 'installer_next go vet failed' }
+            } finally { Pop-Location }
             Push-Location patcher
             try { go vet ./...; if ($LASTEXITCODE -ne 0) { throw 'patcher go vet failed' } } finally { Pop-Location }
             Push-Location silent_updater
