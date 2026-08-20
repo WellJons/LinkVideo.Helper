@@ -4,16 +4,14 @@
 
 Текущая release-candidate версия: **3.0.11**.
 
-## Что хранится в репозитории
+## Структура
 
-В Git находятся исходники, тесты, установщик и release-автоматика. Готовые EXE, старые сборки и исторические release-файлы в корне не хранятся: история уже доступна через Git и GitHub Releases.
-
-Основные каталоги:
+В Git находятся исходники, тесты и release-автоматика. Готовые EXE, старые сборочные BAT-файлы и исторические release-notes в корне не хранятся: история уже есть в Git/GitHub Releases.
 
 - `linkvideo_vpn_helper/` — приложение;
-- `installer_next/` — актуальный установщик/деинсталлятор;
-- `silent_updater/` и `patcher/` — механизм обновлений;
-- `scripts/` — тесты, аудит и сборка;
+- `installer_next/` — актуальный установщик и деинсталлятор;
+- `silent_updater/`, `patcher/` — обновления;
+- `scripts/` — аудит, regressions и сборка;
 - `docs/` — актуальная техническая документация.
 
 ## Запуск из исходников
@@ -24,34 +22,41 @@ Windows + Python 3.12:
 run.bat
 ```
 
-## Проверка перед релизом
+## Полная проверка релиза
 
-Главная проверка:
+Есть один авторитетный локальный entry point:
 
-```bat
-python scripts\release_preflight.py
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify_release.ps1
 ```
 
-Она компилирует Python-код, запускает полный source-аудит и все `core_tests*.py`.
+Он выполняет весь release gate:
 
-Полная Windows-сборка:
+1. проверяет чистоту tracked source tree и версию;
+2. запускает `release_preflight.py`: compile Python, полный source-аудит и все `core_tests*.py`;
+3. запускает Ruff correctness checks;
+4. запускает `go vet` для installer/patcher/updater;
+5. пересобирает PyInstaller runtime с нуля;
+6. собирает актуальные Setup/Uninstall и differential patch pipeline;
+7. запускает `--self-test` на **точно том Setup.exe**, который пойдёт в RC;
+8. проверяет Windows ProductVersion приложения, Setup и Uninstall;
+9. считает SHA-256;
+10. создаёт локальный `release_candidate/verification.json` и RC EXE.
 
-```bat
-build_onedir.bat
-powershell -ExecutionPolicy Bypass -File scripts\build_next_installer.ps1
-installer_next\output\LinkVideo.Helper_Setup.exe --self-test
-```
+`--self-test` не устанавливает программу: он в temp-каталоге проверяет встроенный payload, очистку старого runtime, обязательные EXE и отсутствие встроенного FFmpeg.
 
-`--self-test` запускается на **точно том EXE**, который затем используется как RC/релиз: он без установки проверяет встроенный payload, очистку старого runtime, обязательные EXE и отсутствие встроенного FFmpeg.
+## CI и RC
 
-Тот же pipeline автоматически выполняется в GitHub Actions. Публичный релиз не должен создаваться, пока RC не прошёл ручную проверку на рабочей Windows-системе.
+Обычные development-коммиты больше не запускают тяжёлую Windows release-сборку и не расходуют Actions-квоту. Полный CI запускается только для отдельной временной ветки `rc/**`, для `v*` final tag либо вручную через `workflow_dispatch`.
 
-## RC и обновления
+Actions artifacts для RC не используются. У версии существует один приватный draft Release `rc-<version>`; следующая успешно проверенная RC-сборка заменяет его содержимое вместо накопления старых сборок.
 
-Actions artifacts для RC не используются. На release-ветке поддерживается один приватный draft Release `rc-<version>`; следующая успешная сборка заменяет в нём Setup, поэтому старые RC не накапливаются.
+После создания final draft временный RC Release/tag удаляется. Публичное обновление публикуется только после ручной проверки RC.
 
-Финальный update-channel находится в отдельном репозитории `WellJons/LinkVideo.Helper.Updates`: desktop Helper проверяет manifest, SHA-256 и Windows ProductVersion перед запуском обновления. Google Drive остаётся только переходным fallback-каналом для старых установок.
+## Канал обновлений
 
-FFmpeg в Setup не входит: при первом FFmpeg-скачивании архива он загружается в пользовательский LocalAppData-кэш и затем переиспользуется.
+Production manifest находится в отдельном `WellJons/LinkVideo.Helper.Updates`. Helper проверяет SHA-256 и Windows ProductVersion перед запуском скачанного обновления. Google Drive остаётся только переходным fallback для старых установок.
+
+FFmpeg в Setup не входит: при первом FFmpeg-скачивании архива он загружается в LocalAppData-кэш пользователя и затем переиспользуется.
 
 > Репозиторий содержит внутренний код LinkVideo и должен оставаться приватным.
