@@ -68,7 +68,11 @@ func applyPatchSilently() error {
         return fmt.Errorf("патч предназначен для %s, но установлена %s", m.FromVersion, installedVersion)
     }
 
-    stopHelper()
+    // Never touch Program Files until Windows confirms that all application
+    // processes capable of holding runtime files open are actually gone.
+    if err := stopHelperVerified(); err != nil {
+        return err
+    }
 
     backupRoot, err := os.MkdirTemp("", "LinkVideo.Helper-Patch-Backup-")
     if err != nil {

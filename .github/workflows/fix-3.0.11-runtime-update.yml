@@ -67,6 +67,7 @@ jobs:
         working-directory: tools
         run: |
           python scripts/core_tests_3_0_11_full_runtime_update.py
+          python scripts/core_tests_3_0_11_process_stop.py
 
       - name: Download exact published 3.0.11 runtime payload
         shell: pwsh
@@ -126,43 +127,48 @@ jobs:
           Write-Host "Full-runtime updater: $([math]::Round((Get-Item $patch).Length/1MB,2)) MB"
           Write-Host "SHA256: $hash"
 
-      - name: Apply updater while 3.0.10 is running
+      - name: Apply updater repeatedly while 3.0.10 is running
         shell: pwsh
         run: |
           $install = Join-Path $env:ProgramFiles 'LinkVideo.Helper'
-          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $install
-          New-Item -ItemType Directory -Force $install | Out-Null
-          Copy-Item -Path "$PWD\old\dist\LinkVideo.Helper\*" -Destination $install -Recurse -Force
-
-          $app = Join-Path $install 'LinkVideo.Helper.exe'
-          $before = [string](Get-Item $app).VersionInfo.ProductVersion
-          if ($before -notmatch '^3\.0\.10(?:\.0)?$') { throw "Test install is not 3.0.10: $before" }
-
-          $oldProcess = Start-Process -FilePath $app -PassThru
-          Start-Sleep -Seconds 3
-          Write-Host "Started old Helper PID $($oldProcess.Id); updater must terminate it before replacing runtime."
-
           $patch = Join-Path $PWD "tools\patch_output\$($env:PATCH_NAME)"
-          $patchProcess = Start-Process -FilePath $patch -ArgumentList '--silent' -Wait -PassThru
-          if ($patchProcess.ExitCode -ne 0) { throw "Updater exited with $($patchProcess.ExitCode)" }
-          Start-Sleep -Milliseconds 500
-
-          if (Get-Process -Name 'LinkVideo.Helper' -ErrorAction SilentlyContinue) {
-            throw 'Old Helper process is still running after updater completed'
-          }
-          $after = [string](Get-Item $app).VersionInfo.ProductVersion
-          if ($after -notmatch '^3\.0\.11(?:\.0)?$') { throw "Updater left ProductVersion $after" }
-
           $targetRoot = (Resolve-Path "$PWD\target-runtime").Path
-          foreach ($source in Get-ChildItem $targetRoot -Recurse -File) {
-            $relative = $source.FullName.Substring($targetRoot.Length).TrimStart('\')
-            $installed = Join-Path $install $relative
-            if (-not (Test-Path -LiteralPath $installed)) { throw "Missing installed target file: $relative" }
-            $expected = (Get-FileHash -Algorithm SHA256 -LiteralPath $source.FullName).Hash
-            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $installed).Hash
-            if ($expected -ne $actual) { throw "Installed file hash mismatch: $relative" }
+
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            Get-Process -Name 'LinkVideo.Helper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 300
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $install
+            New-Item -ItemType Directory -Force $install | Out-Null
+            Copy-Item -Path "$PWD\old\dist\LinkVideo.Helper\*" -Destination $install -Recurse -Force
+
+            $app = Join-Path $install 'LinkVideo.Helper.exe'
+            $before = [string](Get-Item $app).VersionInfo.ProductVersion
+            if ($before -notmatch '^3\.0\.10(?:\.0)?$') { throw "Attempt $attempt test install is not 3.0.10: $before" }
+
+            $oldProcess = Start-Process -FilePath $app -PassThru
+            Start-Sleep -Seconds 3
+            if ($oldProcess.HasExited) { throw "Attempt $attempt old Helper exited before updater test" }
+            Write-Host "Attempt $attempt: started old Helper PID $($oldProcess.Id)."
+
+            $patchProcess = Start-Process -FilePath $patch -ArgumentList '--silent' -Wait -PassThru
+            if ($patchProcess.ExitCode -ne 0) { throw "Attempt $attempt updater exited with $($patchProcess.ExitCode)" }
+
+            if (Get-Process -Name 'LinkVideo.Helper' -ErrorAction SilentlyContinue) {
+              throw "Attempt $attempt old Helper process is still running after updater completed"
+            }
+            $after = [string](Get-Item $app).VersionInfo.ProductVersion
+            if ($after -notmatch '^3\.0\.11(?:\.0)?$') { throw "Attempt $attempt updater left ProductVersion $after" }
+
+            foreach ($source in Get-ChildItem $targetRoot -Recurse -File) {
+              $relative = $source.FullName.Substring($targetRoot.Length).TrimStart('\')
+              $installed = Join-Path $install $relative
+              if (-not (Test-Path -LiteralPath $installed)) { throw "Attempt $attempt missing installed target file: $relative" }
+              $expected = (Get-FileHash -Algorithm SHA256 -LiteralPath $source.FullName).Hash
+              $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $installed).Hash
+              if ($expected -ne $actual) { throw "Attempt $attempt installed file hash mismatch: $relative" }
+            }
+            Write-Host "Attempt $attempt/3 OK: running 3.0.10 was fully replaced by exact published 3.0.11 runtime."
           }
-          Write-Host 'Installed runtime matches the exact published 3.0.11 payload.'
 
       - name: Publish updater asset
         shell: pwsh
