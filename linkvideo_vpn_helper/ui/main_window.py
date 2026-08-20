@@ -18,7 +18,8 @@ from linkvideo_vpn_helper.services.server_registry import ServerRegistry
 from linkvideo_vpn_helper.services.update_service import UpdateService
 from linkvideo_vpn_helper.services.vpn_service import SessionCredentials, VPNService
 from linkvideo_vpn_helper.theme import get_theme_style
-from linkvideo_vpn_helper.ui.components import AnimatedStack, Card, Toast
+from linkvideo_vpn_helper.ui.components import Card
+from linkvideo_vpn_helper.ui.components_compat import AnimatedStack, Toast
 from linkvideo_vpn_helper.ui.dialogs import ConfirmDialog
 from linkvideo_vpn_helper.version import APP_VERSION
 
