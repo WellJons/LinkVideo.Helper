@@ -184,7 +184,7 @@ jobs:
           GH_TOKEN: ${{ secrets.UPDATES_REPO_TOKEN }}
         run: |
           $apiPath = "repos/$($env:UPDATES_REPO)/contents/update-manifest.json"
-          $current = gh api "$apiPath?ref=main" | ConvertFrom-Json
+          $current = gh api --method GET "${apiPath}?ref=main" | ConvertFrom-Json
           $raw = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($current.content -replace '\s','')))
           $manifest = $raw | ConvertFrom-Json
           $manifest.version = $env:TO_VERSION
@@ -213,7 +213,7 @@ jobs:
           $ok = $false
           for ($i = 1; $i -le 12; $i++) {
             try {
-              $live = Invoke-RestMethod -Headers @{ 'Cache-Control'='no-cache' } -Uri "$manifestUrl?verify=$($env:GITHUB_RUN_ID)-$i"
+              $live = Invoke-RestMethod -Headers @{ 'Cache-Control'='no-cache' } -Uri "${manifestUrl}?verify=$($env:GITHUB_RUN_ID)-$i"
               $entry = $live.patches.'3.0.10'
               if ([string]$live.version -eq $env:TO_VERSION -and [string]$entry.sha256 -eq $env:PATCH_SHA256) {
                 $ok = $true
@@ -250,7 +250,7 @@ jobs:
         run: |
           if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) { exit 0 }
           $apiPath = "repos/$($env:UPDATES_REPO)/contents/update-manifest.json"
-          $current = gh api "$apiPath?ref=main" | ConvertFrom-Json
+          $current = gh api --method GET "${apiPath}?ref=main" | ConvertFrom-Json
           $raw = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($current.content -replace '\s','')))
           $manifest = $raw | ConvertFrom-Json
           if ([string]$manifest.version -eq $env:TO_VERSION) {
