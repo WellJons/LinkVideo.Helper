@@ -47,15 +47,10 @@ def _check_version_contract() -> None:
     if f'#define MyAppVersion "{APP_VERSION}"' not in installer:
         raise SystemExit("installer.iss version is not synchronized with APP_VERSION")
 
-    # 3.0.10 consolidated retention runtime into vpn_retention_policy. Keeping an
-    # old quarantine patch beside it is dangerous because install order could
-    # silently replace script sources/version again.
     obsolete_runtime = PACKAGE / "services" / "vpn_quarantine_runtime_fix.py"
     if obsolete_runtime.exists():
         raise SystemExit("Obsolete vpn_quarantine_runtime_fix.py must not be shipped")
 
-    # Legacy regression tests must never pin one concrete release number again.
-    # A version bump must not require editing a chain of old tests.
     offenders: list[str] = []
     for path in _collect_tests():
         text = path.read_text(encoding="utf-8")
@@ -72,6 +67,17 @@ def _compile_python() -> None:
     ok_scripts = compileall.compile_dir(str(SCRIPTS), quiet=1, force=True)
     if not (ok_package and ok_scripts):
         raise SystemExit("Python compile preflight failed")
+
+
+def _run_full_audit() -> None:
+    print("\n=== full_release_audit.py ===", flush=True)
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "full_release_audit.py")],
+        cwd=str(ROOT),
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SystemExit(f"Full source audit failed (exit {result.returncode})")
 
 
 def _run_regressions() -> None:
@@ -99,6 +105,7 @@ def _run_regressions() -> None:
 def main() -> None:
     _check_version_contract()
     _compile_python()
+    _run_full_audit()
     _run_regressions()
     print(f"\nRELEASE PREFLIGHT OK — {APP_NAME} {APP_VERSION}")
 
