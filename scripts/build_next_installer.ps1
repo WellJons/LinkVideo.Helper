@@ -24,7 +24,9 @@ Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $outputDir '*.exe')
 
 function New-VersionResource([string]$Description, [string]$OriginalName, [string]$InternalName) {
     Remove-Item -Force -ErrorAction SilentlyContinue $resourcePath
-    Set-Content -LiteralPath $versionInfoPath -Value '{}' -Encoding utf8NoBOM
+    # Windows PowerShell 5.1 does not support Set-Content -Encoding utf8NoBOM.
+    # goversioninfo expects normal UTF-8 JSON, so write it explicitly without BOM.
+    [System.IO.File]::WriteAllText($versionInfoPath, '{}', (New-Object System.Text.UTF8Encoding($false)))
     $iconPath = Join-Path $root 'icon.ico'
     Push-Location $installerDir
     try {
