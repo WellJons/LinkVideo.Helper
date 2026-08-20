@@ -178,6 +178,43 @@ func stopHelperProcesses() {
     time.Sleep(450 * time.Millisecond)
 }
 
+// A full installer is an authoritative runtime snapshot, not an overlay.  Old
+// files that disappeared from the new payload must not survive an upgrade: a
+// stale Python module, DLL or the temporary 3.0.10 bundled FFmpeg can otherwise
+// silently override the new release.  User data and the on-demand FFmpeg cache
+// live under LocalAppData and are intentionally not touched here.
+func cleanRuntimeBeforeInstall(dest string) error {
+    for _, name := range []string{"_internal", "tools", "linkvideo_vpn_helper", "scripts"} {
+        target := filepath.Join(dest, name)
+        if err := os.RemoveAll(target); err != nil {
+            return fmt.Errorf("не удалось удалить старый каталог %s: %w", name, err)
+        }
+    }
+
+    for _, name := range []string{
+        appExeName,
+        "LinkVideo.Helper.Updater.exe",
+        "LinkVideo VPN Helper.exe",
+        "updater.exe",
+        "Uninstall.exe",
+    } {
+        target := filepath.Join(dest, name)
+        if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+            return fmt.Errorf("не удалось удалить старый файл %s: %w", name, err)
+        }
+    }
+
+    for _, pattern := range []string{"*.py", "*.pyc", "*.new"} {
+        matches, _ := filepath.Glob(filepath.Join(dest, pattern))
+        for _, target := range matches {
+            if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+                return fmt.Errorf("не удалось удалить старый файл %s: %w", filepath.Base(target), err)
+            }
+        }
+    }
+    return nil
+}
+
 func extractPayload(dest string, progress progressFunc) error {
     if len(payload) == 0 {
         return errors.New("установочный пакет не содержит payload")
@@ -332,6 +369,10 @@ func installProduct(opts installOptions, progress progressFunc) (string, error) 
     stopHelperProcesses()
     if err := os.MkdirAll(dest, 0o755); err != nil {
         return "", fmt.Errorf("не удалось создать папку установки: %w", err)
+    }
+    progress(12, "Удаление файлов предыдущей версии…")
+    if err := cleanRuntimeBeforeInstall(dest); err != nil {
+        return "", err
     }
     progress(14, "Обновление файлов программы…")
     if err := extractPayload(dest, progress); err != nil {
