@@ -5,11 +5,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 STOPPER = ROOT / "patcher" / "process_stop_windows.go"
 SILENT = ROOT / "patcher" / "silent_mode_windows.go"
+NATIVE_VERSION = ROOT / "patcher" / "native_version_windows.go"
 
 
 def main() -> int:
     stop = STOPPER.read_text(encoding="utf-8")
     silent = SILENT.read_text(encoding="utf-8")
+    native = NATIVE_VERSION.read_text(encoding="utf-8")
 
     required_stop_fragments = (
         "func stopHelperVerified() error",
@@ -27,7 +29,21 @@ def main() -> int:
     assert "stopHelper()" not in silent
     assert "Never touch Program Files until Windows confirms" in silent
 
-    print("CORE TESTS 3.0.11 VERIFIED PROCESS STOP OK")
+    assert silent.count("nativeProductVersion(appPath)") == 2
+    assert "productVersion(appPath)" not in silent
+    for fragment in (
+        'syscall.NewLazyDLL("version.dll")',
+        'GetFileVersionInfoSizeW',
+        'GetFileVersionInfoW',
+        'VerQueryValueW',
+        'func nativeProductVersion(path string) (string, error)',
+        'ProductVersionMS',
+        'ProductVersionLS',
+    ):
+        assert fragment in native, fragment
+    assert "powershell.exe" not in native.lower()
+
+    print("CORE TESTS 3.0.11 VERIFIED PROCESS STOP + NATIVE VERSION OK")
     return 0
 
 

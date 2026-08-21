@@ -62,7 +62,7 @@ func applyPatchSilently() error {
 
     installDir := defaultInstallDir()
     appPath := filepath.Join(installDir, "LinkVideo.Helper.exe")
-    installedVersion, err := productVersion(appPath)
+    installedVersion, err := nativeProductVersion(appPath)
     if err != nil {
         return err
     }
@@ -120,7 +120,7 @@ func applyPatchSilently() error {
         return rollbackAfterFailure(err, installDir, backupRoot, existingBefore, affected)
     }
 
-    nextVersion, err := productVersion(appPath)
+    nextVersion, err := nativeProductVersion(appPath)
     if err != nil {
         return rollbackAfterFailure(
             fmt.Errorf("после патча не удалось прочитать версию приложения: %w", err),
