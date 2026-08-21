@@ -4,18 +4,22 @@ import hashlib
 import json
 import os
 import re
+import ssl
 import subprocess
 import tempfile
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+import certifi
+
 from linkvideo_vpn_helper.version import APP_VERSION
 
-# Main production channel. As with LinkVideo.Monitor, source code remains in a
-# private repository while installers/manifests live in a separate public repo.
+# Main production channel. Source and release automation are public now, while
+# installers/manifests continue to live in the dedicated public updates repo.
 GITHUB_UPDATE_MANIFEST_URL = (
     "https://raw.githubusercontent.com/WellJons/LinkVideo.Helper.Updates/main/update-manifest.json"
 )
@@ -115,6 +119,69 @@ def _validate_update_url(value: str, *, source: str = "") -> str:
     return urllib.parse.urlunsplit(parsed)
 
 
+def _update_tls_context() -> ssl.SSLContext:
+    """Return strict TLS trust using both Windows roots and certifi.
+
+    Some support PCs have an incomplete Python/OpenSSL CA chain while others
+    receive HTTPS through a locally trusted antivirus/proxy certificate. Using
+    only one trust source makes updates machine-dependent. Start with Python's
+    platform defaults (which load Windows ROOT/CA stores on Windows), then add
+    certifi's current public CA bundle. Certificate and hostname verification
+    remain mandatory; there is deliberately no unverified fallback.
+    """
+    context = ssl.create_default_context()
+    try:
+        context.load_default_certs(ssl.Purpose.SERVER_AUTH)
+    except Exception:
+        # create_default_context already attempted platform roots. Keep going so
+        # certifi can still provide the public Web PKI roots.
+        pass
+    try:
+        bundle = str(certifi.where() or "").strip()
+        if bundle:
+            context.load_verify_locations(cafile=bundle)
+    except Exception as exc:
+        raise RuntimeError(f"Не удалось загрузить встроенные корневые сертификаты обновления: {exc}") from exc
+    context.check_hostname = True
+    context.verify_mode = ssl.CERT_REQUIRED
+    return context
+
+
+def _is_certificate_error(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ssl.SSLCertVerificationError):
+            return True
+        if isinstance(current, urllib.error.URLError):
+            reason = getattr(current, "reason", None)
+            if isinstance(reason, BaseException):
+                current = reason
+                continue
+        cause = getattr(current, "__cause__", None) or getattr(current, "__context__", None)
+        current = cause if isinstance(cause, BaseException) else None
+    return False
+
+
+def _urlopen_verified(request, *, timeout: float):
+    """Open a URL with strict combined trust and a user-facing TLS error."""
+    kwargs = {"timeout": timeout}
+    url = str(getattr(request, "full_url", request) or "")
+    if urllib.parse.urlsplit(url).scheme.lower() == "https":
+        kwargs["context"] = _update_tls_context()
+    try:
+        return urllib.request.urlopen(request, **kwargs)
+    except Exception as exc:
+        if _is_certificate_error(exc):
+            raise RuntimeError(
+                "Не удалось проверить TLS-сертификат сервера обновлений. "
+                "Проверьте дату и время Windows, обновления корневых сертификатов и HTTPS-проверку "
+                "антивируса/прокси. Проверка сертификатов в Helper не отключается."
+            ) from exc
+        raise
+
+
 def _windows_product_version(path: Path) -> str:
     """Read ProductVersion without passing a filesystem path through -Command.
 
@@ -195,7 +262,7 @@ class UpdateService:
                 "Pragma": "no-cache",
             },
         )
-        with urllib.request.urlopen(request, timeout=15) as response:
+        with _urlopen_verified(request, timeout=15) as response:
             payload = response.read(_MAX_MANIFEST_BYTES + 1)
         if len(payload) > _MAX_MANIFEST_BYTES:
             raise RuntimeError("Манифест обновления превышает 1 МБ")
@@ -308,7 +375,7 @@ class UpdateService:
         try:
             if progress_callback:
                 progress_callback(0)
-            with urllib.request.urlopen(request, timeout=60) as response:
+            with _urlopen_verified(request, timeout=60) as response:
                 _validate_update_url(response.geturl(), source=channel_source)
                 try:
                     total = int(response.headers.get("Content-Length", 0) or 0)
