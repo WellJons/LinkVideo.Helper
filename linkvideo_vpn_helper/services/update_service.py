@@ -130,17 +130,15 @@ def _update_tls_context() -> ssl.SSLContext:
     remain mandatory; there is deliberately no unverified fallback.
     """
     context = ssl.create_default_context()
-    try:
-        context.load_default_certs(ssl.Purpose.SERVER_AUTH)
-    except Exception:
-        # create_default_context already attempted platform roots. Keep going so
-        # certifi can still provide the public Web PKI roots.
-        pass
+    # create_default_context() already loads platform defaults; repeat the
+    # explicit SERVER_AUTH load so Windows ROOT/CA stores remain part of trust
+    # even when certifi is added below. Failure is intentionally not hidden.
+    context.load_default_certs(ssl.Purpose.SERVER_AUTH)
     try:
         bundle = str(certifi.where() or "").strip()
         if bundle:
             context.load_verify_locations(cafile=bundle)
-    except Exception as exc:
+    except (OSError, ssl.SSLError) as exc:
         raise RuntimeError(f"Не удалось загрузить встроенные корневые сертификаты обновления: {exc}") from exc
     context.check_hostname = True
     context.verify_mode = ssl.CERT_REQUIRED
@@ -166,12 +164,15 @@ def _is_certificate_error(exc: BaseException) -> bool:
 
 def _urlopen_verified(request, *, timeout: float):
     """Open a URL with strict combined trust and a user-facing TLS error."""
-    kwargs = {"timeout": timeout}
     url = str(getattr(request, "full_url", request) or "")
-    if urllib.parse.urlsplit(url).scheme.lower() == "https":
-        kwargs["context"] = _update_tls_context()
     try:
-        return urllib.request.urlopen(request, **kwargs)
+        if urllib.parse.urlsplit(url).scheme.lower() == "https":
+            return urllib.request.urlopen(
+                request,
+                timeout=timeout,
+                context=_update_tls_context(),
+            )
+        return urllib.request.urlopen(request, timeout=timeout)
     except Exception as exc:
         if _is_certificate_error(exc):
             raise RuntimeError(
