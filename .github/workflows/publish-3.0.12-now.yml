@@ -1,0 +1,316 @@
+name: Publish LinkVideo.Helper 3.0.12 now
+
+on:
+  push:
+    branches:
+      - ops/publish-3.0.12
+
+permissions:
+  contents: write
+  statuses: write
+
+concurrency:
+  group: publish-linkvideo-helper-3-0-12
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    env:
+      SOURCE_REPO: WellJons/LinkVideo.Helper
+      UPDATES_REPO: WellJons/LinkVideo.Helper.Updates
+      SOURCE_SHA: 825d8dd1042f9d4b241ed36d1d12e53af7dc7ed5
+      FROM_VERSION: 3.0.11
+      TO_VERSION: 3.0.12
+      TAG: v3.0.12
+      PATCH_NAME: LinkVideo.Helper_Patch_3.0.11_to_3.0.12.exe
+      STATUS_CONTEXT: release/3.0.12-publication
+
+    steps:
+      - name: Mark publication pending
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "repos/$env:SOURCE_REPO/statuses/$env:SOURCE_SHA" `
+            -f state=pending `
+            -f context=$env:STATUS_CONTEXT `
+            -f description='Building and verifying 3.0.12 Setup + 3.0.11 patch' `
+            -f target_url="$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" | Out-Null
+
+      - name: Checkout exact release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.x'
+          cache: false
+
+      - name: Full 3.0.12 release verification
+        shell: pwsh
+        run: |
+          ./scripts/verify_release.ps1
+          if ($LASTEXITCODE -ne 0) { throw '3.0.12 release verification failed' }
+          $version = (python -c "from linkvideo_vpn_helper.version import APP_VERSION; print(APP_VERSION)").Trim()
+          if ($version -ne $env:TO_VERSION) { throw "APP_VERSION is $version instead of $env:TO_VERSION" }
+
+      - name: Download exact published 3.0.11 runtime
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force previous-runtime | Out-Null
+          gh release download "v$env:FROM_VERSION" --repo $env:SOURCE_REPO --dir previous-runtime --pattern "LinkVideo.Helper_Payload_$($env:FROM_VERSION).zip"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not download exact 3.0.11 payload' }
+          $oldZip = Join-Path $PWD "previous-runtime\LinkVideo.Helper_Payload_$($env:FROM_VERSION).zip"
+          if (-not (Test-Path -LiteralPath $oldZip)) { throw '3.0.11 payload is missing' }
+
+      - name: Build differential 3.0.11 to 3.0.12 patch
+        shell: pwsh
+        run: |
+          $oldZip = Join-Path $PWD "previous-runtime\LinkVideo.Helper_Payload_$($env:FROM_VERSION).zip"
+          ./scripts/build_patch.ps1 -FromZip $oldZip -FromVersion $env:FROM_VERSION -ToVersion $env:TO_VERSION -ToDir 'dist\LinkVideo.Helper'
+          if ($LASTEXITCODE -ne 0) { throw 'Patch build failed' }
+          $patch = Join-Path $PWD "patch_output\$($env:PATCH_NAME)"
+          if (-not (Test-Path -LiteralPath $patch)) { throw 'Patch EXE was not created' }
+          $manifest = Get-Content -Raw -LiteralPath 'patch_output\bundle\patch_manifest.json' | ConvertFrom-Json
+          if ([string]$manifest.from_version -ne $env:FROM_VERSION -or [string]$manifest.to_version -ne $env:TO_VERSION) {
+            throw 'Patch manifest versions are wrong'
+          }
+          $patchHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $patch).Hash.ToLowerInvariant()
+          $setup = Join-Path $PWD 'installer_next\output\LinkVideo.Helper_Setup.exe'
+          $setupHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash.ToLowerInvariant()
+          "PATCH_SHA256=$patchHash" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "SETUP_SHA256=$setupHash" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Patch size: $([math]::Round((Get-Item $patch).Length/1MB,2)) MB"
+          Write-Host "Patch SHA256: $patchHash"
+          Write-Host "Setup SHA256: $setupHash"
+
+      - name: End-to-end patch running 3.0.11 to exact 3.0.12 runtime
+        shell: pwsh
+        run: |
+          $install = Join-Path $env:ProgramFiles 'LinkVideo.Helper'
+          $oldZip = Join-Path $PWD "previous-runtime\LinkVideo.Helper_Payload_$($env:FROM_VERSION).zip"
+          $patch = Join-Path $PWD "patch_output\$($env:PATCH_NAME)"
+          $targetRoot = (Resolve-Path 'dist\LinkVideo.Helper').Path
+          $errorPath = Join-Path $env:ProgramData 'LinkVideo.Helper\Updates\patch-error.txt'
+
+          Get-Process -Name 'LinkVideo.Helper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Milliseconds 300
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $install
+          Remove-Item -Force -ErrorAction SilentlyContinue $errorPath
+          New-Item -ItemType Directory -Force $install | Out-Null
+          Expand-Archive -LiteralPath $oldZip -DestinationPath $install -Force
+
+          $app = Join-Path $install 'LinkVideo.Helper.exe'
+          $before = [string](Get-Item $app).VersionInfo.ProductVersion
+          if ($before -notmatch '^3\.0\.11(?:\.0)?$') { throw "Old payload ProductVersion is $before" }
+
+          $oldProcess = Start-Process -FilePath $app -PassThru
+          Start-Sleep -Seconds 3
+          if ($oldProcess.HasExited) { throw '3.0.11 exited before live patch test' }
+          Write-Host "Live 3.0.11 PID: $($oldProcess.Id)"
+
+          $patchProcess = Start-Process -FilePath $patch -ArgumentList '--silent' -Wait -PassThru
+          if ($patchProcess.ExitCode -ne 0) {
+            $detail = 'patch-error.txt was not created'
+            if (Test-Path -LiteralPath $errorPath) { $detail = (Get-Content -Raw -LiteralPath $errorPath).Trim() }
+            throw "Patch exited with $($patchProcess.ExitCode): $detail"
+          }
+          if (Get-Process -Name 'LinkVideo.Helper' -ErrorAction SilentlyContinue) { throw 'Old Helper is still running after patch' }
+
+          $after = [string](Get-Item $app).VersionInfo.ProductVersion
+          if ($after -notmatch '^3\.0\.12(?:\.0)?$') { throw "Patched ProductVersion is $after" }
+
+          $targetFiles = @(Get-ChildItem $targetRoot -Recurse -File | ForEach-Object { $_.FullName.Substring($targetRoot.Length).TrimStart('\') } | Sort-Object)
+          $installedFiles = @(Get-ChildItem $install -Recurse -File | ForEach-Object { $_.FullName.Substring($install.Length).TrimStart('\') } | Sort-Object)
+          $setDiff = @(Compare-Object $targetFiles $installedFiles)
+          if ($setDiff.Count -ne 0) { throw "Patched runtime file set differs from target: $($setDiff | Out-String)" }
+          foreach ($relative in $targetFiles) {
+            $expected = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $targetRoot $relative)).Hash
+            $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $install $relative)).Hash
+            if ($expected -ne $actual) { throw "Patched runtime hash mismatch: $relative" }
+          }
+          Write-Host 'PATCH E2E OK: live 3.0.11 -> exact 3.0.12 runtime'
+
+      - name: Create source draft release with verified assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $setup = 'installer_next\output\LinkVideo.Helper_Setup.exe'
+          $uninstall = 'installer_next\output\Uninstall.exe'
+          $payloadZip = "release_payload\LinkVideo.Helper_Payload_$($env:TO_VERSION).zip"
+          $payloadJson = "release_payload\LinkVideo.Helper_Payload_$($env:TO_VERSION).json"
+          $verification = 'release_candidate\verification.json'
+          $patch = "patch_output\$($env:PATCH_NAME)"
+          $notes = "RELEASE_$($env:TO_VERSION)_RU.txt"
+          foreach ($f in @($setup,$uninstall,$payloadZip,$payloadJson,$verification,$patch,$notes)) {
+            if (-not (Test-Path -LiteralPath $f)) { throw "Missing release asset: $f" }
+          }
+          gh release view $env:TAG --repo $env:SOURCE_REPO *> $null
+          if ($LASTEXITCODE -eq 0) {
+            $state = gh release view $env:TAG --repo $env:SOURCE_REPO --json isDraft | ConvertFrom-Json
+            if (-not [bool]$state.isDraft) { throw 'v3.0.12 source release is already published' }
+            gh release upload $env:TAG $setup $uninstall $payloadZip $payloadJson $verification $patch --repo $env:SOURCE_REPO --clobber
+            gh release edit $env:TAG --repo $env:SOURCE_REPO --draft --title "LinkVideo.Helper $env:TO_VERSION" --notes-file $notes
+          } else {
+            gh release create $env:TAG $setup $uninstall $payloadZip $payloadJson $verification $patch --repo $env:SOURCE_REPO --draft --target $env:SOURCE_SHA --title "LinkVideo.Helper $env:TO_VERSION" --notes-file $notes
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create source draft release' }
+
+      - name: Publish public Setup and patch assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.UPDATES_REPO_TOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) { throw 'UPDATES_REPO_TOKEN is not configured' }
+          $setup = 'installer_next\output\LinkVideo.Helper_Setup.exe'
+          $patch = "patch_output\$($env:PATCH_NAME)"
+          gh release view $env:TAG --repo $env:UPDATES_REPO *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:TAG $setup $patch --repo $env:UPDATES_REPO --clobber
+            gh release edit $env:TAG --repo $env:UPDATES_REPO --title "LinkVideo.Helper $env:TO_VERSION" --notes "Публичный канал обновлений LinkVideo.Helper $env:TO_VERSION."
+          } else {
+            gh release create $env:TAG $setup $patch --repo $env:UPDATES_REPO --title "LinkVideo.Helper $env:TO_VERSION" --notes "Публичный канал обновлений LinkVideo.Helper $env:TO_VERSION."
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Could not publish public release assets' }
+
+          $setupUrl = "https://github.com/$($env:UPDATES_REPO)/releases/download/$($env:TAG)/LinkVideo.Helper_Setup.exe"
+          $patchUrl = "https://github.com/$($env:UPDATES_REPO)/releases/download/$($env:TAG)/$($env:PATCH_NAME)"
+          Invoke-WebRequest -UseBasicParsing -Uri $setupUrl -OutFile "$env:RUNNER_TEMP\public-setup.exe"
+          Invoke-WebRequest -UseBasicParsing -Uri $patchUrl -OutFile "$env:RUNNER_TEMP\public-patch.exe"
+          if ((Get-FileHash -Algorithm SHA256 "$env:RUNNER_TEMP\public-setup.exe").Hash.ToLowerInvariant() -ne $env:SETUP_SHA256) { throw 'Public Setup hash mismatch' }
+          if ((Get-FileHash -Algorithm SHA256 "$env:RUNNER_TEMP\public-patch.exe").Hash.ToLowerInvariant() -ne $env:PATCH_SHA256) { throw 'Public patch hash mismatch' }
+
+      - name: Publish 3.0.12 manifest with 3.0.11 patch route
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.UPDATES_REPO_TOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) { throw 'UPDATES_REPO_TOKEN is not configured' }
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue updates-repo
+          gh auth setup-git
+          gh repo clone $env:UPDATES_REPO updates-repo
+          if ($LASTEXITCODE -ne 0) { throw 'Could not clone updates repository' }
+          Copy-Item -LiteralPath 'updates-repo\update-manifest.json' -Destination "$env:RUNNER_TEMP\previous-update-manifest.json" -Force
+          $setupUrl = "https://github.com/$($env:UPDATES_REPO)/releases/download/$($env:TAG)/LinkVideo.Helper_Setup.exe"
+          $patchUrl = "https://github.com/$($env:UPDATES_REPO)/releases/download/$($env:TAG)/$($env:PATCH_NAME)"
+          $manifest = [ordered]@{
+            version = $env:TO_VERSION
+            download_url = $setupUrl
+            sha256 = $env:SETUP_SHA256
+            notes = 'Доступна версия LinkVideo.Helper 3.0.12. Исправлено скачивание обновлений при ошибках цепочки TLS; для 3.0.11 используется встроенный patch без мастера установки.'
+            mandatory = $false
+            patches = [ordered]@{
+              '3.0.11' = [ordered]@{
+                download_url = $patchUrl
+                sha256 = $env:PATCH_SHA256
+              }
+            }
+          }
+          $json = ($manifest | ConvertTo-Json -Depth 8) + "`n"
+          [IO.File]::WriteAllText((Join-Path $PWD 'updates-repo\update-manifest.json'), $json, [Text.UTF8Encoding]::new($false))
+          Push-Location updates-repo
+          try {
+            git config user.name 'LinkVideo Release Bot'
+            git config user.email 'actions@users.noreply.github.com'
+            git add update-manifest.json
+            git commit -m "Publish LinkVideo.Helper $env:TO_VERSION"
+            if ($LASTEXITCODE -ne 0) { throw 'Could not commit 3.0.12 manifest' }
+            git push origin HEAD:main
+            if ($LASTEXITCODE -ne 0) { throw 'Could not push 3.0.12 manifest' }
+          } finally { Pop-Location }
+
+      - name: Verify live 3.0.12 channel
+        shell: pwsh
+        run: |
+          $manifestUrl = "https://raw.githubusercontent.com/$($env:UPDATES_REPO)/main/update-manifest.json"
+          $live = $null
+          for ($i=1; $i -le 15; $i++) {
+            try {
+              $live = Invoke-RestMethod -Headers @{ 'Cache-Control'='no-cache' } -Uri "${manifestUrl}?release=$($env:GITHUB_RUN_ID)-$i"
+              $entry = $live.patches.'3.0.11'
+              if ([string]$live.version -eq $env:TO_VERSION -and [string]$live.sha256 -eq $env:SETUP_SHA256 -and [string]$entry.sha256 -eq $env:PATCH_SHA256) { break }
+            } catch { $live = $null }
+            Start-Sleep -Seconds 4
+          }
+          if ($null -eq $live -or [string]$live.version -ne $env:TO_VERSION) { throw 'Live manifest did not publish 3.0.12' }
+          $entry = $live.patches.'3.0.11'
+          if ([string]$entry.sha256 -ne $env:PATCH_SHA256) { throw 'Live 3.0.11 patch route hash is wrong' }
+          Invoke-WebRequest -UseBasicParsing -Uri ([string]$live.download_url) -OutFile "$env:RUNNER_TEMP\verify-setup.exe"
+          Invoke-WebRequest -UseBasicParsing -Uri ([string]$entry.download_url) -OutFile "$env:RUNNER_TEMP\verify-patch.exe"
+          if ((Get-FileHash -Algorithm SHA256 "$env:RUNNER_TEMP\verify-setup.exe").Hash.ToLowerInvariant() -ne $env:SETUP_SHA256) { throw 'Live Setup hash mismatch' }
+          if ((Get-FileHash -Algorithm SHA256 "$env:RUNNER_TEMP\verify-patch.exe").Hash.ToLowerInvariant() -ne $env:PATCH_SHA256) { throw 'Live patch hash mismatch' }
+          Write-Host "PUBLIC UPDATE READY: $env:FROM_VERSION -> $env:TO_VERSION"
+
+      - name: Publish source release after public verification
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit $env:TAG --repo $env:SOURCE_REPO --draft=false --prerelease=false
+          if ($LASTEXITCODE -ne 0) { throw 'Could not publish source release' }
+          gh release view "rc-$env:TO_VERSION" --repo $env:SOURCE_REPO *> $null
+          if ($LASTEXITCODE -eq 0) { gh release delete "rc-$env:TO_VERSION" --repo $env:SOURCE_REPO --yes --cleanup-tag }
+
+      - name: Mark publication success
+        if: success()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "repos/$env:SOURCE_REPO/statuses/$env:SOURCE_SHA" `
+            -f state=success `
+            -f context=$env:STATUS_CONTEXT `
+            -f description='3.0.12 Setup + 3.0.11 patch published and verified' `
+            -f target_url="$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" | Out-Null
+
+      - name: Restore previous manifest on failure
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.UPDATES_REPO_TOKEN }}
+        run: |
+          $backup = "$env:RUNNER_TEMP\previous-update-manifest.json"
+          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN) -or -not (Test-Path -LiteralPath $backup)) { exit 0 }
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue rollback-repo
+          gh auth setup-git
+          gh repo clone $env:UPDATES_REPO rollback-repo
+          if ($LASTEXITCODE -ne 0) { exit 0 }
+          Copy-Item -LiteralPath $backup -Destination 'rollback-repo\update-manifest.json' -Force
+          Push-Location rollback-repo
+          try {
+            git config user.name 'LinkVideo Release Bot'
+            git config user.email 'actions@users.noreply.github.com'
+            git add update-manifest.json
+            if (-not (git diff --cached --quiet)) {
+              git commit -m 'Restore previous Helper update manifest after failed 3.0.12 publication'
+              git push origin HEAD:main
+            }
+          } finally { Pop-Location }
+
+      - name: Mark publication failure
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "repos/$env:SOURCE_REPO/statuses/$env:SOURCE_SHA" `
+            -f state=failure `
+            -f context=$env:STATUS_CONTEXT `
+            -f description='3.0.12 publication failed; public manifest rollback attempted' `
+            -f target_url="$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" | Out-Null
