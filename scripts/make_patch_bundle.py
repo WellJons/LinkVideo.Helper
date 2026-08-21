@@ -55,7 +55,24 @@ def validate_version(value: str) -> str:
     return value
 
 
-def build_bundle(previous_zip: Path, current_dir: Path, from_version: str, to_version: str, out_dir: Path) -> tuple[Path, Path]:
+def build_bundle(
+    previous_zip: Path,
+    current_dir: Path,
+    from_version: str,
+    to_version: str,
+    out_dir: Path,
+    *,
+    full_runtime: bool = False,
+) -> tuple[Path, Path]:
+    """Build an authenticated updater payload.
+
+    Differential mode includes only files that differ from ``previous_zip``.
+    ``full_runtime`` deliberately includes every file from the target runtime.
+    The latter is used when the exact historical binary baseline cannot be
+    trusted: ProductVersion still gates the source version, while every target
+    runtime file is replaced with the verified 3.0.11 copy. The old baseline is
+    used only to identify known obsolete files that should be deleted.
+    """
     from_version = validate_version(from_version)
     to_version = validate_version(to_version)
     if from_version == to_version:
@@ -63,7 +80,10 @@ def build_bundle(previous_zip: Path, current_dir: Path, from_version: str, to_ve
     previous = read_previous(previous_zip)
     current = read_current(current_dir)
 
-    changed = sorted(name for name, (_path, digest) in current.items() if previous.get(name) != digest)
+    if full_runtime:
+        changed = sorted(current)
+    else:
+        changed = sorted(name for name, (_path, digest) in current.items() if previous.get(name) != digest)
     deleted = sorted(name for name in previous if name not in current)
     if not changed and not deleted:
         raise ValueError("No file differences found")
@@ -80,6 +100,7 @@ def build_bundle(previous_zip: Path, current_dir: Path, from_version: str, to_ve
         "format": 1,
         "from_version": from_version,
         "to_version": to_version,
+        "mode": "full-runtime" if full_runtime else "differential",
         "changed": {
             name: {
                 "sha256": current[name][1],
@@ -95,14 +116,26 @@ def build_bundle(previous_zip: Path, current_dir: Path, from_version: str, to_ve
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build LinkVideo.Helper differential patch bundle")
+    parser = argparse.ArgumentParser(description="Build LinkVideo.Helper authenticated update bundle")
     parser.add_argument("--from-zip", required=True, type=Path)
     parser.add_argument("--to-dir", required=True, type=Path)
     parser.add_argument("--from-version", required=True)
     parser.add_argument("--to-version", required=True)
     parser.add_argument("--out-dir", required=True, type=Path)
+    parser.add_argument(
+        "--full-runtime",
+        action="store_true",
+        help="Include every target runtime file instead of only binary differences",
+    )
     args = parser.parse_args()
-    payload, manifest = build_bundle(args.from_zip, args.to_dir, args.from_version, args.to_version, args.out_dir)
+    payload, manifest = build_bundle(
+        args.from_zip,
+        args.to_dir,
+        args.from_version,
+        args.to_version,
+        args.out_dir,
+        full_runtime=args.full_runtime,
+    )
     print(payload)
     print(manifest)
     return 0

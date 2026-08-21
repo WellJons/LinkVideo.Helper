@@ -19,8 +19,10 @@ func init() {
         return
     }
     if err := applyPatchSilently(); err != nil {
+        recordSilentPatchError(err)
         os.Exit(1)
     }
+    recordSilentPatchError(nil)
     os.Exit(0)
 }
 
@@ -60,7 +62,7 @@ func applyPatchSilently() error {
 
     installDir := defaultInstallDir()
     appPath := filepath.Join(installDir, "LinkVideo.Helper.exe")
-    installedVersion, err := productVersion(appPath)
+    installedVersion, err := nativeProductVersion(appPath)
     if err != nil {
         return err
     }
@@ -68,7 +70,11 @@ func applyPatchSilently() error {
         return fmt.Errorf("патч предназначен для %s, но установлена %s", m.FromVersion, installedVersion)
     }
 
-    stopHelper()
+    // Never touch Program Files until Windows confirms that all application
+    // processes capable of holding runtime files open are actually gone.
+    if err := stopHelperVerified(); err != nil {
+        return err
+    }
 
     backupRoot, err := os.MkdirTemp("", "LinkVideo.Helper-Patch-Backup-")
     if err != nil {
@@ -114,7 +120,7 @@ func applyPatchSilently() error {
         return rollbackAfterFailure(err, installDir, backupRoot, existingBefore, affected)
     }
 
-    nextVersion, err := productVersion(appPath)
+    nextVersion, err := nativeProductVersion(appPath)
     if err != nil {
         return rollbackAfterFailure(
             fmt.Errorf("после патча не удалось прочитать версию приложения: %w", err),
