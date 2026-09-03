@@ -272,6 +272,7 @@ def install_vpn_sheets_resilience() -> None:
 
     def prepare_sync(self, servers) -> None:
         """One bounded Google preflight before a multi-server desktop sync."""
+        self.ensure_auxiliary_sheets()
         server_sheets = [sheets.sheet_for_server(host) for host in list(servers or [])]
         minimum = len(sheets.SERVER_COLUMNS)
         with self._lv_grid_lock:
