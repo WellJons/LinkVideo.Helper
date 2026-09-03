@@ -346,7 +346,8 @@ def apply_policy_now(server, creds) -> dict[str, int]:
             age = max(0, int((now_ns - reference) // DAY_NS))
             disabled = _bool(secret.get("disabled", "no"))
 
-            if age >= DELETE_DAYS:
+            delete_after = NEVER_ACTIVE_DELETE_DAYS if last_ns <= 0 else DELETE_DAYS
+            if age >= delete_after:
                 reason = "never_active_30" if last_ns <= 0 else "inactive_365"
                 nat_removed, profile_removed = _remove_client_objects(api, secret, profiles, nat_rules)
                 counts["deleted"] += 1
