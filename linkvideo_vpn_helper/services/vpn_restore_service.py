@@ -320,7 +320,6 @@ class VPNRestoreService:
         service = str(row.get("Service", "") or secret_source.get("service", "") or "l2tp").strip()
 
         nat_payloads = self._nat_payloads(row, snapshot, login, remote)
-        intended_ports = self._intended_ports(nat_payloads)
 
         created_profile_id = ""
         created_secret_id = ""
