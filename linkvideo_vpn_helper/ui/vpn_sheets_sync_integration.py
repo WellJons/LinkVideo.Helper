@@ -29,6 +29,8 @@ class VPNSyncCoordinator(QObject):
     syncFinished = Signal(int, int)
     syncConfigMissing = Signal(str)
     mutationRequested = Signal(str, str, str)
+    deletedSearchReady = Signal(object, str, object, object)
+    deletedRestoreReady = Signal(object, object, object)
 
     def __init__(self, vpn_service, credentials, registry, settings, parent=None):
         super().__init__(parent)
@@ -49,6 +51,8 @@ class VPNSyncCoordinator(QObject):
         self._periodic.timeout.connect(self._periodic_sync)
         self._periodic.start()
         self.mutationRequested.connect(self._queue_mutation)
+        self.deletedSearchReady.connect(self._deliver_deleted_search)
+        self.deletedRestoreReady.connect(self._deliver_deleted_restore)
         # Не создаём сетевую нагрузку прямо во время старта Helper.
         QTimer.singleShot(90_000, self._periodic_sync)
         if self.backend:
@@ -80,6 +84,60 @@ class VPNSyncCoordinator(QObject):
 
     def notify_mutation(self, server: str, reason: str, login: str = "") -> None:
         self.mutationRequested.emit(str(server or ""), str(reason or "Изменение Helper"), str(login or ""))
+
+    def _restore_service(self):
+        if self.backend is None:
+            return None
+        from linkvideo_vpn_helper.services.vpn_restore_service import VPNRestoreService
+        return VPNRestoreService(self.vpn_service, self.backend)
+
+    def search_deleted_async(self, page, query: str) -> None:
+        service = self._restore_service()
+        if service is None:
+            self.deletedSearchReady.emit(page, str(query or ""), [], RuntimeError(self.config_hint()))
+            return
+        servers = list(self.registry.hosts())
+        query = str(query or "").strip()
+
+        def worker():
+            try:
+                hits = service.search_deleted(query, servers)
+                self.deletedSearchReady.emit(page, query, hits, None)
+            except Exception as exc:
+                self.deletedSearchReady.emit(page, query, [], exc)
+
+        threading.Thread(target=worker, daemon=True, name="sheets-deleted-search").start()
+
+    def restore_deleted_async(self, page, record) -> None:
+        service = self._restore_service()
+        if service is None:
+            self.deletedRestoreReady.emit(page, None, RuntimeError(self.config_hint()))
+            return
+
+        def worker():
+            try:
+                result = service.restore(record.server, self.credentials, record.login)
+                self.deletedRestoreReady.emit(page, result, None)
+            except Exception as exc:
+                self.deletedRestoreReady.emit(page, None, exc)
+
+        threading.Thread(
+            target=worker,
+            daemon=True,
+            name=f"vpn-restore-search-{getattr(record, 'login', 'client')}",
+        ).start()
+
+    @staticmethod
+    def _deliver_deleted_search(page, query: str, hits, error) -> None:
+        handler = getattr(page, "_on_deleted_search", None)
+        if callable(handler):
+            handler(query, hits, error)
+
+    @staticmethod
+    def _deliver_deleted_restore(page, result, error) -> None:
+        handler = getattr(page, "_on_deleted_restore", None)
+        if callable(handler):
+            handler(result, error)
 
     def _queue_mutation(self, server: str, reason: str, login: str):
         server = str(server or "").strip()
