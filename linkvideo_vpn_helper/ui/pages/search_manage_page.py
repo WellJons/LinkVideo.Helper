@@ -245,6 +245,11 @@ class SearchManagePage(QWidget):
         self.credentials = credentials
         self.registry = registry
         self.current: ClientRecord | None = None
+        self._deleted_current = None
+        self._deleted_lookup_query = ""
+        self._deleted_lookup_pending = False
+        self._active_match_count = 0
+        self._search_had_errors = False
         self._mode = "login"
         self._selected_port: int | None = None
         self._cancel_event = None
@@ -401,6 +406,7 @@ class SearchManagePage(QWidget):
 
     def _close_client_view(self, checked=False, immediate: bool = False):
         if immediate:
+            self._deleted_current = None
             self.detail_panel.hide()
             self.search_form.show()
             self.left_card.setMaximumWidth(16777215)
@@ -471,6 +477,10 @@ class SearchManagePage(QWidget):
             self._refresh()
 
     def _search(self):
+        if self._cancel_event is not None and not self._cancel_event.is_set():
+            self.task.show()
+            self.task.warning("Поиск уже выполняется", "Дождитесь завершения текущего поиска или нажмите Esc.")
+            return
         q = self.query.text().strip()
         if not q:
             self.task.show()
@@ -501,6 +511,11 @@ class SearchManagePage(QWidget):
         self.results.clear()
         self.search_note.clear()
         self.current = None
+        self._deleted_current = None
+        self._deleted_lookup_query = q
+        self._deleted_lookup_pending = False
+        self._active_match_count = 0
+        self._search_had_errors = False
         self._selected_port = None
         self._recent_new_ports.clear()
         self._close_client_view(immediate=True)
@@ -550,10 +565,24 @@ class SearchManagePage(QWidget):
         self.btn_search.setEnabled(True)
         failed_servers = {str(x.server).lower() for x in report.errors}
         successful = max(0, int(report.checked) - len(failed_servers))
+        self._active_match_count = len(report.matches)
+        self._search_had_errors = bool(report.errors)
 
-        # При успешном поиске не показываем отдельную плашку «Клиент найден» —
-        # результат и так сразу виден в списке и карточке справа. Ошибки одного
-        # недоступного регионального API не должны перекрывать найденного клиента.
+        for client in report.matches:
+            self._add_result(client)
+
+        archive_lookup = False
+        if self._mode == "login" and self._deleted_lookup_query == self.query.text().strip():
+            try:
+                from linkvideo_vpn_helper.ui import vpn_sheets_sync_integration as integration
+                coordinator = getattr(integration, "_COORDINATOR", None)
+                if coordinator is not None and coordinator.is_configured():
+                    archive_lookup = True
+                    self._deleted_lookup_pending = True
+                    coordinator.search_deleted_async(self, self._deleted_lookup_query)
+            except Exception:
+                archive_lookup = False
+
         if report.matches:
             self.task.hide()
             self.search_note.clear()
@@ -565,17 +594,98 @@ class SearchManagePage(QWidget):
             self.search_note.setText(
                 "Не удалось проверить:\n" + "\n".join(f"• {e.server}: {e.error.message}" for e in report.errors[:10])
             )
+        elif archive_lookup:
+            self.task.busy("Проверяю удалённые учётки", "Ищу логин в резервной базе Google Sheets…")
+            self.search_note.clear()
         else:
             self.task.done("Клиент не найден", f"Проверено серверов: {successful}/{report.total}")
             self.search_note.clear()
 
-        for client in report.matches:
-            self._add_result(client)
-        if report.matches:
+        if self.results.count():
             self.results.setCurrentRow(-1)
             self.open_hint.setText("Клик по записи — открыть карточку")
+        elif archive_lookup:
+            self.open_hint.setText("Проверяю архив удалённых…")
         else:
             self.open_hint.setText("Совпадений нет")
+
+    def _on_deleted_search(self, query: str, hits, error):
+        if self._mode != "login" or str(query or "").strip() != self.query.text().strip():
+            return
+        self._deleted_lookup_pending = False
+
+        if error is not None:
+            if self._active_match_count == 0 and not self._search_had_errors:
+                self.task.warning(
+                    "Активный клиент не найден",
+                    "Архив удалённых учёток сейчас проверить не удалось.",
+                )
+            self.search_note.setText(
+                (self.search_note.text() + "\n" if self.search_note.text() else "")
+                + f"Архив удалённых: {str(error)[:220]}"
+            )
+            return
+
+        existing_keys: set[tuple[str, str]] = set()
+        for index in range(self.results.count()):
+            item = self.results.item(index)
+            value = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+            server = str(getattr(value, "server", "") or "").strip().lower()
+            login = str(getattr(value, "login", "") or "").strip()
+            if server and login:
+                existing_keys.add((server, login))
+
+        added = 0
+        for record in list(hits or []):
+            key = (str(record.server or "").strip().lower(), str(record.login or "").strip())
+            if key in existing_keys:
+                continue
+            self._add_deleted_result(record)
+            existing_keys.add(key)
+            added += 1
+
+        if self.results.count():
+            self.task.hide()
+            self.open_hint.setText("Клик по записи — открыть карточку")
+            if added and self._active_match_count:
+                self.search_note.setText(f"Также найдено удалённых записей: {added}")
+            elif added:
+                self.search_note.setText("Найдена удалённая учётная запись — её можно восстановить.")
+        elif not self._search_had_errors:
+            self.task.done("Клиент не найден", "Нет ни активной, ни удалённой учётной записи с таким логином.")
+            self.open_hint.setText("Совпадений нет")
+
+    def _add_deleted_result(self, record):
+        item = QListWidgetItem()
+        item.setData(Qt.ItemDataRole.UserRole, record)
+        widget = Card(subtle=True)
+        widget.setObjectName("ResultCard")
+        widget.setMinimumHeight(72)
+        widget.setProperty("selected", "false")
+        widget.setProperty("deleted", "true")
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(4)
+
+        row = QHBoxLayout()
+        name = QLabel(record.login)
+        name.setObjectName("Value")
+        state = QLabel("Удалён · можно восстановить" if record.password_saved else "Удалён · нет сохранённого пароля")
+        state.setObjectName("WarningText" if record.password_saved else "DangerText")
+        row.addWidget(name)
+        row.addStretch(1)
+        row.addWidget(state)
+        layout.addLayout(row)
+
+        detail = QLabel(
+            f"{record.server} · удалена: {record.deleted_at or 'дата неизвестна'} · "
+            f"Remote IP: {record.remote_address or '—'}"
+        )
+        detail.setObjectName("TinyMuted")
+        layout.addWidget(detail)
+        item.setSizeHint(QSize(0, 76))
+        self.results.addItem(item)
+        self.results.setItemWidget(item, widget)
 
     def _add_result(self, client: ClientRecord):
         item = QListWidgetItem()
@@ -625,14 +735,179 @@ class SearchManagePage(QWidget):
         if item is None:
             return
         client = item.data(Qt.ItemDataRole.UserRole)
-        if client:
-            self._highlight_result(item)
-            changed_client = not self.current or self.current.server != client.server or self.current.login != client.login
-            self.current = client
-            if changed_client:
-                self._recent_new_ports.clear()
-            self._selected_port = client.ports[0] if client.ports else None
-            self._open_client_view()
+        if not client:
+            return
+
+        from linkvideo_vpn_helper.services.vpn_restore_service import DeletedVPNClient
+        self._highlight_result(item)
+        if isinstance(client, DeletedVPNClient):
+            self.current = None
+            self._deleted_current = client
+            self._open_deleted_view()
+            return
+
+        self._deleted_current = None
+        changed_client = not self.current or self.current.server != client.server or self.current.login != client.login
+        self.current = client
+        if changed_client:
+            self._recent_new_ports.clear()
+        self._selected_port = client.ports[0] if client.ports else None
+        self._open_client_view()
+
+    def _open_deleted_view(self):
+        record = self._deleted_current
+        if record is None:
+            return
+        self.detail_route_title.setText(f"Удалённый клиент {record.login}")
+        self.client_task.hide()
+        self.detail_panel.show()
+        self.search_form.hide()
+        self.open_hint.setText("Выберите другую запись")
+        self.results_title.setText("Найденные клиенты")
+        self._animate_search_panel(compact=True)
+        self._render_deleted_client()
+        QTimer.singleShot(0, lambda: self.detail_scroll.verticalScrollBar().setValue(0))
+
+    def _render_deleted_client(self):
+        record = self._deleted_current
+        if record is None:
+            return
+        self._clear_detail()
+
+        header_row = QHBoxLayout()
+        title = QLabel(f"Клиент {record.login}")
+        title.setObjectName("SectionTitle")
+        header_row.addWidget(title)
+        header_row.addStretch(1)
+        header_row.addWidget(StatusPill("Удалён", "warning"))
+        self.detail_l.addLayout(header_row)
+
+        info = Card(subtle=True)
+        grid = QGridLayout(info)
+        grid.setContentsMargins(14, 12, 14, 12)
+        grid.setHorizontalSpacing(24)
+        grid.setVerticalSpacing(8)
+        values = (
+            ("VPN-сервер", record.server),
+            ("Удалён", record.deleted_at or "—"),
+            ("Remote Address", record.remote_address or "—"),
+            ("Profile", record.profile or "—"),
+            ("NAT / Порты", record.ports or "—"),
+            ("Пароль в резервной базе", "Сохранён" if record.password_saved else "НЕ СОХРАНЁН"),
+        )
+        for index, (label_text, value_text) in enumerate(values):
+            label = QLabel(label_text)
+            label.setObjectName("TinyMuted")
+            value = QLabel(str(value_text))
+            value.setObjectName("Value")
+            value.setWordWrap(True)
+            grid.addWidget(label, index, 0)
+            grid.addWidget(value, index, 1)
+        self.detail_l.addWidget(info)
+
+        note = QLabel(
+            "Helper восстановит тот же PPP Secret, пароль, профиль и Remote Address. "
+            "Свободные старые внешние порты будут возвращены. Если старый порт уже "
+            "занят другим NAT-правилом, Helper не заберёт его: подберёт новый свободный "
+            "внешний порт, сохранив прежний внутренний порт назначения."
+            if record.password_saved else
+            "Старый пароль не был сохранён. Автоматическое восстановление заблокировано, "
+            "чтобы случайно не создать клиенту другой пароль."
+        )
+        note.setObjectName("Muted" if record.password_saved else "DangerText")
+        note.setWordWrap(True)
+        self.detail_l.addWidget(note)
+
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        restore = QPushButton("Восстановить клиента")
+        restore.setProperty("role", "primary")
+        restore.setEnabled(bool(record.password_saved) and not self._action_busy)
+        restore.clicked.connect(self._restore_deleted)
+        actions.addWidget(restore)
+        self._deleted_restore_btn = restore
+        self.detail_l.addLayout(actions)
+        self.detail_l.addStretch(1)
+
+    def _restore_deleted(self):
+        record = self._deleted_current
+        if record is None or self._action_busy or not record.password_saved:
+            return
+        dialog = ConfirmDialog(
+            "Восстановить удалённого клиента?",
+            f"{record.server}\nЛогин: {record.login}\nRemote Address: {record.remote_address or '—'}\n"
+            f"Старые порты: {record.ports or '—'}\n\n"
+            "Занятые внешние порты не будут перезаписаны — для них Helper подберёт новые свободные.",
+            confirm_text="Восстановить",
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        try:
+            from linkvideo_vpn_helper.ui import vpn_sheets_sync_integration as integration
+            coordinator = getattr(integration, "_COORDINATOR", None)
+            if coordinator is None or not coordinator.is_configured():
+                raise RuntimeError("Google Sheets не настроен")
+        except Exception as exc:
+            self.client_task.show()
+            self.client_task.error("Восстановление недоступно", str(exc))
+            return
+
+        self._action_busy = True
+        if hasattr(self, "_deleted_restore_btn"):
+            self._deleted_restore_btn.setEnabled(False)
+        self.client_task.show()
+        self.client_task.busy("Восстанавливаю клиента", f"{record.login} · {record.server}")
+        coordinator.restore_deleted_async(self, record)
+
+    def _on_deleted_restore(self, result, error):
+        self._action_busy = False
+        if error is not None:
+            self.client_task.show()
+            self.client_task.error("Восстановление не выполнено", str(error))
+            if hasattr(self, "_deleted_restore_btn"):
+                self._deleted_restore_btn.setEnabled(True)
+            return
+
+        self.client_task.show()
+        replacements = dict(getattr(result, "port_replacements", {}) or {})
+        if replacements:
+            replacement_text = ", ".join(
+                f"{old} → {new}" for old, new in sorted(replacements.items())
+            )
+            self.client_task.done(
+                "Клиент восстановлен · порты заменены",
+                f"{result.login} · {result.server} · {replacement_text}",
+            )
+        else:
+            self.client_task.done(
+                "Клиент восстановлен",
+                f"{result.login} · {result.server} · старые порты свободны и восстановлены",
+            )
+        try:
+            from linkvideo_vpn_helper.ui import vpn_sheets_sync_integration as integration
+            coordinator = getattr(integration, "_COORDINATOR", None)
+            if coordinator is not None:
+                coordinator.notify_mutation(
+                    result.server,
+                    "восстановление клиента из резервной базы",
+                    result.login,
+                )
+        except Exception as exc:
+            self.search_note.setText(
+                "Клиент восстановлен, но автоматическую синхронизацию базы "
+                f"не удалось запустить: {str(exc)[:180]}"
+            )
+
+        self._deleted_current = None
+        QTimer.singleShot(
+            3000 if dict(getattr(result, "port_replacements", {}) or {}) else 1200,
+            lambda: (
+                self._close_client_view(immediate=True),
+                self._search(),
+            ),
+        )
 
     def _clear_detail(self):
         while self.detail_l.count():

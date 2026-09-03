@@ -66,11 +66,12 @@ try:
     service = public.VPNAutomationService()
     result = service.seed_lifecycle("vpn-test", SessionCredentials("u", "p"))
     assert result.total == 1
-    # Initialization is non-destructive and state Q is reserved for a PPP Secret
-    # that is really disabled. Old enabled candidates stay sleeping until LV-Aging
-    # is explicitly enabled and applies the policy.
-    assert result.sleeping == 1
+    # Initialization stays non-destructive: the account is only classified as
+    # an archive candidate. Actual deletion happens later only when LV-Aging is
+    # enabled and enforces the policy. Never-active accounts use the 30-day rule.
+    assert result.sleeping == 0
     assert result.quarantine == 0
+    assert result.archive == 1
     assert FakeAPI.secrets[0]["disabled"] == "no"
 
     final = FakeAPI.secrets[0]["comment"]
@@ -79,7 +80,7 @@ try:
     actual_created_day = meta.created_ns // policy.DAY_NS
     assert actual_created_day == expected_created_day, (actual_created_day, expected_created_day, final)
     assert meta.base_comment == "operator note"
-    assert meta.state == "S" and meta.reason == "inactive_30"
+    assert meta.state == "R" and meta.reason == "never_active_30"
     assert "|LV2|" in final and "|c=" in final and "|r=s|" in final
 finally:
     policy.RouterOSAPIClient = real_policy_api

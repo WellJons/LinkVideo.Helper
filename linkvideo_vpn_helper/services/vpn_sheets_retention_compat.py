@@ -29,13 +29,13 @@ def _parse_dt(value: str) -> datetime | None:
 def _reason_text(reason: str, state: str = "") -> str:
     mapping = {
         "created": "Создана; ожидается первая активность",
-        "never_active_tracking": "Ни одной активности; идёт годовой отсчёт",
+        "never_active_tracking": "Ни одной активности; удаление через 30 дней от создания",
         "tracked": "Активность была менее 30 дней назад",
         "activity": "Активность подтверждена RouterOS",
         "inactive_30": "Нет активности 30+ дней",
         "inactive_90": "Отключена автоматически: нет активности 90+ дней",
         "inactive_365": "Подлежит автоматическому удалению: 365+ дней без активности",
-        "never_active_365": "Подлежит автоматическому удалению: 365+ дней без единой активности",
+        "never_active_30": "Подлежит автоматическому удалению: 30+ дней без единой активности",
         "manual_disabled": "Отключена вручную через Helper",
         "manual_enabled": "Включена вручную через Helper",
         "manual_or_external_disabled": "Отключена вручную или напрямую в RouterOS",
@@ -48,7 +48,7 @@ def _reason_text(reason: str, state: str = "") -> str:
         "Q": "Отключена автоматически: нет активности 90+ дней",
         "S": "Нет активности 30+ дней",
         "M": "Отключена вручную или напрямую в RouterOS",
-        "U": "Ни одной подтверждённой активности",
+        "U": "Ни одной подтверждённой активности; удаление через 30 дней",
         "R": "Подлежит автоматическому удалению: 365+ дней без активности",
         "A": "Активна",
     }
@@ -69,7 +69,7 @@ def _deleted_reason(old: dict[str, str], source: str, now: datetime) -> str:
             return f"Удалена автоматически: {days} дн. без активности"
     if meta.last_ns <= 0 and meta.created_ns > 0:
         days = max(0, int((now_ns - meta.created_ns) // DAY_NS))
-        if days >= 365:
+        if days >= 30:
             return f"Удалена автоматически: {days} дн. без единой активности"
 
     last_dt = _parse_dt(old.get("Последняя активность", ""))
@@ -80,10 +80,10 @@ def _deleted_reason(old: dict[str, str], source: str, now: datetime) -> str:
             return f"Удалена автоматически: {days} дн. без активности"
     if last_dt is None and first_dt is not None:
         days = max(0, (now - first_dt).days)
-        if days >= 365:
+        if days >= 30:
             return f"Удалена автоматически: {days} дн. без единой активности"
     old_reason = str(old.get("Причина", "") or "").strip()
-    if "365+" in old_reason:
+    if "365+" in old_reason or "30+" in old_reason:
         return old_reason.replace("Подлежит автоматическому удалению", "Удалена автоматически")
     return "Удалена в RouterOS; причина не подтверждена"
 
@@ -153,21 +153,25 @@ def install_vpn_sheets_retention_compat() -> None:
         )
 
         newly_deleted: dict[str, str] = {}
-        output_by_login: dict[str, dict[str, str]] = {}
-        for row in result.rows:
+        output_by_login: dict[str, dict[str, str]] = {
+            str(row.get("Логин", "") or "").strip(): row
+            for row in result.rows
+            if str(row.get("Логин", "") or "").strip()
+        }
+        for row in result.archived:
             login = str(row.get("Логин", "") or "").strip()
-            if login:
-                output_by_login[login] = row
             old = before.get(login, {})
-            deleted_now = str(row.get("Удалена", "") or "").strip().lower() in {"да", "yes", "true", "1"}
             was_deleted = str(old.get("Удалена", "") or "").strip().lower() in {"да", "yes", "true", "1"}
-            if deleted_now and not was_deleted and login not in current_by_login:
+            if not was_deleted and login not in current_by_login:
                 reason = _deleted_reason(old, source, moment)
                 row["Причина"] = reason
+                row["Кто удалил"] = str(initiator or "RouterOS")
                 newly_deleted[login] = reason
                 event("SHEETS", "Причина удаления VPN", f"{server} · {login} · {reason}")
-            elif deleted_now and not row.get("Причина"):
+            elif not row.get("Причина"):
                 row["Причина"] = str(old.get("Причина", "") or "Удалена в RouterOS")
+            if not row.get("Кто удалил"):
+                row["Кто удалил"] = str(old.get("Кто удалил", "") or initiator or "RouterOS")
 
         # Replace generic "Изменена" audit rows with operator-readable lifecycle
         # events. This keeps the server sheet and LV История equally useful.
@@ -177,6 +181,8 @@ def install_vpn_sheets_retention_compat() -> None:
             login = str(history_row[2] or "").strip()
             if login in newly_deleted:
                 history_row[3] = newly_deleted[login]
+                if str(newly_deleted[login]).startswith("Удалена автоматически"):
+                    history_row[8] = "LV Automation / RouterOS"
                 continue
 
             item = current_by_login.get(login)
@@ -187,6 +193,8 @@ def install_vpn_sheets_retention_compat() -> None:
             specific = _history_event(meta.reason, row, source)
             if specific:
                 history_row[3] = specific
+                if meta.reason in {"inactive_30", "inactive_90", "auto_restore"}:
+                    history_row[8] = "LV Automation / RouterOS"
 
         return result
 

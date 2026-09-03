@@ -12,10 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class _FakeBackend:
     def read_deleted_rows(self, server: str):
-        if server != "vpn01.linkvideo.ru":
-            return []
-        return [
+        rows = [
             {
+                "VPN-сервер": "vpn01.linkvideo.ru",
                 "Логин": "client01",
                 "Пароль": "SavedPass42",
                 "Remote Address": "172.16.1.10",
@@ -32,6 +31,19 @@ class _FakeBackend:
                 ),
             }
         ]
+        if not server:
+            return rows
+        return [row for row in rows if row.get("VPN-сервер") == server]
+
+    def search_deleted_rows(self, query: str):
+        wanted = str(query or "").lower()
+        return [
+            row for row in self.read_deleted_rows("")
+            if wanted in str(row.get("Логин", "")).lower()
+        ]
+
+    def remove_deleted_rows(self, server: str, logins):
+        return None
 
     def find_deleted_row(self, server: str, login: str):
         return next(
@@ -48,6 +60,17 @@ class _FakeVPN:
     @staticmethod
     def _parse_ports(value):
         return [int(value)] if str(value or "").isdigit() else []
+
+    @staticmethod
+    def _find_free_ports(used_ports, count):
+        result = []
+        for port in range(10001, 13001):
+            if port in used_ports:
+                continue
+            result.append(port)
+            if len(result) >= count:
+                break
+        return result
 
 
 def main() -> int:
@@ -101,6 +124,8 @@ def main() -> int:
     restore = VPNRestoreService(_FakeVPN(), _FakeBackend())
     deleted = restore.list_deleted(["vpn01.linkvideo.ru"])
     assert len(deleted) == 1
+    searched = restore.search_deleted("client", ["vpn01.linkvideo.ru"])
+    assert len(searched) == 1
     assert deleted[0].password_saved is True
     assert deleted[0].login == "client01"
 
@@ -113,6 +138,19 @@ def main() -> int:
     assert fallback[0]["dst-port"] == "10001"
     assert fallback[1]["disabled"] == "yes"
 
+    planned, replacements = restore._remap_occupied_ports(
+        fallback,
+        {10001, 10003},
+    )
+    planned_by_original = {original: payload for original, payload in planned}
+    # Occupied 10001 must not be reclaimed, and replacement allocation must not
+    # steal still-free old 10002.
+    assert replacements == {10001: 10004}
+    assert planned_by_original[10001]["dst-port"] == "10004"
+    assert planned_by_original[10001]["to-ports"] == "10001"
+    assert planned_by_original[10002]["dst-port"] == "10002"
+    assert planned_by_original[10002]["to-ports"] == "10002"
+
     service_source = (
         ROOT / "linkvideo_vpn_helper" / "services" / "vpn_restore_service.py"
     ).read_text(encoding="utf-8")
@@ -121,6 +159,8 @@ def main() -> int:
     ).read_text(encoding="utf-8")
     assert "Автоматическое восстановление заблокировано" in service_source
     assert "_generate_password" not in service_source
+    assert "_remap_occupied_ports" in service_source
+    assert "port_replacements" in service_source
     assert "Восстановить клиента" in ui_source
 
     print("CORE TESTS VPN RECOVERY AND PASSWORD PRESERVATION OK")

@@ -102,6 +102,7 @@ def install_vpn_sheets_resilience() -> None:
         self._lv_reason_headers_ready: set[str] = set()
         self._lv_summary_lock = threading.RLock()
         self._lv_summary_rows = None
+        self._lv_operator_view_ready = False
 
     def http_session(self):
         session = getattr(self._lv_http_local, "session", None)
@@ -257,6 +258,52 @@ def install_vpn_sheets_resilience() -> None:
             cache[str(sheet)] = (sheet_id, minimum)
             event("SHEETS", "Расширен лист VPN", f"{sheet}: {columns} → {minimum} столбцов")
 
+    def apply_operator_view(self, server_sheets) -> None:
+        if getattr(self, "_lv_operator_view_ready", False):
+            return
+        with self._lv_grid_lock:
+            cache = _load_grid_cache(self)
+            requests_payload = []
+            for title in list(server_sheets or []):
+                current = cache.get(str(title))
+                if current is None:
+                    continue
+                sheet_id, _columns = current
+                # Keep recovery/diagnostic data in the sheet, but do not force
+                # operators to scroll through internal LV metadata every day.
+                for start_index, end_index in ((6, 7), (12, 19)):
+                    requests_payload.append({
+                        "updateDimensionProperties": {
+                            "range": {
+                                "sheetId": int(sheet_id),
+                                "dimension": "COLUMNS",
+                                "startIndex": start_index,
+                                "endIndex": end_index,
+                            },
+                            "properties": {"hiddenByUser": True},
+                            "fields": "hiddenByUser",
+                        }
+                    })
+            deleted = cache.get(str(sheets.DELETED_SHEET))
+            if deleted is not None:
+                deleted_id, _columns = deleted
+                requests_payload.append({
+                    "updateDimensionProperties": {
+                        "range": {
+                            "sheetId": int(deleted_id),
+                            "dimension": "COLUMNS",
+                            "startIndex": 16,
+                            "endIndex": 17,
+                        },
+                        "properties": {"hiddenByUser": True},
+                        "fields": "hiddenByUser",
+                    }
+                })
+            if requests_payload:
+                base_url = f"https://sheets.googleapis.com/v4/spreadsheets/{self.spreadsheet_id}"
+                self._request("POST", f"{base_url}:batchUpdate", payload={"requests": requests_payload})
+            self._lv_operator_view_ready = True
+
     def _summary_rows(self) -> dict[str, int]:
         with self._lv_summary_lock:
             if self._lv_summary_rows is not None:
@@ -272,7 +319,9 @@ def install_vpn_sheets_resilience() -> None:
 
     def prepare_sync(self, servers) -> None:
         """One bounded Google preflight before a multi-server desktop sync."""
+        self.ensure_auxiliary_sheets()
         server_sheets = [sheets.sheet_for_server(host) for host in list(servers or [])]
+        apply_operator_view(self, server_sheets)
         minimum = len(sheets.SERVER_COLUMNS)
         with self._lv_grid_lock:
             cache = _load_grid_cache(self)
@@ -411,6 +460,7 @@ def install_vpn_sheets_resilience() -> None:
 
     backend_cls.__init__ = robust_init
     backend_cls._request = robust_request
+    backend_cls.apply_operator_view = apply_operator_view
     backend_cls.ensure_sheet_columns = ensure_sheet_columns
     backend_cls.prepare_sync = prepare_sync
     backend_cls.write_server_rows = robust_write_server_rows
