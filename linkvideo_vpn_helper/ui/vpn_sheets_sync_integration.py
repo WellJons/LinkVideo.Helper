@@ -315,7 +315,34 @@ def _patch_vpn_servers_page() -> None:
         self.sheets_sync_btn = QPushButton("Синхронизировать")
         self.sheets_sync_btn.setProperty("role", "primary")
         self.sheets_sync_btn.clicked.connect(lambda: coordinator.sync_all(manual=True))
+
+        self.sheets_restore_btn = QPushButton("Восстановить клиента")
+        self.sheets_restore_btn.setEnabled(coordinator.is_configured())
+
+        def open_restore_dialog():
+            if not coordinator.is_configured() or coordinator.backend is None:
+                self.sheets_sync_status.setText(coordinator.config_hint())
+                return
+            from linkvideo_vpn_helper.services.vpn_restore_service import VPNRestoreService
+            from linkvideo_vpn_helper.ui.vpn_restore_dialog import VPNRestoreDialog
+
+            restore_service = VPNRestoreService(coordinator.vpn_service, coordinator.backend)
+            dialog = VPNRestoreDialog(
+                restore_service,
+                coordinator.credentials,
+                list(coordinator.registry.hosts()),
+                on_restored=lambda server, login: coordinator.notify_mutation(
+                    server,
+                    "восстановление клиента из Google Sheets",
+                    login,
+                ),
+                parent=self,
+            )
+            dialog.exec()
+
+        self.sheets_restore_btn.clicked.connect(open_restore_dialog)
         layout.addLayout(text, 1)
+        layout.addWidget(self.sheets_restore_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self.sheets_sync_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         # Header = 0, TaskStatus = 1. Карточка синхронизации идёт перед метриками.
         self.page_layout.insertWidget(2, card)
@@ -348,6 +375,7 @@ def _patch_vpn_servers_page() -> None:
         def missing(message: str):
             self.sheets_sync_btn.setEnabled(True)
             self.sheets_sync_btn.setText("Синхронизировать")
+            self.sheets_restore_btn.setEnabled(False)
             self.sheets_sync_status.setText(message)
 
         coordinator.syncStarted.connect(started)
