@@ -181,6 +181,8 @@ def install_vpn_sheets_retention_compat() -> None:
             login = str(history_row[2] or "").strip()
             if login in newly_deleted:
                 history_row[3] = newly_deleted[login]
+                if str(newly_deleted[login]).startswith("Удалена автоматически"):
+                    history_row[8] = "LV Automation / RouterOS"
                 continue
 
             item = current_by_login.get(login)
@@ -191,6 +193,8 @@ def install_vpn_sheets_retention_compat() -> None:
             specific = _history_event(meta.reason, row, source)
             if specific:
                 history_row[3] = specific
+                if meta.reason in {"inactive_30", "inactive_90", "auto_restore"}:
+                    history_row[8] = "LV Automation / RouterOS"
 
         return result
 
