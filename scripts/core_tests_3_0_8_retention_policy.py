@@ -41,7 +41,8 @@ assert migrated.reason == "inactive_90"
 
 aging = aging_script_source()
 for marker in (
-    "never_active_365",
+    "never_active_30",
+    "NEVER_ACTIVE_DELETE_DAYS",
     "inactive_365",
     "/ppp secret disable $sid",
     "/ppp secret remove $sid",
@@ -75,7 +76,7 @@ from linkvideo_vpn_helper.services import vpn_lifecycle
 assert automation.LV_AUTOMATION_VERSION == RETENTION_VERSION
 assert automation_core.LV_AUTOMATION_VERSION == RETENTION_VERSION
 assert vpn_lifecycle.LV_AUTOMATION_VERSION == RETENTION_VERSION
-assert "never_active_365" in automation.VPNAutomationService.SCRIPT_SOURCES[automation_core.LV_AGING_SCRIPT]()
+assert "never_active_30" in automation.VPNAutomationService.SCRIPT_SOURCES[automation_core.LV_AGING_SCRIPT]()
 assert "|LV2|" in automation.VPNAutomationService.SCRIPT_SOURCES[automation_core.LV_ACTIVITY_SCRIPT]()
 
 install_vpn_sheets_retention_compat()
