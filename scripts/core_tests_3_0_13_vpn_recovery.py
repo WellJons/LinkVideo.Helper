@@ -61,6 +61,17 @@ class _FakeVPN:
     def _parse_ports(value):
         return [int(value)] if str(value or "").isdigit() else []
 
+    @staticmethod
+    def _find_free_ports(used_ports, count):
+        result = []
+        for port in range(10001, 13001):
+            if port in used_ports:
+                continue
+            result.append(port)
+            if len(result) >= count:
+                break
+        return result
+
 
 def main() -> int:
     previous = {
@@ -127,6 +138,19 @@ def main() -> int:
     assert fallback[0]["dst-port"] == "10001"
     assert fallback[1]["disabled"] == "yes"
 
+    planned, replacements = restore._remap_occupied_ports(
+        fallback,
+        {10001, 10003},
+    )
+    planned_by_original = {original: payload for original, payload in planned}
+    # Occupied 10001 must not be reclaimed, and replacement allocation must not
+    # steal still-free old 10002.
+    assert replacements == {10001: 10004}
+    assert planned_by_original[10001]["dst-port"] == "10004"
+    assert planned_by_original[10001]["to-ports"] == "10001"
+    assert planned_by_original[10002]["dst-port"] == "10002"
+    assert planned_by_original[10002]["to-ports"] == "10002"
+
     service_source = (
         ROOT / "linkvideo_vpn_helper" / "services" / "vpn_restore_service.py"
     ).read_text(encoding="utf-8")
@@ -135,6 +159,8 @@ def main() -> int:
     ).read_text(encoding="utf-8")
     assert "Автоматическое восстановление заблокировано" in service_source
     assert "_generate_password" not in service_source
+    assert "_remap_occupied_ports" in service_source
+    assert "port_replacements" in service_source
     assert "Восстановить клиента" in ui_source
 
     print("CORE TESTS VPN RECOVERY AND PASSWORD PRESERVATION OK")
