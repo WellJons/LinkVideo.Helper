@@ -881,8 +881,11 @@ class SearchManagePage(QWidget):
                     "восстановление клиента из резервной базы",
                     result.login,
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            self.search_note.setText(
+                "Клиент восстановлен, но автоматическую синхронизацию базы "
+                f"не удалось запустить: {str(exc)[:180]}"
+            )
 
         self._deleted_current = None
         QTimer.singleShot(
