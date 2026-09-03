@@ -135,28 +135,55 @@ class VPNRestoreService:
             return {}
         return value if isinstance(value, dict) else {}
 
+    def _record_from_row(self, row: dict[str, str], fallback_server: str = "") -> DeletedVPNClient | None:
+        login = str(row.get("Логин", "") or "").strip()
+        if not login:
+            return None
+        server = str(row.get("VPN-сервер", "") or fallback_server or "").strip()
+        snapshot = self._snapshot(row)
+        secret = snapshot.get("secret") if isinstance(snapshot.get("secret"), dict) else {}
+        password = str(row.get("Пароль", "") or secret.get("password", "") or "")
+        return DeletedVPNClient(
+            server=server,
+            login=login,
+            password_saved=bool(password),
+            remote_address=str(row.get("Remote Address", "") or ""),
+            profile=str(row.get("Profile", "") or ""),
+            deleted_at=str(row.get("Удалена в", "") or ""),
+            ports=str(row.get("NAT / Порты", "") or ""),
+            row=dict(row),
+        )
+
     def list_deleted(self, servers: list[str]) -> list[DeletedVPNClient]:
+        wanted = {str(server or "").strip().lower() for server in servers if str(server or "").strip()}
         result: list[DeletedVPNClient] = []
-        for server in servers:
-            for row in self.backend.read_deleted_rows(server):
-                login = str(row.get("Логин", "") or "").strip()
-                if not login:
-                    continue
-                snapshot = self._snapshot(row)
-                secret = snapshot.get("secret") if isinstance(snapshot.get("secret"), dict) else {}
-                password = str(row.get("Пароль", "") or secret.get("password", "") or "")
-                result.append(
-                    DeletedVPNClient(
-                        server=server,
-                        login=login,
-                        password_saved=bool(password),
-                        remote_address=str(row.get("Remote Address", "") or ""),
-                        profile=str(row.get("Profile", "") or ""),
-                        deleted_at=str(row.get("Удалена в", "") or ""),
-                        ports=str(row.get("NAT / Порты", "") or ""),
-                        row=dict(row),
-                    )
-                )
+        for row in self.backend.read_deleted_rows(""):
+            record = self._record_from_row(row)
+            if record is None:
+                continue
+            if wanted and record.server.lower() not in wanted:
+                continue
+            result.append(record)
+        result.sort(key=lambda item: (item.server.lower(), item.login.lower()))
+        return result
+
+    def search_deleted(self, query: str, servers: list[str] | None = None) -> list[DeletedVPNClient]:
+        wanted = str(query or "").strip().lower()
+        if not wanted:
+            return []
+        allowed = {
+            str(server or "").strip().lower()
+            for server in list(servers or [])
+            if str(server or "").strip()
+        }
+        result: list[DeletedVPNClient] = []
+        for row in self.backend.search_deleted_rows(wanted):
+            record = self._record_from_row(row)
+            if record is None:
+                continue
+            if allowed and record.server.lower() not in allowed:
+                continue
+            result.append(record)
         result.sort(key=lambda item: (item.server.lower(), item.login.lower()))
         return result
 
@@ -382,6 +409,18 @@ class VPNRestoreService:
                         + "; ".join(rollback_errors)
                     ) from operation_error
                 raise
+
+        try:
+            self.backend.remove_deleted_rows(server, [login])
+        except Exception as exc:
+            # RouterOS restoration already succeeded. A stale archive row is safer
+            # than rolling back a working VPN client because Google is unavailable.
+            event(
+                "SHEETS",
+                "Не удалось убрать восстановленного клиента из архива",
+                f"{server} · {login} · {exc}",
+                level=30,
+            )
 
         event(
             "VPN",
