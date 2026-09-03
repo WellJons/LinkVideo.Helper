@@ -29,13 +29,13 @@ def _parse_dt(value: str) -> datetime | None:
 def _reason_text(reason: str, state: str = "") -> str:
     mapping = {
         "created": "Создана; ожидается первая активность",
-        "never_active_tracking": "Ни одной активности; идёт годовой отсчёт",
+        "never_active_tracking": "Ни одной активности; удаление через 30 дней от создания",
         "tracked": "Активность была менее 30 дней назад",
         "activity": "Активность подтверждена RouterOS",
         "inactive_30": "Нет активности 30+ дней",
         "inactive_90": "Отключена автоматически: нет активности 90+ дней",
         "inactive_365": "Подлежит автоматическому удалению: 365+ дней без активности",
-        "never_active_365": "Подлежит автоматическому удалению: 365+ дней без единой активности",
+        "never_active_30": "Подлежит автоматическому удалению: 30+ дней без единой активности",
         "manual_disabled": "Отключена вручную через Helper",
         "manual_enabled": "Включена вручную через Helper",
         "manual_or_external_disabled": "Отключена вручную или напрямую в RouterOS",
@@ -48,7 +48,7 @@ def _reason_text(reason: str, state: str = "") -> str:
         "Q": "Отключена автоматически: нет активности 90+ дней",
         "S": "Нет активности 30+ дней",
         "M": "Отключена вручную или напрямую в RouterOS",
-        "U": "Ни одной подтверждённой активности",
+        "U": "Ни одной подтверждённой активности; удаление через 30 дней",
         "R": "Подлежит автоматическому удалению: 365+ дней без активности",
         "A": "Активна",
     }
@@ -69,7 +69,7 @@ def _deleted_reason(old: dict[str, str], source: str, now: datetime) -> str:
             return f"Удалена автоматически: {days} дн. без активности"
     if meta.last_ns <= 0 and meta.created_ns > 0:
         days = max(0, int((now_ns - meta.created_ns) // DAY_NS))
-        if days >= 365:
+        if days >= 30:
             return f"Удалена автоматически: {days} дн. без единой активности"
 
     last_dt = _parse_dt(old.get("Последняя активность", ""))
@@ -80,10 +80,10 @@ def _deleted_reason(old: dict[str, str], source: str, now: datetime) -> str:
             return f"Удалена автоматически: {days} дн. без активности"
     if last_dt is None and first_dt is not None:
         days = max(0, (now - first_dt).days)
-        if days >= 365:
+        if days >= 30:
             return f"Удалена автоматически: {days} дн. без единой активности"
     old_reason = str(old.get("Причина", "") or "").strip()
-    if "365+" in old_reason:
+    if "365+" in old_reason or "30+" in old_reason:
         return old_reason.replace("Подлежит автоматическому удалению", "Удалена автоматически")
     return "Удалена в RouterOS; причина не подтверждена"
 
