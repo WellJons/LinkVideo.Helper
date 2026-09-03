@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import quote
 
+from linkvideo_vpn_helper.services.app_logging import event
 from linkvideo_vpn_helper.services.vpn_lifecycle import classify_state, parse_lv_comment
 from linkvideo_vpn_helper.services.vpn_service import SessionCredentials, VPNService
 
@@ -821,10 +822,16 @@ class VPNSheetsSyncService:
                     server,
                     [item.login for item in current_clients],
                 )
-            except Exception:
+            except Exception as exc:
                 # The active RouterOS state is authoritative; stale archive rows
-                # are harmless and can be cleaned on a later sync.
-                pass
+                # are harmless and can be cleaned on a later sync, but the failure
+                # must remain visible in diagnostics.
+                event(
+                    "SHEETS",
+                    "Не удалось очистить архив восстановленных клиентов",
+                    f"{server} · {str(exc)[:220]}",
+                    level=30,
+                )
 
         counts: dict[str, int] = {key: 0 for key in LIFECYCLE_LABELS}
         for item in current_clients:
