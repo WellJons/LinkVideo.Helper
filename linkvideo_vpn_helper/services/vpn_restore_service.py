@@ -255,7 +255,15 @@ class VPNRestoreService:
         untouched so the service on the client keeps listening on its old internal
         port.
         """
-        reserved = set(int(port) for port in occupied_ports)
+        # Protect every old port up-front. Otherwise replacing an occupied
+        # 10001 could accidentally consume still-free old 10002 before its rule
+        # is processed.
+        protected_old_ports: set[int] = set()
+        for source in nat_payloads:
+            protected_old_ports.update(
+                self.vpn_service._parse_ports(source.get("dst-port", ""))
+            )
+        reserved = set(int(port) for port in occupied_ports) | protected_old_ports
         replacements: dict[int, int] = {}
         planned: list[tuple[int | None, dict[str, str]]] = []
 
@@ -278,7 +286,7 @@ class VPNRestoreService:
 
             original_port = ports[0]
             selected_port = original_port
-            if selected_port in reserved:
+            if selected_port in occupied_ports:
                 free = self.vpn_service._find_free_ports(reserved, 1)
                 if not free:
                     raise ValueError("Недостаточно свободных внешних портов для восстановления")
@@ -459,6 +467,14 @@ class VPNRestoreService:
                                 current_used.update(
                                     self.vpn_service._parse_ports(
                                         self.vpn_service._get_rule_external_port(item)
+                                    )
+                                )
+                            # Do not steal another old/free or already planned port
+                            # while recovering from this last-millisecond race.
+                            for _planned_original, planned_payload in planned_nat:
+                                current_used.update(
+                                    self.vpn_service._parse_ports(
+                                        planned_payload.get("dst-port", "")
                                     )
                                 )
                             free = self.vpn_service._find_free_ports(current_used, 1)
