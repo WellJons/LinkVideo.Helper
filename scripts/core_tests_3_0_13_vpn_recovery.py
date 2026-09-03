@@ -12,10 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class _FakeBackend:
     def read_deleted_rows(self, server: str):
-        if server != "vpn01.linkvideo.ru":
-            return []
-        return [
+        rows = [
             {
+                "VPN-сервер": "vpn01.linkvideo.ru",
                 "Логин": "client01",
                 "Пароль": "SavedPass42",
                 "Remote Address": "172.16.1.10",
@@ -32,6 +31,19 @@ class _FakeBackend:
                 ),
             }
         ]
+        if not server:
+            return rows
+        return [row for row in rows if row.get("VPN-сервер") == server]
+
+    def search_deleted_rows(self, query: str):
+        wanted = str(query or "").lower()
+        return [
+            row for row in self.read_deleted_rows("")
+            if wanted in str(row.get("Логин", "")).lower()
+        ]
+
+    def remove_deleted_rows(self, server: str, logins):
+        return None
 
     def find_deleted_row(self, server: str, login: str):
         return next(
@@ -101,6 +113,8 @@ def main() -> int:
     restore = VPNRestoreService(_FakeVPN(), _FakeBackend())
     deleted = restore.list_deleted(["vpn01.linkvideo.ru"])
     assert len(deleted) == 1
+    searched = restore.search_deleted("client", ["vpn01.linkvideo.ru"])
+    assert len(searched) == 1
     assert deleted[0].password_saved is True
     assert deleted[0].login == "client01"
 
