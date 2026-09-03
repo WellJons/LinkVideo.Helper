@@ -131,6 +131,31 @@ def _compare_value(field_name: str, value: Any) -> str:
     return text
 
 
+def _preserve_password_in_snapshot(snapshot_text: str, password: str) -> str:
+    """Keep the last known PPP password if RouterOS hides it for this API user.
+
+    Some RouterOS permission sets return /ppp/secret rows but omit the sensitive
+    password field. A later successful sync must not destroy the only recovery
+    copy that was already stored in Sheets.
+    """
+    secret_password = str(password or "")
+    if not secret_password:
+        return str(snapshot_text or "")
+    try:
+        payload = json.loads(str(snapshot_text or "") or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return str(snapshot_text or "")
+    if not isinstance(payload, dict):
+        return str(snapshot_text or "")
+    secret = payload.get("secret")
+    if not isinstance(secret, dict):
+        secret = {}
+        payload["secret"] = secret
+    if not str(secret.get("password", "") or ""):
+        secret["password"] = secret_password
+    return _safe_json(payload)
+
+
 @dataclass(slots=True)
 class CurrentClient:
     login: str
@@ -288,6 +313,21 @@ class GoogleSheetsBackend:
             if item.get("Логин", "").strip():
                 result.append(item)
         return result
+
+    def read_deleted_rows(self, server: str) -> list[dict[str, str]]:
+        return [
+            row for row in self.read_server_rows(server)
+            if _yes(row.get("Удалена", ""))
+        ]
+
+    def find_deleted_row(self, server: str, login: str) -> dict[str, str] | None:
+        wanted = str(login or "").strip()
+        if not wanted:
+            return None
+        for row in self.read_deleted_rows(server):
+            if str(row.get("Логин", "") or "").strip() == wanted:
+                return row
+        return None
 
     def write_server_rows(self, server: str, rows: list[dict[str, str]], previous_count: int) -> None:
         if len(rows) > MAX_SERVER_ROWS:
@@ -488,6 +528,17 @@ def reconcile_records(
             added += 1
             add_history(login, "Обнаружена на RouterOS", list(COMPARE_COLUMNS), {}, row)
         else:
+            # RouterOS can legitimately omit sensitive fields when the API account
+            # lacks the sensitive policy. Never overwrite a previously captured
+            # recovery password with an empty value during an otherwise healthy sync.
+            previous_password = str(previous.get("Пароль", "") or "")
+            if not str(row.get("Пароль", "") or "") and previous_password:
+                row["Пароль"] = previous_password
+                row["RouterOS snapshot"] = _preserve_password_in_snapshot(
+                    str(row.get("RouterOS snapshot", "") or ""),
+                    previous_password,
+                )
+
             was_deleted = str(previous.get("Удалена", "") or "").strip().lower() in {"да", "yes", "true", "1"}
             changed_fields = [
                 name for name in COMPARE_COLUMNS
