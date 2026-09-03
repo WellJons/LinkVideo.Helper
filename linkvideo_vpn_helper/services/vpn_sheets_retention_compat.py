@@ -153,21 +153,25 @@ def install_vpn_sheets_retention_compat() -> None:
         )
 
         newly_deleted: dict[str, str] = {}
-        output_by_login: dict[str, dict[str, str]] = {}
-        for row in result.rows:
+        output_by_login: dict[str, dict[str, str]] = {
+            str(row.get("Логин", "") or "").strip(): row
+            for row in result.rows
+            if str(row.get("Логин", "") or "").strip()
+        }
+        for row in result.archived:
             login = str(row.get("Логин", "") or "").strip()
-            if login:
-                output_by_login[login] = row
             old = before.get(login, {})
-            deleted_now = str(row.get("Удалена", "") or "").strip().lower() in {"да", "yes", "true", "1"}
             was_deleted = str(old.get("Удалена", "") or "").strip().lower() in {"да", "yes", "true", "1"}
-            if deleted_now and not was_deleted and login not in current_by_login:
+            if not was_deleted and login not in current_by_login:
                 reason = _deleted_reason(old, source, moment)
                 row["Причина"] = reason
+                row["Кто удалил"] = str(initiator or "RouterOS")
                 newly_deleted[login] = reason
                 event("SHEETS", "Причина удаления VPN", f"{server} · {login} · {reason}")
-            elif deleted_now and not row.get("Причина"):
+            elif not row.get("Причина"):
                 row["Причина"] = str(old.get("Причина", "") or "Удалена в RouterOS")
+            if not row.get("Кто удалил"):
+                row["Кто удалил"] = str(old.get("Кто удалил", "") or initiator or "RouterOS")
 
         # Replace generic "Изменена" audit rows with operator-readable lifecycle
         # events. This keeps the server sheet and LV История equally useful.
