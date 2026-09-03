@@ -18,6 +18,7 @@ from linkvideo_vpn_helper.services.vpn_service import SessionCredentials, VPNSer
 SPREADSHEET_ID = "1KxIMsVOtDD8klpVUj_vymbtZIDSkvS9-vjT5cQ2a9eA"
 HISTORY_SHEET = "LV История"
 SUMMARY_SHEET = "LV Сводка"
+DELETED_SHEET = "LV Удалённые"
 MAX_SERVER_ROWS = 1499
 SYNC_INTERVAL_SECONDS = 300
 
@@ -47,13 +48,33 @@ HISTORY_COLUMNS = (
     "Время",
     "VPN-сервер",
     "Логин",
-    "Событие",
-    "Изменённые поля",
+    "Действие",
+    "Что изменилось",
     "Было",
     "Стало",
+    "Источник события",
+    "Кто изменил",
+    "ID операции",
+)
+
+DELETED_COLUMNS = (
+    "VPN-сервер",
+    "Логин",
+    "Пароль",
+    "Service",
+    "Profile",
+    "Local Address",
+    "Remote Address",
+    "NAT / Порты",
+    "Lifecycle",
+    "Последняя активность",
+    "Дней без связи",
+    "Первое обнаружение",
+    "Удалена в",
+    "Причина",
+    "Кто удалил",
     "Источник",
-    "Инициатор",
-    "Sync ID",
+    "RouterOS snapshot",
 )
 
 # Только реальные изменения конфигурации/состояния создают запись аудита.
@@ -122,6 +143,36 @@ def _history_values(item: dict[str, Any], fields: list[str]) -> dict[str, Any]:
     return result
 
 
+def _history_summary(item: dict[str, Any], fields: list[str]) -> str:
+    if not item or not fields:
+        return "—"
+    labels = {
+        "Пароль": "Пароль",
+        "Service": "Service",
+        "Profile": "Профиль",
+        "Local Address": "Local IP",
+        "Remote Address": "Remote IP",
+        "NAT / Порты": "Порты",
+        "Lifecycle": "Состояние",
+        "PPP disabled": "PPP",
+        "Комментарий RouterOS": "Комментарий",
+        "Причина": "Причина",
+        "Удалена": "Удалена",
+    }
+    parts: list[str] = []
+    for field_name in fields:
+        if field_name == "RouterOS snapshot":
+            continue
+        if field_name == "Пароль":
+            value = "<изменён>" if str(item.get(field_name, "") or "") else "—"
+        elif field_name == "Комментарий RouterOS":
+            value = parse_lv_comment(str(item.get(field_name, "") or "")).base_comment.strip() or "—"
+        else:
+            value = str(item.get(field_name, "") or "").strip() or "—"
+        parts.append(f"{labels.get(field_name, field_name)}: {value}")
+    return "; ".join(parts) if parts else "—"
+
+
 def _compare_value(field_name: str, value: Any) -> str:
     text = str(value or "")
     if field_name == "Комментарий RouterOS":
@@ -167,6 +218,7 @@ class CurrentClient:
 class ReconcileResult:
     rows: list[dict[str, str]]
     history: list[list[str]]
+    archived: list[dict[str, str]] = field(default_factory=list)
     added: int = 0
     changed: int = 0
     deleted: int = 0
@@ -304,6 +356,65 @@ class GoogleSheetsBackend:
             payload={"range": a1_range, "majorDimension": "ROWS", "values": values},
         )
 
+    def ensure_auxiliary_sheets(self) -> None:
+        lock = getattr(self, "_lv_schema_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._lv_schema_lock = lock
+        with lock:
+            if getattr(self, "_lv_aux_sheets_ready", False):
+                return
+            base_url = f"https://sheets.googleapis.com/v4/spreadsheets/{self.spreadsheet_id}"
+            metadata = self._request(
+                "GET",
+                base_url,
+                params={"fields": "sheets(properties(sheetId,title,gridProperties(columnCount,rowCount)))"},
+            )
+            titles = {
+                str(dict(item.get("properties") or {}).get("title", "") or "")
+                for item in list(metadata.get("sheets") or [])
+            }
+            requests_payload = []
+            if HISTORY_SHEET not in titles:
+                requests_payload.append({
+                    "addSheet": {
+                        "properties": {
+                            "title": HISTORY_SHEET,
+                            "gridProperties": {"rowCount": 5000, "columnCount": len(HISTORY_COLUMNS)},
+                        }
+                    }
+                })
+            if DELETED_SHEET not in titles:
+                requests_payload.append({
+                    "addSheet": {
+                        "properties": {
+                            "title": DELETED_SHEET,
+                            "gridProperties": {"rowCount": 5000, "columnCount": len(DELETED_COLUMNS)},
+                        }
+                    }
+                })
+            if requests_payload:
+                self._request("POST", f"{base_url}:batchUpdate", payload={"requests": requests_payload})
+                if hasattr(self, "_lv_grid_cache"):
+                    self._lv_grid_cache = None
+            self.put_values(f"'{HISTORY_SHEET}'!A1:J1", [list(HISTORY_COLUMNS)])
+            self.put_values(
+                f"'{DELETED_SHEET}'!A1:Q1",
+                [list(DELETED_COLUMNS)],
+            )
+            self._lv_aux_sheets_ready = True
+
+    @staticmethod
+    def _deleted_row_to_dict(row: Iterable[Any]) -> dict[str, str]:
+        values = ["" if value is None else str(value) for value in row]
+        if len(values) < len(DELETED_COLUMNS):
+            values += [""] * (len(DELETED_COLUMNS) - len(values))
+        return dict(zip(DELETED_COLUMNS, values[: len(DELETED_COLUMNS)]))
+
+    @staticmethod
+    def _deleted_dict_to_row(item: dict[str, Any]) -> list[str]:
+        return ["" if item.get(name) is None else str(item.get(name, "")) for name in DELETED_COLUMNS]
+
     def read_server_rows(self, server: str) -> list[dict[str, str]]:
         sheet = sheet_for_server(server)
         values = self.get_values(f"'{sheet}'!A2:S1500")
@@ -314,10 +425,27 @@ class GoogleSheetsBackend:
                 result.append(item)
         return result
 
-    def read_deleted_rows(self, server: str) -> list[dict[str, str]]:
+    def read_deleted_rows(self, server: str = "") -> list[dict[str, str]]:
+        self.ensure_auxiliary_sheets()
+        values = self.get_values(f"'{DELETED_SHEET}'!A2:Q5000")
+        wanted_server = str(server or "").strip().lower()
+        result: list[dict[str, str]] = []
+        for raw in values:
+            item = self._deleted_row_to_dict(raw)
+            if not str(item.get("Логин", "") or "").strip():
+                continue
+            if wanted_server and str(item.get("VPN-сервер", "") or "").strip().lower() != wanted_server:
+                continue
+            result.append(item)
+        return result
+
+    def search_deleted_rows(self, query: str) -> list[dict[str, str]]:
+        wanted = str(query or "").strip().lower()
+        if not wanted:
+            return []
         return [
-            row for row in self.read_server_rows(server)
-            if _yes(row.get("Удалена", ""))
+            row for row in self.read_deleted_rows("")
+            if wanted in str(row.get("Логин", "") or "").strip().lower()
         ]
 
     def find_deleted_row(self, server: str, login: str) -> dict[str, str] | None:
@@ -328,6 +456,69 @@ class GoogleSheetsBackend:
             if str(row.get("Логин", "") or "").strip() == wanted:
                 return row
         return None
+
+    def archive_deleted_rows(self, server: str, rows: list[dict[str, str]]) -> None:
+        if not rows:
+            return
+        self.ensure_auxiliary_sheets()
+        lock = getattr(self, "_lv_deleted_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._lv_deleted_lock = lock
+        with lock:
+            existing = self.read_deleted_rows("")
+            merged: dict[tuple[str, str], dict[str, str]] = {}
+            for row in existing:
+                key = (
+                    str(row.get("VPN-сервер", "") or "").strip().lower(),
+                    str(row.get("Логин", "") or "").strip(),
+                )
+                if key[0] and key[1]:
+                    merged[key] = dict(row)
+            for source_row in rows:
+                row = dict(source_row)
+                row["VPN-сервер"] = str(server or row.get("VPN-сервер", "") or "").strip()
+                row["Кто удалил"] = str(row.get("Кто удалил", "") or row.get("Источник", "") or "RouterOS")
+                key = (row["VPN-сервер"].lower(), str(row.get("Логин", "") or "").strip())
+                if key[0] and key[1]:
+                    merged[key] = row
+            output = sorted(merged.values(), key=lambda row: (
+                str(row.get("VPN-сервер", "") or "").lower(),
+                str(row.get("Логин", "") or "").lower(),
+            ))
+            encoded = [self._deleted_dict_to_row(row) for row in output]
+            previous_count = len(existing)
+            write_count = max(len(encoded), previous_count)
+            while len(encoded) < write_count:
+                encoded.append([""] * len(DELETED_COLUMNS))
+            if write_count:
+                self.put_values(f"'{DELETED_SHEET}'!A2:Q{write_count + 1}", encoded)
+
+    def remove_deleted_rows(self, server: str, logins: Iterable[str]) -> None:
+        wanted = {str(login or "").strip() for login in logins if str(login or "").strip()}
+        if not wanted:
+            return
+        self.ensure_auxiliary_sheets()
+        lock = getattr(self, "_lv_deleted_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._lv_deleted_lock = lock
+        with lock:
+            existing = self.read_deleted_rows("")
+            server_key = str(server or "").strip().lower()
+            output = [
+                row for row in existing
+                if not (
+                    str(row.get("VPN-сервер", "") or "").strip().lower() == server_key
+                    and str(row.get("Логин", "") or "").strip() in wanted
+                )
+            ]
+            encoded = [self._deleted_dict_to_row(row) for row in output]
+            write_count = max(len(encoded), len(existing))
+            while len(encoded) < write_count:
+                encoded.append([""] * len(DELETED_COLUMNS))
+            if write_count:
+                self.put_values(f"'{DELETED_SHEET}'!A2:Q{write_count + 1}", encoded)
 
     def write_server_rows(self, server: str, rows: list[dict[str, str]], previous_count: int) -> None:
         if len(rows) > MAX_SERVER_ROWS:
@@ -495,6 +686,7 @@ def reconcile_records(
 
     output: list[dict[str, str]] = []
     history: list[list[str]] = []
+    archived: list[dict[str, str]] = []
     added = changed = deleted = restored = 0
 
     def add_history(login: str, event: str, fields: list[str], before: dict[str, Any], after: dict[str, Any]):
@@ -504,8 +696,8 @@ def reconcile_records(
             login,
             event,
             ", ".join(fields),
-            _safe_json(_history_values(before, fields)) if fields else "",
-            _safe_json(_history_values(after, fields)) if fields else "",
+            _history_summary(before, fields),
+            _history_summary(after, fields),
             source,
             initiator,
             sync_id,
@@ -568,13 +760,11 @@ def reconcile_records(
             previous["Источник"] = source
             deleted += 1
             add_history(login, "Удалена на RouterOS", ["Удалена"], before, previous)
-        output.append(previous)
+        previous["VPN-сервер"] = server
+        archived.append(previous)
 
-    output.sort(key=lambda row: (
-        1 if str(row.get("Удалена", "") or "").strip().lower() in {"да", "yes", "true", "1"} else 0,
-        str(row.get("Логин", "") or "").lower(),
-    ))
-    return ReconcileResult(output, history, added, changed, deleted, restored)
+    output.sort(key=lambda row: str(row.get("Логин", "") or "").lower())
+    return ReconcileResult(output, history, archived, added, changed, deleted, restored)
 
 
 class VPNSheetsSyncService:
@@ -603,6 +793,7 @@ class VPNSheetsSyncService:
         snapshot = self.vpn_service.fetch_config_snapshot(server, creds)
         current_clients = build_current_clients(self.vpn_service, snapshot)
 
+        self.backend.ensure_auxiliary_sheets()
         existing_rows = self.backend.read_server_rows(server)
         sync_id = uuid.uuid4().hex[:12]
         result = reconcile_records(
@@ -617,9 +808,23 @@ class VPNSheetsSyncService:
         # Журнал важнее текущего представления: если второй запрос к Google
         # внезапно не пройдёт, лучше получить повторное событие при следующей
         # сверке, чем навсегда потерять факт изменения.
+        if result.archived:
+            # Archive first. Only after Google confirms the recovery copy do we
+            # remove the deleted rows from the per-server working sheet.
+            self.backend.archive_deleted_rows(server, result.archived)
         if result.history:
             self.backend.append_history(result.history)
         self.backend.write_server_rows(server, result.rows, len(existing_rows))
+        if result.added:
+            try:
+                self.backend.remove_deleted_rows(
+                    server,
+                    [item.login for item in current_clients],
+                )
+            except Exception:
+                # The active RouterOS state is authoritative; stale archive rows
+                # are harmless and can be cleaned on a later sync.
+                pass
 
         counts: dict[str, int] = {key: 0 for key in LIFECYCLE_LABELS}
         for item in current_clients:
