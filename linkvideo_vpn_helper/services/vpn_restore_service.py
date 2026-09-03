@@ -36,15 +36,17 @@ class RestoreResult:
     ports: list[int]
     profile_created: bool
     nat_created: int
+    port_replacements: dict[int, int] = field(default_factory=dict)
 
 
 class VPNRestoreService:
     """Restore a deleted LinkVideo VPN client from the Sheets recovery mirror.
 
-    Restoration is intentionally fail-closed: an existing login, occupied remote
-    address, occupied external port, missing password, or incompatible profile
-    aborts the operation before RouterOS is changed. If a later create step fails,
-    every object created by this attempt is rolled back.
+    Restoration is intentionally fail-closed for login/IP/profile conflicts and
+    missing recovery data. Old external ports are reused only while they are free;
+    if another client has occupied one after deletion, Helper allocates a new free
+    external port and keeps the original internal to-ports target. If a later
+    create step fails, every object created by this attempt is rolled back.
     """
 
     PROFILE_WRITABLE = (
@@ -240,6 +242,55 @@ class VPNRestoreService:
             ports.update(self.vpn_service._parse_ports(rule.get("dst-port", "")))
         return ports
 
+    def _remap_occupied_ports(
+        self,
+        nat_payloads: list[dict[str, str]],
+        occupied_ports: set[int],
+    ) -> tuple[list[tuple[int | None, dict[str, str]]], dict[int, int]]:
+        """Plan NAT restoration without ever taking a port from another client.
+
+        LinkVideo-created NAT rules contain one external port per rule. Free old
+        ports are preserved. Occupied old ports are replaced with the next free
+        port from the normal LinkVideo pool, while to-ports is intentionally left
+        untouched so the service on the client keeps listening on its old internal
+        port.
+        """
+        reserved = set(int(port) for port in occupied_ports)
+        replacements: dict[int, int] = {}
+        planned: list[tuple[int | None, dict[str, str]]] = []
+
+        for source in nat_payloads:
+            payload = dict(source)
+            ports = sorted(set(self.vpn_service._parse_ports(payload.get("dst-port", ""))))
+            if not ports:
+                continue
+            if len(ports) != 1:
+                conflicts = sorted(set(ports) & reserved)
+                if conflicts:
+                    raise ValueError(
+                        "Нельзя автоматически восстановить нестандартное NAT-правило: "
+                        "часть внешних портов уже занята: "
+                        + ", ".join(str(port) for port in conflicts)
+                    )
+                reserved.update(ports)
+                planned.append((None, payload))
+                continue
+
+            original_port = ports[0]
+            selected_port = original_port
+            if selected_port in reserved:
+                free = self.vpn_service._find_free_ports(reserved, 1)
+                if not free:
+                    raise ValueError("Недостаточно свободных внешних портов для восстановления")
+                selected_port = int(free[0])
+                payload["dst-port"] = str(selected_port)
+                replacements[original_port] = selected_port
+
+            reserved.add(selected_port)
+            planned.append((original_port, payload))
+
+        return planned, replacements
+
     def restore(self, server: str, creds: SessionCredentials, login: str) -> RestoreResult:
         row = self.backend.find_deleted_row(server, login)
         if row is None:
@@ -323,12 +374,11 @@ class VPNRestoreService:
             occupied_ports: set[int] = set()
             for rule in nat_existing:
                 occupied_ports.update(self.vpn_service._parse_ports(rule.get("dst-port", "")))
-            conflicts = sorted(intended_ports & occupied_ports)
-            if conflicts:
-                raise ValueError(
-                    "Нельзя восстановить: внешние порты уже заняты: "
-                    + ", ".join(str(port) for port in conflicts)
-                )
+            planned_nat, port_replacements = self._remap_occupied_ports(
+                nat_payloads,
+                occupied_ports,
+            )
+            restored_ports: list[int] = []
 
             try:
                 if profile_name and profile_name not in {"default", "default-encryption"} and existing_profile is None:
@@ -381,7 +431,51 @@ class VPNRestoreService:
 
                 created_secret_id = api.add("/ppp/secret", secret_payload)
 
-                for payload in nat_payloads:
+                for original_port, source_payload in planned_nat:
+                    payload = dict(source_payload)
+                    selected = self.vpn_service._parse_ports(payload.get("dst-port", ""))
+                    if len(selected) == 1:
+                        selected_port = int(selected[0])
+                        # Protect against a race: another operator may create a NAT
+                        # rule after the initial snapshot but before our add.
+                        rows = self.vpn_service._api_print_exact(
+                            api,
+                            "/ip/firewall/nat",
+                            "dst-port",
+                            str(selected_port),
+                            ".id,dst-port",
+                        )
+                        if any(
+                            selected_port in self.vpn_service._parse_ports(
+                                self.vpn_service._get_rule_external_port(item)
+                            )
+                            for item in rows
+                        ):
+                            current_rules = api.print(
+                                "/ip/firewall/nat",
+                                {".proplist": ".id,dst-port"},
+                            )
+                            current_used: set[int] = set()
+                            for item in current_rules:
+                                current_used.update(
+                                    self.vpn_service._parse_ports(
+                                        self.vpn_service._get_rule_external_port(item)
+                                    )
+                                )
+                            free = self.vpn_service._find_free_ports(current_used, 1)
+                            if not free:
+                                raise ValueError(
+                                    "Недостаточно свободных внешних портов для восстановления"
+                                )
+                            selected_port = int(free[0])
+                            payload["dst-port"] = str(selected_port)
+                            if original_port is not None:
+                                port_replacements[int(original_port)] = selected_port
+
+                        restored_ports.append(selected_port)
+                    else:
+                        restored_ports.extend(int(port) for port in selected)
+
                     created_nat_ids.append(api.add("/ip/firewall/nat", payload))
 
             except Exception as operation_error:
@@ -422,16 +516,23 @@ class VPNRestoreService:
                 level=30,
             )
 
+        remap_text = ""
+        if port_replacements:
+            remap_text = " · замены портов: " + ", ".join(
+                f"{old}→{new}" for old, new in sorted(port_replacements.items())
+            )
         event(
             "VPN",
             "Клиент восстановлен из Google Sheets",
-            f"{server} · {login} · {remote or 'без Remote Address'} · портов {len(intended_ports)}",
+            f"{server} · {login} · {remote or 'без Remote Address'} · "
+            f"портов {len(restored_ports)}{remap_text}",
         )
         return RestoreResult(
             server=server,
             login=login,
             remote_address=remote,
-            ports=sorted(intended_ports),
+            ports=sorted(restored_ports),
             profile_created=profile_created,
             nat_created=len(created_nat_ids),
+            port_replacements=dict(sorted(port_replacements.items())),
         )
