@@ -31,8 +31,12 @@ class FakeRouterOSAPIClient:
             "disabled": "yes", "last-logged-out": "", "comment": policy.compose_extended_comment("", "M", old(370), old(500), "manual_disabled"),
         },
         {
-            ".id": "*NEVER", "name": "never366", "profile": "p-never", "remote-address": "10.0.0.30",
-            "disabled": "no", "last-logged-out": "", "comment": policy.compose_extended_comment("", "U", 0, old(366), "never_active_tracking"),
+            ".id": "*NEVER", "name": "never31", "profile": "p-never", "remote-address": "10.0.0.30",
+            "disabled": "no", "last-logged-out": "", "comment": policy.compose_extended_comment("", "U", 0, old(31), "never_active_tracking"),
+        },
+        {
+            ".id": "*NEVER29", "name": "never29", "profile": "p-never29", "remote-address": "10.0.0.31",
+            "disabled": "no", "last-logged-out": "", "comment": policy.compose_extended_comment("", "U", 0, old(29), "never_active_tracking"),
         },
         {
             ".id": "*MAN100", "name": "manual100", "profile": "p-man", "remote-address": "10.0.0.40",
@@ -47,6 +51,7 @@ class FakeRouterOSAPIClient:
         {".id": "*PQ", "name": "p-q", "remote-address": "10.0.0.10"},
         {".id": "*PD", "name": "p-del", "remote-address": "10.0.0.20"},
         {".id": "*PN", "name": "p-never", "remote-address": "10.0.0.30"},
+        {".id": "*PN29", "name": "p-never29", "remote-address": "10.0.0.31"},
         {".id": "*PM", "name": "p-man", "remote-address": "10.0.0.40"},
         {".id": "*PO", "name": "p-on", "remote-address": "10.0.0.50"},
     ]
@@ -54,7 +59,8 @@ class FakeRouterOSAPIClient:
         {".id": "*NQ", "comment": "quarantine100", "to-addresses": "10.0.0.10"},
         {".id": "*ND1", "comment": "delete370", "to-addresses": "10.0.0.20"},
         {".id": "*ND2", "comment": "", "to-addresses": "10.0.0.20"},
-        {".id": "*NN", "comment": "never366", "to-addresses": "10.0.0.30"},
+        {".id": "*NN", "comment": "never31", "to-addresses": "10.0.0.30"},
+        {".id": "*NN29", "comment": "never29", "to-addresses": "10.0.0.31"},
     ]
     actives = [{".id": "*A1", "name": "online", "service": "l2tp"}]
 
@@ -118,11 +124,13 @@ result = policy.apply_policy_now("vpn-test", creds)
 
 by_name = {row["name"]: row for row in FakeRouterOSAPIClient.secrets}
 assert "delete370" not in by_name
-assert "never366" not in by_name
+assert "never31" not in by_name
+assert "never29" in by_name
 assert "p-del" not in {row["name"] for row in FakeRouterOSAPIClient.profiles}
 assert "p-never" not in {row["name"] for row in FakeRouterOSAPIClient.profiles}
 assert not any(row.get("to-addresses") == "10.0.0.20" for row in FakeRouterOSAPIClient.nat_rules)
 assert not any(row.get("to-addresses") == "10.0.0.30" for row in FakeRouterOSAPIClient.nat_rules)
+assert any(row.get("to-addresses") == "10.0.0.31" for row in FakeRouterOSAPIClient.nat_rules)
 
 q = by_name["quarantine100"]
 qmeta = policy.parse_extended_comment(q["comment"])
