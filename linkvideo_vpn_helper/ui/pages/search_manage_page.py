@@ -806,8 +806,10 @@ class SearchManagePage(QWidget):
         self.detail_l.addWidget(info)
 
         note = QLabel(
-            "Helper восстановит тот же PPP Secret, пароль, профиль, Remote Address и NAT. "
-            "Перед записью будут проверены конфликты логина, IP и внешних портов."
+            "Helper восстановит тот же PPP Secret, пароль, профиль и Remote Address. "
+            "Свободные старые внешние порты будут возвращены. Если старый порт уже "
+            "занят другим NAT-правилом, Helper не заберёт его: подберёт новый свободный "
+            "внешний порт, сохранив прежний внутренний порт назначения."
             if record.password_saved else
             "Старый пароль не был сохранён. Автоматическое восстановление заблокировано, "
             "чтобы случайно не создать клиенту другой пароль."
@@ -834,7 +836,8 @@ class SearchManagePage(QWidget):
         dialog = ConfirmDialog(
             "Восстановить удалённого клиента?",
             f"{record.server}\nЛогин: {record.login}\nRemote Address: {record.remote_address or '—'}\n"
-            f"Порты: {record.ports or '—'}\n\nСуществующие объекты RouterOS не будут перезаписаны.",
+            f"Старые порты: {record.ports or '—'}\n\n"
+            "Занятые внешние порты не будут перезаписаны — для них Helper подберёт новые свободные.",
             confirm_text="Восстановить",
             parent=self,
         )
@@ -868,10 +871,20 @@ class SearchManagePage(QWidget):
             return
 
         self.client_task.show()
-        self.client_task.done(
-            "Клиент восстановлен",
-            f"{result.login} · {result.server} · NAT-правил: {result.nat_created}",
-        )
+        replacements = dict(getattr(result, "port_replacements", {}) or {})
+        if replacements:
+            replacement_text = ", ".join(
+                f"{old} → {new}" for old, new in sorted(replacements.items())
+            )
+            self.client_task.done(
+                "Клиент восстановлен · порты заменены",
+                f"{result.login} · {result.server} · {replacement_text}",
+            )
+        else:
+            self.client_task.done(
+                "Клиент восстановлен",
+                f"{result.login} · {result.server} · старые порты свободны и восстановлены",
+            )
         try:
             from linkvideo_vpn_helper.ui import vpn_sheets_sync_integration as integration
             coordinator = getattr(integration, "_COORDINATOR", None)
@@ -889,7 +902,7 @@ class SearchManagePage(QWidget):
 
         self._deleted_current = None
         QTimer.singleShot(
-            900,
+            3000 if dict(getattr(result, "port_replacements", {}) or {}) else 1200,
             lambda: (
                 self._close_client_view(immediate=True),
                 self._search(),
