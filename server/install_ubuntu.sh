@@ -103,15 +103,7 @@ set -a
 set +a
 
 info "Applying PostgreSQL schema"
-"${APP_ROOT}/.venv/bin/python" - <<'PY'
-import os
-import psycopg
-from pathlib import Path
-
-sql = Path('/opt/linkvideo-vpnsync/server/sql/001_init.sql').read_text(encoding='utf-8')
-with psycopg.connect(os.environ['DATABASE_URL'], autocommit=True) as conn:
-    conn.execute(sql)
-PY
+psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -f "${APP_ROOT}/server/sql/001_init.sql"
 
 install -m 0644 "${APP_ROOT}/server/systemd/linkvideo-vpnsync.service" "/etc/systemd/system/${SERVICE}"
 systemctl daemon-reload
