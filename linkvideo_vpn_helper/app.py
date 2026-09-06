@@ -177,17 +177,17 @@ def main() -> int:
     install_nested_scroll_guard()
     from linkvideo_vpn_helper.ui.vpn_automation_sheets_bridge import install_vpn_automation_sheets_bridge
     install_vpn_automation_sheets_bridge()
-    # Central VPNSync owns scheduled retention only; interactive Helper work stays direct to RouterOS.
+    # Scheduled lifecycle automation remains centrally safety-gated, but the
+    # PostgreSQL service is not an interactive search/write backend for Helper.
     from linkvideo_vpn_helper.services.central_retention_guard import install_central_retention_guard
     install_central_retention_guard()
     from linkvideo_vpn_helper.ui.vpn_sheets_coordinator_resilience import install_vpn_sheets_coordinator_resilience
     install_vpn_sheets_coordinator_resilience()
+    # Cloud settings are retained for archive/recovery access only.
     from linkvideo_vpn_helper.ui.cloud_settings_integration import install_cloud_settings_ui
     install_cloud_settings_ui()
     from linkvideo_vpn_helper.ui.vpn_sheets_emergency_only import install_sheets_emergency_runtime
     install_sheets_emergency_runtime()
-    from linkvideo_vpn_helper.ui.cloud_activity_nav import install_cloud_activity_nav
-    install_cloud_activity_nav()
 
     from linkvideo_vpn_helper.ui.main_window import MainWindow
     splash.set_status("Открываю интерфейс…")
@@ -197,11 +197,8 @@ def main() -> int:
     attach_vpn_sheets_sync(window, service, credentials, settings)
     from linkvideo_vpn_helper.ui.vpn_sheets_emergency_only import install_sheets_emergency_ui
     install_sheets_emergency_ui()
-    # Helper search and all interactive VPN mutations intentionally remain direct
-    # to MikroTik. VPNSync/PostgreSQL must never be required for normal operator work.
-    # The activity bridge may mirror successful direct RouterOS actions for audit/archive.
-    from linkvideo_vpn_helper.ui.cloud_activity_bridge import install_cloud_activity_bridge
-    install_cloud_activity_bridge(service, settings)
+    # Search, creation and all interactive VPN management remain direct RouterOS calls.
+    # No cloud search bridge, cloud operations bridge or central activity UI is installed.
     splash.close()
     window.show()
     event("APP", "Интерфейс открыт")
