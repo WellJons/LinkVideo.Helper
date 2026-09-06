@@ -5,16 +5,15 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 
-BUSINESS_TZ = timezone(timedelta(hours=3), name="LinkVideo-UTC+3")
+BUSINESS_TZ = timezone(timedelta(hours=7), name="LinkVideo-UTC+7")
 
 
 def install_business_timezone() -> None:
-    """Force VPN lifecycle calculations to LinkVideo business time (UTC+3).
+    """Force VPN lifecycle calculations to LinkVideo operational time (UTC+7).
 
-    The Linux VPNSync host currently runs in UTC+7. Lifecycle deadlines must
-    never inherit that host timezone. RouterOS timestamps without an explicit
-    offset are interpreted as business time and PostgreSQL TIMESTAMPTZ then
-    stores the corresponding instant safely in UTC.
+    RouterOS timestamps without an explicit offset are interpreted as UTC+7.
+    PostgreSQL TIMESTAMPTZ then stores the corresponding instant safely in UTC,
+    while employee-facing deadlines and history are rendered back in UTC+7.
     """
 
     from . import monitor as monitor_module
