@@ -16,6 +16,8 @@ from .config import get_settings
 from .db import VPNDatabase
 from .deadline_scheduler import DeadlineScheduler
 from .monitor import RouterOSMonitorManager
+from .operations import VPNSyncOperations
+from .operations_api import build_operations_router
 
 
 _settings = get_settings()
@@ -23,6 +25,7 @@ _db = VPNDatabase(_settings.database_url, _settings.encryption_key)
 _monitor = RouterOSMonitorManager(_db, _settings)
 _deadlines = DeadlineScheduler(_db, _settings, _monitor)
 _auth = AuthService(_db, _settings.api_token, session_ttl=_settings.session_ttl_seconds)
+_operations = VPNSyncOperations(_db, _settings, _monitor)
 
 
 @asynccontextmanager
@@ -101,6 +104,7 @@ def health() -> dict:
         "deadline_scheduler": deadline_status,
         "business_timezone": f"UTC{offset:+d}",
         "auth": "operator-session",
+        "server_operations": True,
     }
 
 
@@ -253,3 +257,9 @@ def activity_stream(auth: AuthContext = Depends(require_auth)) -> StreamingRespo
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# All RouterOS mutations exposed to Helper are authenticated here. The operation
+# layer uses server-side RouterOS credentials, performs a fresh reconciliation,
+# and writes the employee/action audit trail before returning to the desktop.
+app.include_router(build_operations_router(require_auth, _auth, _operations))
