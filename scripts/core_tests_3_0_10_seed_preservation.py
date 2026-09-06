@@ -81,7 +81,9 @@ try:
     assert actual_created_day == expected_created_day, (actual_created_day, expected_created_day, final)
     assert meta.base_comment == "operator note"
     assert meta.state == "R" and meta.reason == "never_active_30"
-    assert "|LV2|" in final and "|c=" in final and "|r=s|" in final
+    # Compact reason code must agree with the parsed never-active deletion reason.
+    # `r=s` means ordinary 30-day sleeping and was an obsolete pre-3.0.13 assertion.
+    assert "|LV2|" in final and "|c=" in final and "|r=n|" in final
 finally:
     policy.RouterOSAPIClient = real_policy_api
     api_module.RouterOSAPIClient = real_module_api
