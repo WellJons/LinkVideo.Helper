@@ -23,9 +23,15 @@ class Settings(BaseSettings):
     bind_host: str = Field("127.0.0.1", alias="VPNSYNC_BIND_HOST")
     bind_port: int = Field(8787, alias="VPNSYNC_BIND_PORT")
     api_token: str = Field(..., min_length=24, alias="VPNSYNC_API_TOKEN")
+    session_ttl_seconds: int = Field(43200, ge=300, le=604800, alias="VPNSYNC_SESSION_TTL_SECONDS")
 
     database_url: str = Field(..., alias="DATABASE_URL")
     encryption_key: str = Field(..., min_length=24, alias="VPNSYNC_ENCRYPTION_KEY")
+
+    # All lifecycle/deadline calculations are performed in the LinkVideo
+    # business timezone. +03:00 is intentionally fixed and must not depend on
+    # the Linux host timezone (the current server itself is +07:00).
+    business_utc_offset_hours: int = Field(3, ge=-12, le=14, alias="VPNSYNC_BUSINESS_UTC_OFFSET_HOURS")
 
     # RouterOS is enabled only after PostgreSQL migration is validated. A
     # per-server JSON file can override the common credentials below.
