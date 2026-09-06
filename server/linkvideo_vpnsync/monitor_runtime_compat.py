@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 from typing import Any
@@ -13,6 +14,14 @@ def install_monitor_runtime_compat() -> None:
     the comparison so a different RouterOS print order does not generate fake
     change history.
 
+    RouterOS can contain duplicate /ppp/secret rows with the same login. The
+    database intentionally models one logical VPN client per login, so the live
+    monitor canonicalizes duplicate rows deterministically instead of letting
+    them alternately overwrite one database row. For the LinkVideo L2TP fleet,
+    an enabled ``l2tp`` secret is preferred over ``any`` and other services.
+    Every raw duplicate row is embedded in the encrypted recovery snapshot via
+    private metadata on the canonical row, so recovery information is retained.
+
     Shutdown also waits for an already-running startup/event snapshot before the
     FastAPI lifespan closes the PostgreSQL pool. This avoids the former
     ``pool is already closed`` race during service restart.
@@ -25,7 +34,90 @@ def install_monitor_runtime_compat() -> None:
     if getattr(sync_cls, "_runtime_compat", False):
         return
 
+    original_client_cls = monitor_module.RouterOSClient
     original_ports = sync_cls._ports
+
+    class CanonicalSecretRouterOSClient(original_client_cls):
+        _duplicate_warning_state: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {}
+        _duplicate_warning_lock = threading.Lock()
+
+        @staticmethod
+        def _secret_rank(row: dict[str, str]) -> tuple[int, int, str]:
+            disabled = str(row.get("disabled") or "").strip().lower() in {"true", "yes", "1", "on", "да"}
+            service = str(row.get("service") or "").strip().lower()
+            if service == "l2tp":
+                service_rank = 0
+            elif service == "any":
+                service_rank = 1
+            else:
+                service_rank = 2
+            return (1 if disabled else 0, service_rank, str(row.get(".id") or ""))
+
+        def print(self, path: str, params: dict[str, Any] | None = None) -> list[dict[str, str]]:
+            rows = super().print(path, params)
+            if str(path).rstrip("/") != "/ppp/secret":
+                return rows
+
+            groups: dict[str, list[dict[str, str]]] = {}
+            order: list[str] = []
+            blank_rows: list[dict[str, str]] = []
+            for row in rows:
+                login = str(row.get("name") or "").strip()
+                if not login:
+                    blank_rows.append(row)
+                    continue
+                if login not in groups:
+                    groups[login] = []
+                    order.append(login)
+                groups[login].append(row)
+
+            duplicate_state: list[tuple[str, tuple[str, ...]]] = []
+            result: list[dict[str, str]] = []
+            for login in order:
+                variants = groups[login]
+                if len(variants) == 1:
+                    result.append(variants[0])
+                    continue
+
+                canonical = dict(sorted(variants, key=self._secret_rank)[0])
+                ids = tuple(sorted(str(item.get(".id") or "") for item in variants))
+                duplicate_state.append((login, ids))
+
+                # These private keys are ignored by normal field extraction but
+                # become part of the encrypted recovery_snapshot written by the
+                # monitor. Do not expose the variant payload through API/search.
+                canonical["_vpnsync_duplicate_count"] = str(len(variants))
+                canonical["_vpnsync_duplicate_ids"] = ",".join(ids)
+                canonical["_vpnsync_duplicate_variants_json"] = json.dumps(
+                    variants,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                result.append(canonical)
+
+            result.extend(blank_rows)
+            state = tuple(sorted(duplicate_state))
+            host_key = str(getattr(self, "host", "") or "").lower()
+            with self._duplicate_warning_lock:
+                previous = self._duplicate_warning_state.get(host_key)
+                if state:
+                    self._duplicate_warning_state[host_key] = state
+                else:
+                    self._duplicate_warning_state.pop(host_key, None)
+            if state and state != previous:
+                details = ", ".join(
+                    f"{login} ({len(ids)} rows: {','.join(ids)})"
+                    for login, ids in state
+                )
+                print(
+                    f"[ROUTEROS] {self.host}: duplicate PPP secret login(s) detected; "
+                    f"using one logical client per login: {details}",
+                    flush=True,
+                )
+            elif not state and previous:
+                print(f"[ROUTEROS] {self.host}: duplicate PPP secret condition cleared", flush=True)
+
+            return result
 
     def canonical_ports(rules: list[dict[str, str]]) -> list[dict[str, Any]]:
         rows = list(original_ports(rules))
@@ -225,6 +317,7 @@ def install_monitor_runtime_compat() -> None:
             "servers": servers,
         }
 
+    monitor_module.RouterOSClient = CanonicalSecretRouterOSClient
     sync_cls._ports = staticmethod(canonical_ports)
     sync_cls._existing = existing
     manager_cls.start = start
