@@ -45,4 +45,9 @@ assert "self._lv_summary_rows = {}" in module_source
 assert "(2, 3), (3, 4)" in module_source
 assert "Автоматически" in module_source
 
+release_notes = (ROOT / "RELEASE_3.0.13_RU.txt").read_text(encoding="utf-8")
+assert "LinkVideo.Helper 3.0.13" in release_notes
+assert "LV Сводка" in release_notes
+assert "10001→10001" in release_notes
+
 print("CORE TESTS 3.0.13 SHEETS OPERATOR VIEW OK")
