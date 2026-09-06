@@ -23,7 +23,7 @@ from linkvideo_vpn_helper.services.cloud_vpnsync import CloudVPNSyncClient
 from linkvideo_vpn_helper.ui.components import Card, PageHeader, TaskStatus, build_page_scaffold
 
 
-BUSINESS_TZ = timezone(timedelta(hours=3))
+BUSINESS_TZ = timezone(timedelta(hours=7))
 
 
 _SOURCE_LABELS = {
@@ -83,7 +83,7 @@ class VPNActivityPage(QWidget):
         self.page_layout = root
         root.addWidget(PageHeader(
             "История VPN",
-            "Единая история PostgreSQL: действия сотрудников, события MikroTik и автоматические синхронизации VPNSync. Время отображается в UTC+3.",
+            "Единая история PostgreSQL: действия сотрудников, события MikroTik и автоматические синхронизации VPNSync. Время отображается в UTC+7.",
         ))
 
         controls = Card(subtle=True)
@@ -119,7 +119,7 @@ class VPNActivityPage(QWidget):
 
         self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels([
-            "Время (+3)",
+            "Время (+7)",
             "Источник",
             "Сервер",
             "Логин",
@@ -256,7 +256,7 @@ class VPNActivityPage(QWidget):
                 self.table.setItem(row_index, column, item)
         self.table.setSortingEnabled(True)
         self.connection_note.setText(
-            f"Облачный сервер подключён · записей показано {len(records)} · push-обновление активно · время UTC+3"
+            f"Облачный сервер подключён · записей показано {len(records)} · push-обновление активно · время UTC+7"
         )
         if self.task.isVisible():
             self.task.done("История VPN обновлена", f"Записей: {len(records)}")
