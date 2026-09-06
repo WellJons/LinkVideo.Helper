@@ -42,21 +42,33 @@ def main() -> None:
             raise SystemExit("Passwords do not match")
         salt, digest, iterations = hash_password(password)
         with db.connection() as conn, conn.cursor() as cur:
+            # Use an explicit UPDATE/INSERT sequence instead of relying on
+            # expression-index ON CONFLICT inference. This behaves identically
+            # on every supported PostgreSQL version and keeps usernames
+            # case-insensitively unique.
             cur.execute(
                 """
-                INSERT INTO vpnsync_users
-                    (username, role, password_salt, password_hash, password_iterations, enabled)
-                VALUES (%s, %s, %s, %s, %s, TRUE)
-                ON CONFLICT (lower(username)) DO UPDATE SET
-                    role = EXCLUDED.role,
-                    password_salt = EXCLUDED.password_salt,
-                    password_hash = EXCLUDED.password_hash,
-                    password_iterations = EXCLUDED.password_iterations,
-                    enabled = TRUE,
-                    updated_at = now()
+                UPDATE vpnsync_users
+                   SET username = %s,
+                       role = %s,
+                       password_salt = %s,
+                       password_hash = %s,
+                       password_iterations = %s,
+                       enabled = TRUE,
+                       updated_at = now()
+                 WHERE lower(username) = lower(%s)
                 """,
-                (username, args.role, salt, digest, iterations),
+                (username, args.role, salt, digest, iterations, username),
             )
+            if cur.rowcount < 1:
+                cur.execute(
+                    """
+                    INSERT INTO vpnsync_users
+                        (username, role, password_salt, password_hash, password_iterations, enabled)
+                    VALUES (%s, %s, %s, %s, %s, TRUE)
+                    """,
+                    (username, args.role, salt, digest, iterations),
+                )
             conn.commit()
         print(f"[VPNSync] Operator ready: {username} ({args.role})")
     finally:
