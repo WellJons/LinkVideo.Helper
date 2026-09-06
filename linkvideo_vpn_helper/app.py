@@ -191,15 +191,19 @@ def main() -> int:
     install_vpn_sheets_coordinator_resilience()
     from linkvideo_vpn_helper.ui.cloud_settings_integration import install_cloud_settings_ui
     install_cloud_settings_ui()
+    # PostgreSQL/VPNSync is authoritative. Google Sheets remains available only
+    # as an explicit disaster-recovery export/restore path.
+    from linkvideo_vpn_helper.ui.vpn_sheets_emergency_only import install_sheets_emergency_runtime
+    install_sheets_emergency_runtime()
 
     from linkvideo_vpn_helper.ui.main_window import MainWindow
     splash.set_status("Открываю интерфейс…")
     window = MainWindow(service, credentials, settings)
-    # Google Sheets — вторичное зеркало/аварийная база. Подключаем его уже
-    # после создания основного окна, чтобы отсутствие ключа или сети никогда
-    # не мешало запуску Helper и работе с RouterOS.
+    # The coordinator is retained for manual emergency export/recovery only.
     from linkvideo_vpn_helper.ui.vpn_sheets_sync_integration import attach_vpn_sheets_sync
     attach_vpn_sheets_sync(window, service, credentials, settings)
+    from linkvideo_vpn_helper.ui.vpn_sheets_emergency_only import install_sheets_emergency_ui
+    install_sheets_emergency_ui()
     splash.close()
     window.show()
     event("APP", "Интерфейс открыт")
