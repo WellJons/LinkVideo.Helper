@@ -37,11 +37,14 @@ _SOURCE_LABELS = {
 _ACTION_LABELS = {
     "auth.login": "Вход на облачный сервер",
     "sync.snapshot": "Синхронизация состояния",
-    "routeros.changed": "Событие RouterOS",
+    "routeros.event": "Событие MikroTik /listen",
+    "routeros.changed": "Изменение RouterOS",
     "routeros.added": "Добавление RouterOS",
     "routeros.removed": "Удаление RouterOS",
     "client.create": "Создание VPN-клиента",
     "client.delete": "Удаление VPN-клиента",
+    "client.delete.preflight": "Проверка перед удалением",
+    "client.disconnect": "Отключение VPN-сессии",
     "client.password_change": "Смена пароля",
     "client.enabled_change": "Включение / отключение клиента",
     "nat.add_ports": "Добавление NAT-портов",
@@ -166,28 +169,41 @@ class VPNActivityPage(QWidget):
         summary = str(details.get("summary") or "").strip()
         if summary:
             return summary
-        kind = str(details.get("kind") or "")
-        if kind == "routeros_event":
-            path = str(details.get("path") or "")
-            item_id = str(details.get("item_id") or "")
-            return " · ".join(value for value in (path, item_id) if value)
-        if row.get("action") == "sync.snapshot":
+
+        action = str(row.get("action") or "")
+        if action == "routeros.event":
+            path = str(details.get("path") or "").strip()
+            item_id = str(
+                details.get("routeros_item_id")
+                or details.get("item_id")
+                or ""
+            ).strip()
+            fields = [str(item) for item in list(details.get("fields") or []) if str(item or "")]
+            field_text = ", ".join(fields[:8])
+            if len(fields) > 8:
+                field_text += f" +{len(fields) - 8}"
+            parts = [value for value in (path, item_id, field_text) if value]
+            return " · ".join(parts)
+
+        if action == "sync.snapshot":
             values = []
             for key, label in (("clients", "клиентов"), ("active", "активно"), ("added", "+"), ("changed", "Δ"), ("deleted", "удалено")):
                 if key in details:
                     values.append(f"{label} {details.get(key)}")
             return " · ".join(values)
+
         error_text = str(details.get("error") or "").strip()
         if error_text:
             return error_text
-        return ""
+        server_text = str(details.get("server") or "").strip()
+        return server_text
 
     def refresh(self, silent: bool = False) -> None:
         if self._loading:
             return
         config = self.cloud.store.load()
         if not config.username or not config.password:
-            self.connection_note.setText("Облачный сервер не настроен. Укажите его в разделе «Настройки». ")
+            self.connection_note.setText("Облачный сервер не настроен. Укажите его в разделе «Настройки».")
             self.table.setRowCount(0)
             return
         self.cloud.set_config(config, save=False)
@@ -246,10 +262,7 @@ class VPNActivityPage(QWidget):
             self.task.done("История VPN обновлена", f"Записей: {len(records)}")
 
     def _on_stream_wake(self) -> None:
-        if not self._event_debounce.isActive():
-            self._event_debounce.start()
-        else:
-            self._event_debounce.start()
+        self._event_debounce.start()
 
     def _start_stream(self) -> None:
         if self._stream_thread is not None and self._stream_thread.is_alive():
