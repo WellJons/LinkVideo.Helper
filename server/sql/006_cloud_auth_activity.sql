@@ -70,6 +70,26 @@ SELECT
     a.login,
     a.success,
     a.details || jsonb_build_object('kind', 'audit') AS details
-FROM vpnsync_audit_log a;
+FROM vpnsync_audit_log a
+UNION ALL
+SELECT
+    ('routeros:' || e.id::text) AS activity_id,
+    NULL::uuid AS operation_id,
+    e.observed_at AS created_at,
+    'RouterOS listen'::text AS source,
+    'RouterOS'::text AS actor,
+    ''::text AS role,
+    ('routeros.' || COALESCE(NULLIF(e.event_kind, ''), 'changed'))::text AS action,
+    e.server_id,
+    COALESCE(e.payload->>'name', '') AS login,
+    TRUE AS success,
+    jsonb_build_object(
+        'kind', 'routeros_event',
+        'path', e.routeros_path,
+        'item_id', e.routeros_item_id,
+        'payload', COALESCE(e.payload, '{}'::jsonb),
+        'processed_at', e.processed_at
+    ) AS details
+FROM sync_events e;
 
 COMMIT;
