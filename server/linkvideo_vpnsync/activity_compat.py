@@ -6,14 +6,23 @@ from typing import Any
 from .activity_bus import activity_bus
 
 
+def _wake_deadlines() -> None:
+    try:
+        from .deadline_scheduler import wake_deadline_scheduler
+        wake_deadline_scheduler()
+    except Exception:
+        pass
+
+
 def install_activity_tracking() -> None:
-    """Audit every automatic snapshot and wake push subscribers.
+    """Audit every automatic snapshot and wake push/deadline subscribers.
 
     Raw RouterOS events are already persisted by SnapshotSync in ``sync_events``.
     This wrapper adds one higher-level audit row describing the completed
     reconciliation and publishes an in-process wake-up for connected desktops.
-    Audit failures are deliberately non-fatal: they must never break RouterOS
-    reconciliation itself.
+    Every completed snapshot also re-arms the nearest-deadline scheduler because
+    last-seen/lifecycle data may have changed. Audit/wake failures are deliberately
+    non-fatal and must never break RouterOS reconciliation itself.
     """
 
     from . import monitor as monitor_module
@@ -77,6 +86,7 @@ def install_activity_tracking() -> None:
             "success": error is None,
             "details": details,
         })
+        _wake_deadlines()
 
     def sync(self, target, *, event_path: str = "startup", event_payload: dict[str, str] | None = None):
         try:
