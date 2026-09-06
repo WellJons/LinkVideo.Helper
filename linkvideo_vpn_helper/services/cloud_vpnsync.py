@@ -3,12 +3,11 @@ from __future__ import annotations
 import base64
 import ctypes
 import json
-import os
 import sys
 import time
 from ctypes import wintypes
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterator
 
 import requests
 
@@ -227,12 +226,13 @@ class CloudVPNSyncClient:
         self._ensure_token()
         headers = dict(kwargs.pop("headers", {}) or {})
         headers["Authorization"] = f"Bearer {self._token}"
+        timeout = kwargs.pop("timeout", self.timeout)
         try:
             response = self._session.request(
                 str(method).upper(),
                 self._url(path),
                 headers=headers,
-                timeout=kwargs.pop("timeout", self.timeout),
+                timeout=timeout,
                 **kwargs,
             )
             if response.status_code == 401:
@@ -243,7 +243,7 @@ class CloudVPNSyncClient:
                     str(method).upper(),
                     self._url(path),
                     headers=headers,
-                    timeout=kwargs.pop("timeout", self.timeout),
+                    timeout=timeout,
                     **kwargs,
                 )
             response.raise_for_status()
@@ -276,3 +276,59 @@ class CloudVPNSyncClient:
             params={"limit": int(limit), "login": login, "source": source},
         )
         return list(payload or [])
+
+    def record_activity(
+        self,
+        action: str,
+        *,
+        server: str = "",
+        login: str = "",
+        success: bool = True,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        self.request(
+            "POST",
+            "/v1/activity/desktop",
+            json={
+                "action": str(action or "unknown"),
+                "server": str(server or ""),
+                "login": str(login or ""),
+                "success": bool(success),
+                "details": dict(details or {}),
+            },
+        )
+
+    def iter_activity_events(self, stop_event=None) -> Iterator[dict[str, Any]]:
+        """Yield server-pushed activity notifications without polling PostgreSQL."""
+        while stop_event is None or not stop_event.is_set():
+            try:
+                self._ensure_token()
+                token = self._token
+                with requests.get(
+                    self._url("/v1/activity/stream"),
+                    headers={"Authorization": f"Bearer {token}"},
+                    stream=True,
+                    timeout=(self.timeout, 35.0),
+                ) as response:
+                    if response.status_code == 401:
+                        self._token = ""
+                        continue
+                    response.raise_for_status()
+                    for raw_line in response.iter_lines(decode_unicode=True):
+                        if stop_event is not None and stop_event.is_set():
+                            return
+                        line = str(raw_line or "").strip()
+                        if not line or line.startswith(":") or not line.startswith("data:"):
+                            continue
+                        try:
+                            payload = json.loads(line[5:].strip())
+                        except Exception:
+                            continue
+                        if isinstance(payload, dict):
+                            yield payload
+            except Exception:
+                if stop_event is not None and stop_event.is_set():
+                    return
+                # Reconnect the long-lived push stream after a short delay. This
+                # is connection recovery, not database polling.
+                time.sleep(2.0)
