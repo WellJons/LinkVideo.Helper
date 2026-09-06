@@ -29,9 +29,9 @@ class Settings(BaseSettings):
     encryption_key: str = Field(..., min_length=24, alias="VPNSYNC_ENCRYPTION_KEY")
 
     # All lifecycle/deadline calculations are performed in the LinkVideo
-    # business timezone. +03:00 is intentionally fixed and must not depend on
-    # the Linux host timezone (the current server itself is +07:00).
-    business_utc_offset_hours: int = Field(3, ge=-12, le=14, alias="VPNSYNC_BUSINESS_UTC_OFFSET_HOURS")
+    # operational timezone. +07:00 is fixed so RouterOS timestamps, lifecycle
+    # deadlines and employee-facing history use one consistent clock.
+    business_utc_offset_hours: int = Field(7, ge=-12, le=14, alias="VPNSYNC_BUSINESS_UTC_OFFSET_HOURS")
 
     # RouterOS is enabled only after PostgreSQL migration is validated. A
     # per-server JSON file can override the common credentials below.
