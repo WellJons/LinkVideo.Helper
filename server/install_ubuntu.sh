@@ -106,14 +106,16 @@ info "Preflight: compiling VPNSync Python modules"
 "${APP_ROOT}/.venv/bin/python" -m compileall -q "${APP_ROOT}/server/linkvideo_vpnsync" \
   || fail "Python compile preflight failed; current service was not stopped"
 
-info "Preflight: importing FastAPI and authenticated operation routes"
+info "Preflight: importing FastAPI, routes and PostgreSQL search"
 PYTHONPATH="${APP_ROOT}/server" "${APP_ROOT}/.venv/bin/python" - <<'PY'
-from linkvideo_vpnsync.api import app
+from linkvideo_vpnsync.api import app, _db
 
 paths = {getattr(route, "path", "") for route in app.routes}
 required = {
     "/health",
     "/v1/auth/login",
+    "/v1/clients/search",
+    "/v1/clients/detail",
     "/v1/activity",
     "/v1/activity/stream",
     "/v1/operations/clients/create",
@@ -124,12 +126,27 @@ required = {
 missing = sorted(required - paths)
 if missing:
     raise SystemExit("Missing VPNSync route(s): " + ", ".join(missing))
-print(f"[VPNSync] Preflight OK: {len(paths)} API routes loaded")
+
+# Execute the new read path against the existing schema before touching the
+# running service. The impossible query should return zero rows but still checks
+# SQL syntax, TEXT address compatibility and psycopg parameter adaptation.
+_db.open()
+try:
+    rows = _db.search_client_details(
+        "__vpnsync_preflight_no_match__",
+        limit=1,
+        include_password=False,
+    )
+    if rows:
+        raise SystemExit("Unexpected VPNSync preflight search result")
+finally:
+    _db.close()
+
+print(f"[VPNSync] Preflight OK: {len(paths)} API routes loaded; PostgreSQL search OK")
 PY
 
-# Schema/index migrations must not race a running sync worker. This matters in
-# particular for migrations that replace indexes used by ON CONFLICT clauses.
-# Stop the service only after the new source has passed compile/import preflight.
+# Schema/index migrations must not race a running sync worker. Stop the service
+# only after compile/import/DB-read preflight has completed successfully.
 if systemctl is-active --quiet "${SERVICE}" 2>/dev/null; then
   info "Stopping ${SERVICE} before PostgreSQL migrations"
   systemctl stop "${SERVICE}"
