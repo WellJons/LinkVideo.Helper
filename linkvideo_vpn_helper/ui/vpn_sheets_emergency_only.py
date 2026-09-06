@@ -14,7 +14,7 @@ def install_sheets_emergency_runtime() -> None:
 
     VPNSync/PostgreSQL is authoritative. No periodic timer, startup sync or
     post-mutation automatic Google write is allowed in normal operation.
-    Manual sync/restore APIs remain available as the last-resort reserve.
+    Manual export APIs remain available as the last-resort reserve.
     """
     global _RUNTIME_INSTALLED
     if _RUNTIME_INSTALLED:
@@ -70,6 +70,16 @@ def install_sheets_emergency_ui() -> None:
         coordinator = getattr(integration, "_COORDINATOR", None)
         status = getattr(self, "sheets_sync_status", None)
         button = getattr(self, "sheets_sync_btn", None)
+        restore_button = getattr(self, "sheets_restore_btn", None)
+
+        # Client recovery is intentionally available only from the normal
+        # client-search card, where the operator first sees whether the account
+        # exists on live MikroTik. Google Sheets remains export-only emergency
+        # reserve in this infrastructure page.
+        if restore_button is not None:
+            restore_button.hide()
+            restore_button.setEnabled(False)
+
         if status is not None:
             if coordinator is not None and coordinator.is_configured():
                 status.setText(
