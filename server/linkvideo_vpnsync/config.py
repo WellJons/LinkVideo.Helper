@@ -15,7 +15,7 @@ DEFAULT_ROUTEROS_SERVERS = ",".join([
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=("/etc/linkvideo-vpnsync/vpnsync.env", ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
