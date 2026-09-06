@@ -135,8 +135,6 @@ def main() -> int:
     install_service_runtime_hardening()
     from linkvideo_vpn_helper.services.vpn_automation_resilience import install_vpn_automation_resilience
     install_vpn_automation_resilience()
-    # Legacy retention code is imported for compatibility with existing pages,
-    # then hard-blocked below after every old wrapper has been installed.
     from linkvideo_vpn_helper.services.vpn_retention_policy import install_retention_policy
     install_retention_policy()
     from linkvideo_vpn_helper.services.vpn_retention_seed_guard import install_retention_seed_guard
@@ -179,8 +177,7 @@ def main() -> int:
     install_nested_scroll_guard()
     from linkvideo_vpn_helper.ui.vpn_automation_sheets_bridge import install_vpn_automation_sheets_bridge
     install_vpn_automation_sheets_bridge()
-    # This must run after the legacy automation/UI wrappers above so no desktop
-    # path can re-enable LV-Aging/LV-Activity/LV-AutoRestore afterwards.
+    # Central VPNSync is the only owner of 30/90/365 lifecycle decisions.
     from linkvideo_vpn_helper.services.central_retention_guard import install_central_retention_guard
     install_central_retention_guard()
     from linkvideo_vpn_helper.ui.vpn_sheets_coordinator_resilience import install_vpn_sheets_coordinator_resilience
@@ -200,13 +197,16 @@ def main() -> int:
     attach_vpn_sheets_sync(window, service, credentials, settings)
     from linkvideo_vpn_helper.ui.vpn_sheets_emergency_only import install_sheets_emergency_ui
     install_sheets_emergency_ui()
-    # Transitional audit wrapper is installed first. The authoritative operation
-    # bridge installed after it bypasses direct RouterOS when cloud is configured;
-    # therefore server-side operations are audited once, not twice.
+    # Direct legacy activity mirroring is installed first; central operations
+    # installed after it bypass direct RouterOS and are audited by VPNSync itself.
     from linkvideo_vpn_helper.ui.cloud_activity_bridge import install_cloud_activity_bridge
     install_cloud_activity_bridge(service, settings)
     from linkvideo_vpn_helper.services.cloud_operations_bridge import install_cloud_operations_bridge
     install_cloud_operations_bridge(service, settings)
+    # MainWindow has already constructed FastSearchService, so its instance can
+    # now switch all multi-server searches to one PostgreSQL request dynamically.
+    from linkvideo_vpn_helper.services.cloud_search_bridge import install_cloud_search_bridge
+    install_cloud_search_bridge(window.search, settings, service)
     splash.close()
     window.show()
     event("APP", "Интерфейс открыт")
