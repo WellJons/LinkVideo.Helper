@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import argparse
-import getpass
 import grp
 import json
+import locale
 import os
+import re
+import sys
+import termios
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +24,8 @@ TARGETS = [
     "rb-vpn01.linkvideo.ru",
     "kz-vpn01.linkvideo.ru",
 ]
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 
 def _country(host: str) -> str:
@@ -67,6 +72,70 @@ def _update_env(values: dict[str, str]) -> None:
     ENV_FILE.write_text("\n".join(output) + "\n", encoding="utf-8")
 
 
+def _decode_terminal(raw: bytes) -> str:
+    encodings: list[str] = ["utf-8"]
+    preferred = locale.getpreferredencoding(False)
+    if preferred and preferred.lower() not in {encoding.lower() for encoding in encodings}:
+        encodings.append(preferred)
+    encodings.extend(["cp1251", "latin-1"])
+
+    text = ""
+    for encoding in encodings:
+        try:
+            text = raw.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        text = raw.decode("utf-8", errors="replace")
+
+    # Termius/bracketed-paste can leave control wrappers such as ESC[200~.
+    text = _ANSI_ESCAPE_RE.sub("", text)
+    text = text.replace("\x00", "")
+    return text.rstrip("\r\n")
+
+
+def _tty_readline(prompt: str, *, secret: bool = False) -> str:
+    print(prompt, end="", flush=True)
+
+    tty = None
+    try:
+        tty = open("/dev/tty", "r+b", buffering=0)
+        stream = tty
+    except OSError:
+        stream = getattr(sys.stdin, "buffer", sys.stdin)
+
+    fd = None
+    old_attrs = None
+    try:
+        if secret and hasattr(stream, "fileno"):
+            try:
+                fd = stream.fileno()
+                old_attrs = termios.tcgetattr(fd)
+                new_attrs = termios.tcgetattr(fd)
+                new_attrs[3] &= ~termios.ECHO
+                termios.tcsetattr(fd, termios.TCSADRAIN, new_attrs)
+            except (termios.error, OSError):
+                fd = None
+                old_attrs = None
+
+        raw = stream.readline()
+        if isinstance(raw, str):
+            value = raw.rstrip("\r\n")
+        else:
+            value = _decode_terminal(raw)
+        return value
+    finally:
+        if old_attrs is not None and fd is not None:
+            try:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
+            except (termios.error, OSError):
+                pass
+            print(flush=True)
+        if tty is not None:
+            tty.close()
+
+
 def _read_counts(host: str, username: str, password: str, *, port: int, timeout: float) -> dict[str, Any]:
     with RouterOSClient(host, username, password, port=port, timeout=timeout) as api:
         secrets = api.print("/ppp/secret")
@@ -84,12 +153,16 @@ def _read_counts(host: str, username: str, password: str, *, port: int, timeout:
 
 def _prompt_credentials(label: str, default_username: str = "", default_password: str = "") -> tuple[str, str]:
     suffix = f" [{default_username}]" if default_username else ""
-    username = input(f"RouterOS username for {label}{suffix}: ").strip() or default_username
+    entered_username = _tty_readline(f"RouterOS username for {label}{suffix}: ").strip()
+    username = entered_username or default_username
     if default_password:
-        entered = getpass.getpass(f"RouterOS password for {label} [Enter = reuse previous]: ")
+        entered = _tty_readline(
+            f"RouterOS password for {label} [Enter = reuse previous]: ",
+            secret=True,
+        )
         password = entered or default_password
     else:
-        password = getpass.getpass(f"RouterOS password for {label}: ")
+        password = _tty_readline(f"RouterOS password for {label}: ", secret=True)
     if not username or not password:
         raise SystemExit("Username/password cannot be empty")
     return username, password
@@ -135,7 +208,9 @@ def main() -> None:
                 continue
 
             print(f"[FLEET] {host} failed with common credentials: {first_exc}")
-            answer = input(f"Retry {host} with separate {country} credentials? [y/N]: ").strip().lower()
+            answer = _tty_readline(
+                f"Retry {host} with separate {country} credentials? [y/N]: "
+            ).strip().lower()
             if answer not in {"y", "yes", "д", "да"}:
                 failures.append((host, str(first_exc)))
                 continue
