@@ -77,7 +77,6 @@ def install_vpn_sheets_operator_view() -> None:
     backend_cls = sheets.GoogleSheetsBackend
     original_prepare_sync = getattr(backend_cls, "prepare_sync", None)
     original_apply_operator_view = getattr(backend_cls, "apply_operator_view", None)
-    original_update_summary = backend_cls.update_summary
 
     def build_current_clients(service, snapshot):
         current = original_build(service, snapshot)
@@ -133,6 +132,14 @@ def install_vpn_sheets_operator_view() -> None:
             fields = [part.strip() for part in str(history[4] or "").split(",") if part.strip()]
             old = before.get(login, {})
             new = after.get(login, {})
+
+            # Do not expose an implementation label as the operator name.
+            if str(history[8] or "").strip().lower() in {
+                "linkvideo.helper auto-sync",
+                "linkvideo.helper",
+                "auto-sync",
+            }:
+                history[8] = "Автоматически"
 
             if action == "Обнаружена на RouterOS":
                 history[3] = "Новая VPN-учётка"
