@@ -74,7 +74,6 @@ if [[ ! -f "${ENV_FILE}" ]]; then
     sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER DATABASE ${DB_NAME} OWNER TO ${DB_USER};"
   fi
 
-  # pgcrypto is trusted, but creating it as postgres avoids distribution-specific permission surprises.
   sudo -u postgres psql -v ON_ERROR_STOP=1 -d "${DB_NAME}" -c "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
 
   BIND_HOST="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}$' | grep -v '^127\.' | head -n1 || true)"
@@ -96,18 +95,35 @@ else
   info "Existing ${ENV_FILE} found; preserving all secrets"
 fi
 
-# Load only the local generated environment. It is deliberately never printed.
 set -a
 # shellcheck disable=SC1090
 . "${ENV_FILE}"
 set +a
 
-info "Applying PostgreSQL schema"
-psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -f "${APP_ROOT}/server/sql/001_init.sql"
+info "Applying PostgreSQL migrations"
+psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 <<'SQL'
+CREATE TABLE IF NOT EXISTS vpnsync_schema_migrations (
+    name TEXT PRIMARY KEY,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+SQL
+
+for migration in "${APP_ROOT}"/server/sql/*.sql; do
+  migration_name="$(basename "${migration}")"
+  already="$(psql "${DATABASE_URL}" -Atqc "SELECT 1 FROM vpnsync_schema_migrations WHERE name = '${migration_name//\'/\'\'}' LIMIT 1")"
+  if [[ "${already}" == "1" ]]; then
+    info "Migration ${migration_name}: already applied"
+    continue
+  fi
+  info "Migration ${migration_name}: applying"
+  psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -f "${migration}"
+  psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -c "INSERT INTO vpnsync_schema_migrations(name) VALUES ('${migration_name//\'/\'\'}') ON CONFLICT DO NOTHING" >/dev/null
+ done
 
 install -m 0644 "${APP_ROOT}/server/systemd/linkvideo-vpnsync.service" "/etc/systemd/system/${SERVICE}"
 systemctl daemon-reload
-systemctl enable --now "${SERVICE}"
+systemctl enable "${SERVICE}" >/dev/null
+systemctl restart "${SERVICE}"
 
 info "Waiting for API health check"
 HEALTH_URL="http://${VPNSYNC_BIND_HOST}:${VPNSYNC_BIND_PORT}/health"
@@ -117,10 +133,10 @@ for _ in $(seq 1 30); do
     cat /tmp/linkvideo-vpnsync-health.json
     echo
     rm -f /tmp/linkvideo-vpnsync-health.json
-    info "Installation completed successfully"
+    info "Installation/update completed successfully"
     info "API: ${HEALTH_URL%/health}"
     info "Secrets: ${ENV_FILE} (not printed)"
-    info "PostgreSQL remains bound to the local server configuration; desktop Helper will use the authenticated VPNSync API."
+    info "PostgreSQL stays local; employee desktops use the authenticated VPNSync API."
     exit 0
   fi
   sleep 1
