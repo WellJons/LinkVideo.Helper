@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import hmac
+import json
+import queue
 from contextlib import asynccontextmanager
-from datetime import timedelta, timezone
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from .activity_bus import activity_bus
 from .auth import AuthContext, AuthService
 from .config import get_settings
 from .db import VPNDatabase
@@ -45,6 +48,14 @@ class LoginRequest(BaseModel):
     password: str = Field(..., min_length=1, max_length=512)
 
 
+class DesktopActivityRequest(BaseModel):
+    action: str = Field(..., min_length=1, max_length=128)
+    server: str = Field("", max_length=255)
+    login: str = Field("", max_length=128)
+    success: bool = True
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
 def require_auth(authorization: Annotated[str | None, Header()] = None) -> AuthContext:
     value = str(authorization or "").strip()
     if not value.lower().startswith("bearer "):
@@ -56,6 +67,16 @@ def require_auth(authorization: Annotated[str | None, Header()] = None) -> AuthC
         return _auth.verify_token(token)
     except ValueError:
         raise HTTPException(status_code=401, detail="Unauthorized") from None
+
+
+def _server_id(hostname: str) -> int | None:
+    host = str(hostname or "").strip().lower()
+    if not host:
+        return None
+    with _db.connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT id FROM vpn_servers WHERE lower(hostname)=lower(%s)", (host,))
+        row = cur.fetchone()
+        return int(row["id"]) if row else None
 
 
 @app.get("/health")
@@ -91,6 +112,7 @@ def login(payload: LoginRequest, request: Request) -> dict:
                 success=False,
                 details={"remote": request.client.host if request.client else ""},
             )
+            activity_bus.publish({"kind": "audit", "source": "desktop", "action": "auth.login", "actor": actor, "success": False})
         except Exception:
             pass
         raise HTTPException(status_code=401, detail="Invalid username or password") from None
@@ -102,6 +124,7 @@ def login(payload: LoginRequest, request: Request) -> dict:
         success=True,
         details={"remote": request.client.host if request.client else ""},
     )
+    activity_bus.publish({"kind": "audit", "source": "desktop", "action": "auth.login", "actor": context.username, "success": True})
     offset = int(_settings.business_utc_offset_hours)
     return {
         "access_token": token,
@@ -141,6 +164,34 @@ def search_deleted(
     return _db.search_deleted_clients(q, limit=limit)
 
 
+@app.post("/v1/activity/desktop")
+def record_desktop_activity(
+    payload: DesktopActivityRequest,
+    auth: AuthContext = Depends(require_auth),
+) -> dict:
+    server_id = _server_id(payload.server)
+    _auth.audit(
+        actor=auth.username,
+        role=auth.role,
+        source="desktop",
+        action=payload.action,
+        server_id=server_id,
+        login=payload.login,
+        success=payload.success,
+        details={**dict(payload.details or {}), "server": str(payload.server or "")},
+    )
+    activity_bus.publish({
+        "kind": "audit",
+        "source": "desktop",
+        "action": payload.action,
+        "actor": auth.username,
+        "server": payload.server,
+        "login": payload.login,
+        "success": payload.success,
+    })
+    return {"ok": True}
+
+
 @app.get("/v1/activity")
 def activity(
     limit: int = Query(200, ge=1, le=1000),
@@ -173,3 +224,26 @@ def activity(
             tuple(params),
         )
         return [dict(row) for row in cur.fetchall()]
+
+
+@app.get("/v1/activity/stream")
+def activity_stream(auth: AuthContext = Depends(require_auth)) -> StreamingResponse:
+    def stream():
+        with activity_bus.subscribe() as subscriber:
+            yield ": connected\n\n"
+            while True:
+                try:
+                    item = subscriber.get(timeout=25.0)
+                except queue.Empty:
+                    yield ": keepalive\n\n"
+                    continue
+                yield "data: " + json.dumps(item, ensure_ascii=False, default=str, separators=(",", ":")) + "\n\n"
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
