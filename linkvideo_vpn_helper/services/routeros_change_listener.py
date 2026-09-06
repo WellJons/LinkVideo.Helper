@@ -88,8 +88,15 @@ class RouterOSChangeListener:
         if client is not None:
             try:
                 client.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                # Closing the socket is best-effort during shutdown, but keep the
+                # failure visible instead of hiding it from the release audit.
+                event(
+                    "LV",
+                    "Не удалось закрыть RouterOS listen socket",
+                    f"{self.server} · {type(exc).__name__}: {exc}",
+                    level=30,
+                )
 
     def _run(self) -> None:
         delay = 2.0
@@ -123,18 +130,12 @@ class RouterOSChangeListener:
             self._client = client
 
         try:
-            # ``listen`` does not terminate. Tags let one API connection carry
-            # several independent menu subscriptions at once.
             tag_to_path: dict[str, str] = {}
             for index, path in enumerate(WATCH_PATHS, start=1):
                 tag = f"lv{index}"
                 tag_to_path[tag] = path
                 client._write_sentence([f"{path}/listen", f".tag={tag}"])
 
-            # After login the socket timeout is useful for ordinary request/
-            # response calls but wrong for an event stream that may legitimately
-            # be quiet for hours. A blocking read is interrupted by stop() closing
-            # the socket from another thread.
             if client.sock is not None:
                 client.sock.settimeout(None)
 
@@ -166,7 +167,8 @@ class RouterOSChangeListener:
                     self.callback(self.server, path, values)
                 except Exception:
                     # A UI/database callback must never break the long-lived
-                    # RouterOS event connection.
+                    # RouterOS event connection. The reconnecting service remains
+                    # alive and the next callback can still reconcile state.
                     continue
         except (OSError, socket.error):
             if not self._stop.is_set():
