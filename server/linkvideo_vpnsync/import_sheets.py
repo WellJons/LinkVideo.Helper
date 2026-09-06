@@ -10,6 +10,7 @@ from typing import Any, Iterable
 from urllib.parse import quote
 
 import requests
+from dotenv import load_dotenv
 from google.auth.transport.requests import Request
 from google.oauth2.service_account import Credentials
 
@@ -19,6 +20,7 @@ from .db import VPNDatabase
 
 DEFAULT_SPREADSHEET_ID = "1KxIMsVOtDD8klpVUj_vymbtZIDSkvS9-vjT5cQ2a9eA"
 DEFAULT_SERVICE_ACCOUNT = "/etc/linkvideo-vpnsync/google_sheets_service_account.json"
+DEFAULT_ENV_FILE = "/etc/linkvideo-vpnsync/vpnsync.env"
 
 WORKING_SHEETS = (
     ("LV vpn01", "vpn01.linkvideo.ru", "Россия", 2500),
@@ -121,8 +123,6 @@ def _clean_comment(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
-    # Old LV1/LV2 state lived in PPP comments. PostgreSQL now owns lifecycle state;
-    # preserve only the human comment during migration.
     text = re.sub(r"\|LV(?:1|2)\|(?:[^|]*\|)+", "", text, flags=re.I)
     return text.strip(" |")
 
@@ -283,7 +283,6 @@ def import_working(reader: SheetsReader, db: VPNDatabase) -> tuple[int, set[tupl
                 routeros_comment=_clean_comment(row.get("Комментарий RouterOS")),
             )
             db.replace_nat_ports(server_id, client_id, _ports(snapshot, row.get("NAT / Порты")))
-            # A restored/current account must not remain in the deleted repository.
             db.remove_deleted_client(server_id, login)
             active_keys.add((host.lower(), login))
             count += 1
@@ -394,7 +393,6 @@ def import_history(reader: SheetsReader, db: VPNDatabase, max_rows: int = 70000,
             ))
 
         with db.connection() as conn, conn.cursor() as cur:
-            before = conn.info.transaction_status
             cur.executemany(
                 """
                 INSERT INTO vpn_change_log (
@@ -437,6 +435,7 @@ def main() -> None:
     parser.add_argument("--skip-history", action="store_true")
     args = parser.parse_args()
 
+    load_dotenv(DEFAULT_ENV_FILE, override=False)
     settings = get_settings()
     reader = SheetsReader(args.service_account, args.spreadsheet_id)
     db = VPNDatabase(settings.database_url, settings.encryption_key)
