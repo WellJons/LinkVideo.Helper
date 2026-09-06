@@ -39,6 +39,7 @@ def main() -> None:
         total_live = 0
         total_db = 0
         mismatch_hosts = 0
+        duplicate_hosts = 0
 
         print("[AUDIT] READ-ONLY RouterOS/PostgreSQL login-set comparison")
         for target in targets:
@@ -64,15 +65,24 @@ def main() -> None:
 
             total_live += len(live)
             total_db += len(stored)
-            ok = not missing and not extra and blank == 0 and not duplicate_names
-            if not ok:
+            set_ok = not missing and not extra and blank == 0
+            if not set_ok:
                 mismatch_hosts += 1
+            if duplicate_names:
+                duplicate_hosts += 1
+
+            if set_ok and duplicate_names:
+                status = "OK_DUPLICATE_LOGIN"
+            elif set_ok:
+                status = "OK"
+            else:
+                status = "MISMATCH"
 
             print(
                 f"[AUDIT] {target.host}: port={connected_port} rows={len(secrets)} "
                 f"live_unique={len(live)} db={len(stored)} blank={blank} "
                 f"duplicates={len(duplicate_names)} missing_in_db={len(missing)} extra_in_db={len(extra)} "
-                f"status={'OK' if ok else 'MISMATCH'}"
+                f"status={status}"
             )
             if duplicate_names:
                 print(f"[AUDIT]   duplicate logins: {duplicate_names[:20]}")
@@ -83,7 +93,7 @@ def main() -> None:
 
         print(
             f"[AUDIT] COMPLETE targets={len(targets)} live_unique_total={total_live} "
-            f"db_total={total_db} mismatch_hosts={mismatch_hosts}"
+            f"db_total={total_db} mismatch_hosts={mismatch_hosts} duplicate_hosts={duplicate_hosts}"
         )
         print("[AUDIT] No RouterOS or PostgreSQL write command was executed.")
     finally:
