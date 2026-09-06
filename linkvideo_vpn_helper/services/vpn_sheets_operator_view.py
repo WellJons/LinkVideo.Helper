@@ -249,11 +249,14 @@ def install_vpn_sheets_operator_view() -> None:
         # rows; pre-seed that cache with an empty mapping so its preflight never
         # tries to read a non-existent sheet.
         self._lv_summary_rows = {}
+        server_sheets = [sheets.sheet_for_server(host) for host in list(servers or [])]
         if callable(original_prepare_sync):
             original_prepare_sync(self, servers)
         else:
             self.ensure_auxiliary_sheets()
-            apply_operator_view(self, [sheets.sheet_for_server(host) for host in list(servers or [])])
+        # The resilience preflight calls its lexically captured view function, so
+        # explicitly apply this final extension afterwards as well.
+        apply_operator_view(self, server_sheets)
 
     def update_summary(self, server, synced_at, result) -> None:
         # Kept as a strict no-op: LV Сводка no longer exists by design.
