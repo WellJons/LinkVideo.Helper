@@ -20,8 +20,11 @@ class Settings(BaseSettings):
     database_url: str = Field(..., alias="DATABASE_URL")
     encryption_key: str = Field(..., min_length=24, alias="VPNSYNC_ENCRYPTION_KEY")
 
-    routeros_username: str = Field(..., alias="ROUTEROS_USERNAME")
-    routeros_password: str = Field(..., alias="ROUTEROS_PASSWORD")
+    # RouterOS is connected only after the PostgreSQL/API layer has been
+    # bootstrapped and validated. Keeping these optional allows a safe staged
+    # migration without putting MikroTik credentials on the server early.
+    routeros_username: str = Field("", alias="ROUTEROS_USERNAME")
+    routeros_password: str = Field("", alias="ROUTEROS_PASSWORD")
     routeros_api_port: int = Field(8728, alias="ROUTEROS_API_PORT")
     routeros_timeout: float = Field(6.0, alias="ROUTEROS_TIMEOUT")
 
