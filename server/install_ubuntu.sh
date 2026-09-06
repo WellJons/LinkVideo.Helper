@@ -100,10 +100,36 @@ set -a
 . "${ENV_FILE}"
 set +a
 
+# Validate the newly fetched code while the currently running service is still
+# untouched. A bad branch must never take the healthy VPNSync process offline.
+info "Preflight: compiling VPNSync Python modules"
+"${APP_ROOT}/.venv/bin/python" -m compileall -q "${APP_ROOT}/server/linkvideo_vpnsync" \
+  || fail "Python compile preflight failed; current service was not stopped"
+
+info "Preflight: importing FastAPI and authenticated operation routes"
+PYTHONPATH="${APP_ROOT}/server" "${APP_ROOT}/.venv/bin/python" - <<'PY'
+from linkvideo_vpnsync.api import app
+
+paths = {getattr(route, "path", "") for route in app.routes}
+required = {
+    "/health",
+    "/v1/auth/login",
+    "/v1/activity",
+    "/v1/activity/stream",
+    "/v1/operations/clients/create",
+    "/v1/operations/ports/add",
+    "/v1/operations/clients/password",
+    "/v1/operations/clients/delete",
+}
+missing = sorted(required - paths)
+if missing:
+    raise SystemExit("Missing VPNSync route(s): " + ", ".join(missing))
+print(f"[VPNSync] Preflight OK: {len(paths)} API routes loaded")
+PY
+
 # Schema/index migrations must not race a running sync worker. This matters in
 # particular for migrations that replace indexes used by ON CONFLICT clauses.
-# Stop the service before touching the schema; the installer starts the new
-# version after every migration has committed successfully.
+# Stop the service only after the new source has passed compile/import preflight.
 if systemctl is-active --quiet "${SERVICE}" 2>/dev/null; then
   info "Stopping ${SERVICE} before PostgreSQL migrations"
   systemctl stop "${SERVICE}"
