@@ -52,9 +52,6 @@ def _record(row: dict) -> ClientRecord:
         ports=ints(row.get("ports")),
         nat_rule_ids=[str(item) for item in list(row.get("nat_rule_ids") or []) if str(item or "")],
         is_online=bool(row.get("is_online")),
-        # Current conntrack activity is intentionally not stored in PostgreSQL;
-        # port-state monitoring remains a separate feature. Enabled/disabled NAT
-        # state is still exact and conflicts are preserved below.
         active_ports=ints(row.get("active_ports")),
         disabled_ports=ints(row.get("disabled_ports")),
         is_enabled=bool(row.get("is_enabled", True)),
@@ -132,8 +129,14 @@ def install_cloud_search_bridge(search_service, settings, vpn_service=None) -> N
             for index, server in enumerate(servers, 1):
                 try:
                     progress(index, len(servers), server)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    event(
+                        "CLOUD",
+                        "Callback прогресса поиска завершился ошибкой",
+                        f"{type(exc).__name__}: {exc}",
+                        level=30,
+                    )
+                    break
         return report
 
     def search_login_all(self, servers, creds, query, progress=None, cancel_event=None, deadline_seconds=None):
