@@ -10,6 +10,11 @@ def install_monitor_runtime_compat() -> None:
     because RouterOS profiles can reference pool names such as ``vpn-pool``.
     SnapshotSync must therefore stop calling PostgreSQL host() on these fields.
 
+    The NAT projection deliberately matches ``SnapshotSync._ports()`` exactly.
+    Without ``to_address`` and ``routeros_rule_id`` on the database side every
+    client with NAT rules looked changed after the Sheets -> PostgreSQL import,
+    even when RouterOS had not changed at all.
+
     The status helper intentionally exposes no credentials. It is used by the
     health endpoint during the staged RouterOS listener rollout.
     """
@@ -35,8 +40,10 @@ def install_monitor_runtime_compat() -> None:
                                'external_port', p.external_port,
                                'internal_port', p.internal_port,
                                'protocol', p.protocol,
-                               'disabled', p.disabled
-                           ) ORDER BY p.external_port)
+                               'to_address', COALESCE(host(p.to_address), ''),
+                               'disabled', p.disabled,
+                               'routeros_rule_id', p.routeros_rule_id
+                           ) ORDER BY p.external_port, p.protocol)
                            FROM vpn_nat_ports p
                            WHERE p.client_id = c.id AND p.deleted = FALSE
                        ), '[]'::jsonb) AS ports
