@@ -7,24 +7,28 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 
 from .config import get_settings
 from .db import VPNDatabase
+from .monitor import RouterOSMonitorManager
 
 
 _settings = get_settings()
 _db = VPNDatabase(_settings.database_url, _settings.encryption_key)
+_monitor = RouterOSMonitorManager(_db, _settings)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _db.open()
+    _monitor.start()
     try:
         yield
     finally:
+        _monitor.stop()
         _db.close()
 
 
 app = FastAPI(
     title="LinkVideo.VPNSync",
-    version="0.1.0",
+    version="0.2.0",
     docs_url=None,
     redoc_url=None,
     lifespan=lifespan,
@@ -44,6 +48,9 @@ def health() -> dict:
         "ok": True,
         "database": info.get("database"),
         "database_time": info.get("now"),
+        "routeros_monitor": _monitor.enabled,
+        "routeros_servers": len(_monitor.targets),
+        "retention_enabled": bool(_settings.retention_enabled),
     }
 
 
