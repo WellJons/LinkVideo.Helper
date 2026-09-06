@@ -189,6 +189,8 @@ def main() -> int:
     install_vpn_automation_sheets_bridge()
     from linkvideo_vpn_helper.ui.vpn_sheets_coordinator_resilience import install_vpn_sheets_coordinator_resilience
     install_vpn_sheets_coordinator_resilience()
+    from linkvideo_vpn_helper.ui.cloud_settings_integration import install_cloud_settings_ui
+    install_cloud_settings_ui()
 
     from linkvideo_vpn_helper.ui.main_window import MainWindow
     splash.set_status("Открываю интерфейс…")
