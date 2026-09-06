@@ -14,12 +14,14 @@ from .activity_bus import activity_bus
 from .auth import AuthContext, AuthService
 from .config import get_settings
 from .db import VPNDatabase
+from .deadline_scheduler import DeadlineScheduler
 from .monitor import RouterOSMonitorManager
 
 
 _settings = get_settings()
 _db = VPNDatabase(_settings.database_url, _settings.encryption_key)
 _monitor = RouterOSMonitorManager(_db, _settings)
+_deadlines = DeadlineScheduler(_db, _settings, _monitor)
 _auth = AuthService(_db, _settings.api_token, session_ttl=_settings.session_ttl_seconds)
 
 
@@ -27,9 +29,11 @@ _auth = AuthService(_db, _settings.api_token, session_ttl=_settings.session_ttl_
 async def lifespan(app: FastAPI):
     _db.open()
     _monitor.start()
+    _deadlines.start()
     try:
         yield
     finally:
+        _deadlines.stop()
         _monitor.stop()
         _db.close()
 
@@ -83,6 +87,7 @@ def _server_id(hostname: str) -> int | None:
 def health() -> dict:
     info = _db.ping()
     monitor_status = _monitor.status()
+    deadline_status = _deadlines.status()
     offset = int(_settings.business_utc_offset_hours)
     return {
         "ok": True,
@@ -93,6 +98,7 @@ def health() -> dict:
         "routeros_workers_alive": monitor_status.get("workers_alive", 0),
         "routeros": monitor_status,
         "retention_enabled": bool(_settings.retention_enabled),
+        "deadline_scheduler": deadline_status,
         "business_timezone": f"UTC{offset:+d}",
         "auth": "operator-session",
     }
