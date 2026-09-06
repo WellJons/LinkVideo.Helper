@@ -27,9 +27,6 @@ def _record(payload: dict[str, Any] | None) -> ClientRecord:
     row = dict(payload or {})
     ports = _as_int_list(row.get("ports"))
     disabled_ports = _as_int_list(row.get("disabled_ports"))
-    # Server-side DB state knows whether the NAT rule is enabled, but not whether
-    # a live conntrack entry currently exists. Do not mislabel enabled NAT as
-    # active traffic; the normal read/diagnostics path can refresh that separately.
     return ClientRecord(
         server=str(row.get("server") or ""),
         login=str(row.get("login") or ""),
@@ -49,14 +46,7 @@ def _record(payload: dict[str, Any] | None) -> ClientRecord:
 
 
 def install_cloud_operations_bridge(service: VPNService, settings) -> None:
-    """Make central VPNSync the only writer once cloud credentials are configured.
-
-    Reads may still use the mature direct RouterOS path during the migration, but
-    all employee mutations go through authenticated VPNSync endpoints. If the
-    cloud server is configured and unavailable, the mutation fails explicitly;
-    there is intentionally no silent direct-RouterOS fallback that could bypass
-    PostgreSQL/audit consistency.
-    """
+    """Make central VPNSync the only writer once cloud credentials are configured."""
     global _INSTALLED
     if _INSTALLED:
         return
@@ -113,6 +103,19 @@ def install_cloud_operations_bridge(service: VPNService, settings) -> None:
         with lock:
             return True, cloud.request("POST", path, json=payload)
 
+    def emit_progress(callback, done: int, total: int, login: str) -> None:
+        if not callable(callback):
+            return
+        try:
+            callback(done, total, login)
+        except Exception as exc:
+            event(
+                "CLOUD",
+                "Callback прогресса операции завершился ошибкой",
+                f"{type(exc).__name__}: {exc}",
+                level=30,
+            )
+
     def create_clients_batch(self, server, creds, base_login, ports_per_client, accounts_count, progress_callback=None, cancel_event=None):
         ready, cloud = configured(self)
         if not ready:
@@ -123,11 +126,8 @@ def install_cloud_operations_bridge(service: VPNService, settings) -> None:
         if cancel_event is not None and cancel_event.is_set():
             from linkvideo_vpn_helper.services.errors import OperationCancelled
             raise OperationCancelled("Операция отменена пользователем")
-        if progress_callback:
-            try:
-                progress_callback(0, max(1, int(accounts_count)), str(base_login or ""))
-            except Exception:
-                pass
+        total = max(1, int(accounts_count))
+        emit_progress(progress_callback, 0, total, str(base_login or ""))
         with lock:
             rows = cloud.request(
                 "POST",
@@ -140,11 +140,12 @@ def install_cloud_operations_bridge(service: VPNService, settings) -> None:
                 },
             )
         records = [_record(row) for row in list(rows or [])]
-        if progress_callback:
-            try:
-                progress_callback(len(records), max(1, int(accounts_count)), records[-1].login if records else str(base_login or ""))
-            except Exception:
-                pass
+        emit_progress(
+            progress_callback,
+            len(records),
+            total,
+            records[-1].login if records else str(base_login or ""),
+        )
         return records
 
     def add_ports(self, server, creds, login, count):
