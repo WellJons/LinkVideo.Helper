@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from .activity_bus import activity_bus
+from .archive_restore import ArchiveRestoreConflict, ArchiveRestoreService
 from .auth import AuthContext, AuthService
 from .config import get_settings
 from .db import VPNDatabase
@@ -26,6 +27,7 @@ _monitor = RouterOSMonitorManager(_db, _settings)
 _deadlines = DeadlineScheduler(_db, _settings, _monitor)
 _auth = AuthService(_db, _settings.api_token, session_ttl=_settings.session_ttl_seconds)
 _operations = VPNSyncOperations(_db, _settings, _monitor)
+_archive_restore = ArchiveRestoreService(_db, _settings, _monitor)
 
 
 @asynccontextmanager
@@ -63,6 +65,11 @@ class DesktopActivityRequest(BaseModel):
     details: dict[str, Any] = Field(default_factory=dict)
 
 
+class ArchiveRestoreRequest(BaseModel):
+    server: str = Field(..., min_length=1, max_length=255)
+    login: str = Field(..., min_length=1, max_length=128)
+
+
 def require_auth(authorization: Annotated[str | None, Header()] = None) -> AuthContext:
     value = str(authorization or "").strip()
     if not value.lower().startswith("bearer "):
@@ -74,6 +81,11 @@ def require_auth(authorization: Annotated[str | None, Header()] = None) -> AuthC
         return _auth.verify_token(token)
     except ValueError:
         raise HTTPException(status_code=401, detail="Unauthorized") from None
+
+
+def _require_operator(auth: AuthContext) -> None:
+    if auth.role not in {"operator", "admin"}:
+        raise HTTPException(status_code=403, detail="Operator role required")
 
 
 def _server_id(hostname: str) -> int | None:
@@ -88,6 +100,29 @@ def _server_id(hostname: str) -> int | None:
 
 def _can_read_password(auth: AuthContext) -> bool:
     return auth.role in {"operator", "admin"}
+
+
+def _audit_archive(auth: AuthContext, action: str, server: str, login: str, success: bool, details: dict[str, Any]) -> None:
+    _auth.audit(
+        actor=auth.username,
+        role=auth.role,
+        source="archive",
+        action=action,
+        server_id=_server_id(server),
+        login=login,
+        success=success,
+        details={**dict(details or {}), "server": str(server or "")},
+    )
+    activity_bus.publish({
+        "kind": "audit",
+        "source": "archive",
+        "action": action,
+        "actor": auth.username,
+        "server": server,
+        "login": login,
+        "success": success,
+        "details": details,
+    })
 
 
 @app.get("/health")
@@ -108,8 +143,9 @@ def health() -> dict:
         "deadline_scheduler": deadline_status,
         "business_timezone": f"UTC{offset:+d}",
         "auth": "operator-session",
-        "server_operations": True,
-        "postgres_search": True,
+        "interactive_helper_routing": "direct-routeros",
+        "postgres_role": "passive-backup-and-archive",
+        "archive_restore": True,
     }
 
 
@@ -161,6 +197,8 @@ def servers(auth: AuthContext = Depends(require_auth)) -> list[dict]:
     return _db.list_servers()
 
 
+# These PostgreSQL endpoints are retained for backup/archive diagnostics only.
+# LinkVideo.Helper interactive search does not call them.
 @app.get("/v1/clients/search")
 def search_clients(
     q: str = Query(..., min_length=1, max_length=128),
@@ -186,7 +224,7 @@ def client_detail(
         include_password=_can_read_password(auth),
     )
     if row is None:
-        raise HTTPException(status_code=404, detail="VPN client not found")
+        raise HTTPException(status_code=404, detail="VPN client backup not found")
     return row
 
 
@@ -197,6 +235,59 @@ def search_deleted(
     auth: AuthContext = Depends(require_auth),
 ) -> list[dict]:
     return _db.search_deleted_clients(q, limit=limit)
+
+
+@app.get("/v1/archive/restore/preflight")
+def archive_restore_preflight(
+    server: str = Query(..., min_length=1, max_length=255),
+    login: str = Query(..., min_length=1, max_length=128),
+    auth: AuthContext = Depends(require_auth),
+) -> dict:
+    _require_operator(auth)
+    try:
+        result = _archive_restore.preflight(server, login)
+    except Exception as exc:
+        _audit_archive(auth, "archive.restore.preflight", server, login, False, {"error": str(exc)[:1000]})
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    _audit_archive(auth, "archive.restore.preflight", server, login, bool(result.get("ok")), {"conflicts": result.get("conflicts", [])})
+    return result
+
+
+@app.get("/v1/archive/restore/server-preflight")
+def archive_restore_server_preflight(
+    server: str = Query(..., min_length=1, max_length=255),
+    auth: AuthContext = Depends(require_auth),
+) -> dict:
+    _require_operator(auth)
+    try:
+        result = _archive_restore.preflight_server(server)
+    except Exception as exc:
+        _audit_archive(auth, "archive.restore.server_preflight", server, "", False, {"error": str(exc)[:1000]})
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    _audit_archive(auth, "archive.restore.server_preflight", server, "", bool(result.get("ok")), result)
+    return result
+
+
+@app.post("/v1/archive/restore")
+def archive_restore(
+    payload: ArchiveRestoreRequest,
+    auth: AuthContext = Depends(require_auth),
+) -> dict:
+    _require_operator(auth)
+    server = str(payload.server or "").strip()
+    login = str(payload.login or "").strip()
+    try:
+        result = _archive_restore.restore(server, login)
+    except ArchiveRestoreConflict as exc:
+        details = {"error": str(exc), "conflicts": exc.conflicts}
+        _audit_archive(auth, "archive.restore", server, login, False, details)
+        raise HTTPException(status_code=409, detail=details) from None
+    except Exception as exc:
+        details = {"error": str(exc)[:1000]}
+        _audit_archive(auth, "archive.restore", server, login, False, details)
+        raise HTTPException(status_code=400, detail=details) from None
+    _audit_archive(auth, "archive.restore", server, login, True, result)
+    return result
 
 
 @app.post("/v1/activity/desktop")
@@ -284,4 +375,6 @@ def activity_stream(auth: AuthContext = Depends(require_auth)) -> StreamingRespo
     )
 
 
+# Server-side interactive RouterOS endpoints are retained as a staged/admin API,
+# but LinkVideo.Helper does not route normal search/create/edit operations here.
 app.include_router(build_operations_router(require_auth, _auth, _operations))
