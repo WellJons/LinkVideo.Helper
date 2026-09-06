@@ -100,6 +100,15 @@ set -a
 . "${ENV_FILE}"
 set +a
 
+# Schema/index migrations must not race a running sync worker. This matters in
+# particular for migrations that replace indexes used by ON CONFLICT clauses.
+# Stop the service before touching the schema; the installer starts the new
+# version after every migration has committed successfully.
+if systemctl is-active --quiet "${SERVICE}" 2>/dev/null; then
+  info "Stopping ${SERVICE} before PostgreSQL migrations"
+  systemctl stop "${SERVICE}"
+fi
+
 info "Applying PostgreSQL migrations"
 psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 <<'SQL'
 CREATE TABLE IF NOT EXISTS vpnsync_schema_migrations (
