@@ -89,11 +89,13 @@ deleted = sheets.reconcile_records(
     deleted_existing,
     [],
     source="Автосверка RouterOS",
-    initiator="LinkVideo.Helper auto-sync",
+    initiator="RouterOS / неизвестно",
     now=NOW,
     sync_id="test-del",
 )
-row = deleted.rows[0]
+assert deleted.rows == []
+assert len(deleted.archived) == 1
+row = deleted.archived[0]
 assert row["Удалена"] == "Да"
 assert row["Причина"].startswith("Удалена автоматически: 370"), row["Причина"]
 assert any(history[3].startswith("Удалена автоматически: 370") for history in deleted.history), deleted.history

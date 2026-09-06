@@ -84,39 +84,44 @@ assert changed.rows[0]["Пароль"] == "new-secret"
 assert "Пароль" in changed.history[0][4]
 assert "new-secret" not in changed.history[0][5]
 assert "new-secret" not in changed.history[0][6]
-assert "<изменено>" in changed.history[0][6]
+assert "<изменён>" in changed.history[0][6]
+assert changed.history[0][5] != changed.history[0][6]
 
-# Пропажа учётки после УСПЕШНОГО RouterOS snapshot не удаляет строку из базы,
-# а только ставит признак удаления и сохраняет последние реквизиты.
+# Пропажа учётки после УСПЕШНОГО RouterOS snapshot переносит её в отдельный
+# архив удалённых. Рабочий лист сервера содержит только существующие аккаунты.
 removed = reconcile_records(
     "vpn01.linkvideo.ru", [dict(changed.rows[0])], [],
-    source="Автосверка RouterOS", initiator="agent", now=fixed_now, sync_id="sync-delete",
+    source="Автосверка RouterOS", initiator="RouterOS / неизвестно", now=fixed_now, sync_id="sync-delete",
 )
 assert removed.deleted == 1
-assert len(removed.rows) == 1
-assert removed.rows[0]["Удалена"] == "Да"
-assert removed.rows[0]["Пароль"] == "new-secret"
-assert removed.rows[0]["Удалена в"] == "2026-08-16 16:30:00"
+assert removed.rows == []
+assert len(removed.archived) == 1
+assert removed.archived[0]["Удалена"] == "Да"
+assert removed.archived[0]["VPN-сервер"] == "vpn01.linkvideo.ru"
+assert removed.archived[0]["Пароль"] == "new-secret"
+assert removed.archived[0]["Удалена в"] == "2026-08-16 16:30:00"
 assert removed.history[0][3] == "Удалена на RouterOS"
 
-# Повторная сверка уже удалённой строки не плодит повторные события.
+# После переноса в архив серверный лист пуст, поэтому повторная сверка
+# не создаёт второе событие удаления.
 removed_again = reconcile_records(
-    "vpn01.linkvideo.ru", [dict(removed.rows[0])], [],
-    source="Автосверка RouterOS", initiator="agent", now=fixed_now, sync_id="sync-delete2",
+    "vpn01.linkvideo.ru", [], [],
+    source="Автосверка RouterOS", initiator="RouterOS / неизвестно", now=fixed_now, sync_id="sync-delete2",
 )
 assert removed_again.deleted == 0
+assert removed_again.archived == []
 assert removed_again.history == []
 
-# Если учётка снова появилась на RouterOS — строка оживает, а не создаётся дубль.
-restored = reconcile_records(
-    "vpn01.linkvideo.ru", [dict(removed.rows[0])], [changed_client],
-    source="Автосверка RouterOS", initiator="agent", now=fixed_now, sync_id="sync-restore",
+# Старый формат, где удалённая строка ещё лежит в серверном листе, мигрируется
+# в архив без повторного события.
+legacy_deleted = reconcile_records(
+    "vpn01.linkvideo.ru", [dict(removed.archived[0])], [],
+    source="Автосверка RouterOS", initiator="RouterOS / неизвестно", now=fixed_now, sync_id="sync-migrate",
 )
-assert restored.restored == 1 and restored.added == 0
-assert len(restored.rows) == 1
-assert restored.rows[0]["Удалена"] == "Нет"
-assert restored.rows[0]["Удалена в"] == ""
-assert restored.history[0][3] == "Восстановлена на RouterOS"
+assert legacy_deleted.deleted == 0
+assert legacy_deleted.rows == []
+assert len(legacy_deleted.archived) == 1
+assert legacy_deleted.history == []
 
 # Важный контракт безопасности находится в sync_server: reconciliation вызывается
 # только ПОСЛЕ успешного fetch_config_snapshot. Проверяем порядок по исходнику.

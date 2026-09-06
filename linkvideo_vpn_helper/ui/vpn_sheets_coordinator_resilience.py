@@ -83,11 +83,9 @@ def install_vpn_sheets_coordinator_resilience() -> None:
         self._busy = True
         self.last_failures = []
         self.syncStarted.emit(len(servers))
-        source = "Ручная синхронизация Helper" if manual else "Автосверка RouterOS"
-        initiator = (
-            str(getattr(self.credentials, "username", "") or "LinkVideo.Helper")
-            if manual else "LinkVideo.Helper auto-sync"
-        )
+        source = "Ручная сверка RouterOS" if manual else "Автосверка RouterOS"
+        user = str(getattr(self.credentials, "username", "") or "LinkVideo.Helper")
+        initiator = f"Неизвестно; сверку запустил {user}" if manual else "RouterOS / неизвестно"
         event(
             "SHEETS",
             "Начата сверка RouterOS → Google Sheets",

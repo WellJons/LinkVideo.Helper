@@ -147,6 +147,14 @@ def main() -> int:
     install_vpn_sheets_retention_compat()
     from linkvideo_vpn_helper.services.vpn_sheets_resilience import install_vpn_sheets_resilience
     install_vpn_sheets_resilience()
+    # Final operator-facing layer must run after resilience because it deliberately
+    # replaces the now-removed LV Summary dependency and extends its sheet styling.
+    from linkvideo_vpn_helper.services.vpn_sheets_operator_view import install_vpn_sheets_operator_view
+    install_vpn_sheets_operator_view()
+    # Compact Sheets rows still remain recoverable even if an old archive entry
+    # lost its full RouterOS snapshot: infer a conservative TCP 1:1 fallback.
+    from linkvideo_vpn_helper.services.vpn_restore_compact_ports import install_vpn_restore_compact_ports
+    install_vpn_restore_compact_ports()
     from linkvideo_vpn_helper.ui.background_ux_integration import install_background_ux
     install_background_ux()
     from linkvideo_vpn_helper.ui.manual_scan_feedback import install_manual_scan_feedback

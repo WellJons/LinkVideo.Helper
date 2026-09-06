@@ -22,13 +22,14 @@ from linkvideo_vpn_helper.mikrotik.api_ssl_client import RouterOSAPIClient
 from linkvideo_vpn_helper.services.app_logging import event, error
 
 
-RETENTION_VERSION = "2.0.0"
+RETENTION_VERSION = "2.1.0"
 LV_MARKER = "|LV2|"
 LEGACY_LV_MARKER = "|LV1|"
 DAY_NS = 86_400_000_000_000
 SLEEP_DAYS = 30
 QUARANTINE_DAYS = 90
 DELETE_DAYS = 365
+NEVER_ACTIVE_DELETE_DAYS = 30
 
 _REASON_TO_CODE = {
     "created": "c",
@@ -38,7 +39,7 @@ _REASON_TO_CODE = {
     "inactive_30": "s",
     "inactive_90": "q",
     "inactive_365": "d",
-    "never_active_365": "n",
+    "never_active_30": "n",
     "manual_disabled": "m",
     "manual_or_external_disabled": "m",
     "manual_enabled": "e",
@@ -50,7 +51,7 @@ _CODE_TO_REASON = {
     "s": "inactive_30",
     "q": "inactive_90",
     "d": "inactive_365",
-    "n": "never_active_365",
+    "n": "never_active_30",
     "m": "manual_or_external_disabled",
     "e": "manual_enabled",
     "r": "auto_restore",
@@ -174,7 +175,7 @@ def activity_script_source() -> str:
 
 
 def aging_script_source() -> str:
-    return f'''# LinkVideo.Helper LV Automation {RETENTION_VERSION}\n:local nowDay ([:tonsec [:timestamp]] / {DAY_NS})\n:foreach sid in=[/ppp secret find] do={{\n    :local u [/ppp secret get $sid name]\n    :local c [/ppp secret get $sid comment]\n    :local p [:find $c "{LV_MARKER}"]\n    :local base $c\n    :local state "U"\n    :local last 0\n    :local created $nowDay\n    :if ($p != nil) do={{\n        :set base [:pick $c 0 $p]\n        :local tail [:pick $c $p [:len $c]]\n        :local sp [:find $tail "|s="]\n        :if ($sp != nil) do={{ :local x [:pick $tail ($sp + 3) [:len $tail]]; :local e [:find $x "|"]; :if ($e != nil) do={{ :set state [:pick $x 0 $e] }} }}\n        :local lp [:find $tail "|l="]\n        :if ($lp != nil) do={{ :local x [:pick $tail ($lp + 3) [:len $tail]]; :local e [:find $x "|"]; :if ($e != nil) do={{ :set last [:tonum [:pick $x 0 $e]] }} }}\n        :local cp [:find $tail "|c="]\n        :if ($cp != nil) do={{ :local x [:pick $tail ($cp + 3) [:len $tail]]; :local e [:find $x "|"]; :if ($e != nil) do={{ :set created [:tonum [:pick $x 0 $e]] }} }}\n    }}\n    :if ($created = 0) do={{ :set created $nowDay }}\n    :local isActive ([:len [/ppp active find where name=$u]] > 0)\n    :local disabled [/ppp secret get $sid disabled]\n    :if ($isActive) do={{\n        /ppp secret set $sid comment=($base . "{LV_MARKER}s=A|l=" . $nowDay . "|c=" . $created . "|r=a|")\n    }} else={{\n        :local reference $last\n        :if ($reference = 0) do={{ :set reference $created }}\n        :local age ($nowDay - $reference)\n        :if ($age >= {DELETE_DAYS}) do={{\n            :local deleteReason "inactive_365"\n            :if ($last = 0) do={{ :set deleteReason "never_active_365" }}\n            :local profile [/ppp secret get $sid profile]\n            :local remote [/ppp secret get $sid remote-address]\n            :if (([:len $remote] = 0) && ([:len $profile] > 0)) do={{\n                :foreach pid in=[/ppp profile find where name=$profile] do={{ :set remote [/ppp profile get $pid remote-address] }}\n            }}\n            :log warning ("LV RETENTION DELETE user=" . $u . " reason=" . $deleteReason . " age=" . $age)\n            :foreach nid in=[/ip firewall nat find where comment=$u] do={{ /ip firewall nat remove $nid }}\n            :if ([:len $remote] > 0) do={{ :foreach nid in=[/ip firewall nat find where to-addresses=$remote] do={{ /ip firewall nat remove $nid }} }}\n            :local profileUses 0\n            :if ([:len $profile] > 0) do={{ :set profileUses [:len [/ppp secret find where profile=$profile]] }}\n            /ppp secret remove $sid\n            :if (($profileUses <= 1) && ($profile != "") && ($profile != "default") && ($profile != "default-encryption")) do={{\n                :foreach pid in=[/ppp profile find where name=$profile] do={{ /ppp profile remove $pid }}\n            }}\n        }} else={{\n            :if ($disabled = true) do={{\n                :if ($state = "Q") do={{\n                    /ppp secret set $sid comment=($base . "{LV_MARKER}s=Q|l=" . $last . "|c=" . $created . "|r=q|")\n                }} else={{\n                    /ppp secret set $sid comment=($base . "{LV_MARKER}s=M|l=" . $last . "|c=" . $created . "|r=m|")\n                }}\n            }} else={{\n                :if ($age >= {QUARANTINE_DAYS}) do={{\n                    /ppp secret disable $sid\n                    /ppp secret set $sid comment=($base . "{LV_MARKER}s=Q|l=" . $last . "|c=" . $created . "|r=q|")\n                    :log warning ("LV QUARANTINE user=" . $u . " age=" . $age)\n                }} else={{\n                    :if ($age >= {SLEEP_DAYS}) do={{\n                        /ppp secret set $sid comment=($base . "{LV_MARKER}s=S|l=" . $last . "|c=" . $created . "|r=s|")\n                    }} else={{\n                        :if ($last = 0) do={{\n                            /ppp secret set $sid comment=($base . "{LV_MARKER}s=U|l=0|c=" . $created . "|r=c|")\n                        }} else={{\n                            /ppp secret set $sid comment=($base . "{LV_MARKER}s=A|l=" . $last . "|c=" . $created . "|r=a|")\n                        }}\n                    }}\n                }}\n            }}\n        }}\n    }}\n}}'''
+    return f'''# LinkVideo.Helper LV Automation {RETENTION_VERSION}\n:local nowDay ([:tonsec [:timestamp]] / {DAY_NS})\n:foreach sid in=[/ppp secret find] do={{\n    :local u [/ppp secret get $sid name]\n    :local c [/ppp secret get $sid comment]\n    :local p [:find $c "{LV_MARKER}"]\n    :local base $c\n    :local state "U"\n    :local last 0\n    :local created $nowDay\n    :if ($p != nil) do={{\n        :set base [:pick $c 0 $p]\n        :local tail [:pick $c $p [:len $c]]\n        :local sp [:find $tail "|s="]\n        :if ($sp != nil) do={{ :local x [:pick $tail ($sp + 3) [:len $tail]]; :local e [:find $x "|"]; :if ($e != nil) do={{ :set state [:pick $x 0 $e] }} }}\n        :local lp [:find $tail "|l="]\n        :if ($lp != nil) do={{ :local x [:pick $tail ($lp + 3) [:len $tail]]; :local e [:find $x "|"]; :if ($e != nil) do={{ :set last [:tonum [:pick $x 0 $e]] }} }}\n        :local cp [:find $tail "|c="]\n        :if ($cp != nil) do={{ :local x [:pick $tail ($cp + 3) [:len $tail]]; :local e [:find $x "|"]; :if ($e != nil) do={{ :set created [:tonum [:pick $x 0 $e]] }} }}\n    }}\n    :if ($created = 0) do={{ :set created $nowDay }}\n    :local isActive ([:len [/ppp active find where name=$u]] > 0)\n    :local disabled [/ppp secret get $sid disabled]\n    :if ($isActive) do={{\n        /ppp secret set $sid comment=($base . "{LV_MARKER}s=A|l=" . $nowDay . "|c=" . $created . "|r=a|")\n    }} else={{\n        :local reference $last\n        :if ($reference = 0) do={{ :set reference $created }}\n        :local age ($nowDay - $reference)\n        :local deleteAfter {DELETE_DAYS}\n        :local deleteReason "inactive_365"\n        :if ($last = 0) do={{\n            :set deleteAfter {NEVER_ACTIVE_DELETE_DAYS}\n            :set deleteReason "never_active_30"\n        }}\n        :if ($age >= $deleteAfter) do={{\n            :local profile [/ppp secret get $sid profile]\n            :local remote [/ppp secret get $sid remote-address]\n            :if (([:len $remote] = 0) && ([:len $profile] > 0)) do={{\n                :foreach pid in=[/ppp profile find where name=$profile] do={{ :set remote [/ppp profile get $pid remote-address] }}\n            }}\n            :log warning ("LV RETENTION DELETE user=" . $u . " reason=" . $deleteReason . " age=" . $age)\n            :foreach nid in=[/ip firewall nat find where comment=$u] do={{ /ip firewall nat remove $nid }}\n            :if ([:len $remote] > 0) do={{ :foreach nid in=[/ip firewall nat find where to-addresses=$remote] do={{ /ip firewall nat remove $nid }} }}\n            :local profileUses 0\n            :if ([:len $profile] > 0) do={{ :set profileUses [:len [/ppp secret find where profile=$profile]] }}\n            /ppp secret remove $sid\n            :if (($profileUses <= 1) && ($profile != "") && ($profile != "default") && ($profile != "default-encryption")) do={{\n                :foreach pid in=[/ppp profile find where name=$profile] do={{ /ppp profile remove $pid }}\n            }}\n        }} else={{\n            :if ($disabled = true) do={{\n                :if ($state = "Q") do={{\n                    /ppp secret set $sid comment=($base . "{LV_MARKER}s=Q|l=" . $last . "|c=" . $created . "|r=q|")\n                }} else={{\n                    /ppp secret set $sid comment=($base . "{LV_MARKER}s=M|l=" . $last . "|c=" . $created . "|r=m|")\n                }}\n            }} else={{\n                :if ($age >= {QUARANTINE_DAYS}) do={{\n                    /ppp secret disable $sid\n                    /ppp secret set $sid comment=($base . "{LV_MARKER}s=Q|l=" . $last . "|c=" . $created . "|r=q|")\n                    :log warning ("LV QUARANTINE user=" . $u . " age=" . $age)\n                }} else={{\n                    :if ($age >= {SLEEP_DAYS}) do={{\n                        /ppp secret set $sid comment=($base . "{LV_MARKER}s=S|l=" . $last . "|c=" . $created . "|r=s|")\n                    }} else={{\n                        :if ($last = 0) do={{\n                            /ppp secret set $sid comment=($base . "{LV_MARKER}s=U|l=0|c=" . $created . "|r=c|")\n                        }} else={{\n                            /ppp secret set $sid comment=($base . "{LV_MARKER}s=A|l=" . $last . "|c=" . $created . "|r=a|")\n                        }}\n                    }}\n                }}\n            }}\n        }}\n    }}\n}}'''
 
 
 def restore_script_source() -> str:
@@ -200,8 +201,10 @@ def _native_last_ns(vpn, row: dict) -> int:
 def _desired_state(last_ns: int, created_ns: int, disabled: bool, was_quarantine: bool, now_ns: int) -> tuple[str, str]:
     reference = int(last_ns or created_ns or now_ns)
     age = max(0, int((now_ns - reference) // DAY_NS))
-    if age >= DELETE_DAYS:
-        return "R", "never_active_365" if last_ns <= 0 else "inactive_365"
+    if last_ns <= 0 and age >= NEVER_ACTIVE_DELETE_DAYS:
+        return "R", "never_active_30"
+    if last_ns > 0 and age >= DELETE_DAYS:
+        return "R", "inactive_365"
     if disabled:
         return ("Q", "inactive_90") if was_quarantine else ("M", "manual_or_external_disabled")
     if age >= QUARANTINE_DAYS:
@@ -343,8 +346,9 @@ def apply_policy_now(server, creds) -> dict[str, int]:
             age = max(0, int((now_ns - reference) // DAY_NS))
             disabled = _bool(secret.get("disabled", "no"))
 
-            if age >= DELETE_DAYS:
-                reason = "never_active_365" if last_ns <= 0 else "inactive_365"
+            delete_after = NEVER_ACTIVE_DELETE_DAYS if last_ns <= 0 else DELETE_DAYS
+            if age >= delete_after:
+                reason = "never_active_30" if last_ns <= 0 else "inactive_365"
                 nat_removed, profile_removed = _remove_client_objects(api, secret, profiles, nat_rules)
                 counts["deleted"] += 1
                 counts["nat_removed"] += nat_removed
