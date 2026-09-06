@@ -2,9 +2,9 @@ from __future__ import annotations
 
 """Schedule a Google Sheets reconciliation after LV automation mutations.
 
-The normal five-minute reconciliation remains the safety net. This bridge makes
-operator actions visible in Google Sheets within seconds, including immediate
-quarantine/deletion performed when LV-Aging is enabled or updated.
+Operator actions are mirrored to the temporary Sheets backend within seconds.
+The final 3.0.13 layer installed from this module replaces the old recurring
+five-minute full scan with RouterOS change events plus a manual safety-net sync.
 """
 
 
@@ -59,4 +59,12 @@ def install_vpn_automation_sheets_bridge() -> None:
             return
 
     VPNServersPage._on_action = patched
+
+    # Install the final VPN page/search/event layer only after the standard UI
+    # compatibility modules have already imported their mature components. This
+    # avoids eager page imports from ui/__init__.py and keeps patch ordering
+    # deterministic before MainWindow creates the actual page instances.
+    from linkvideo_vpn_helper.ui.vpn_final_3_0_13_ux import install_vpn_final_3_0_13_ux
+    install_vpn_final_3_0_13_ux()
+
     _INSTALLED = True
