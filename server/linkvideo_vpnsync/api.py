@@ -57,7 +57,7 @@ def search_clients(
     q: str = Query(..., min_length=1, max_length=128),
     limit: int = Query(50, ge=1, le=200),
 ) -> list[dict]:
-    return _db.search_clients(q, deleted=False, limit=limit)
+    return _db.search_clients(q, limit=limit)
 
 
 @app.get("/v1/deleted/search", dependencies=[Depends(require_token)])
@@ -65,4 +65,4 @@ def search_deleted(
     q: str = Query(..., min_length=1, max_length=128),
     limit: int = Query(50, ge=1, le=200),
 ) -> list[dict]:
-    return _db.search_clients(q, deleted=True, limit=limit)
+    return _db.search_deleted_clients(q, limit=limit)
