@@ -86,6 +86,10 @@ def _server_id(hostname: str) -> int | None:
         return int(row["id"]) if row else None
 
 
+def _can_read_password(auth: AuthContext) -> bool:
+    return auth.role in {"operator", "admin"}
+
+
 @app.get("/health")
 def health() -> dict:
     info = _db.ping()
@@ -105,6 +109,7 @@ def health() -> dict:
         "business_timezone": f"UTC{offset:+d}",
         "auth": "operator-session",
         "server_operations": True,
+        "postgres_search": True,
     }
 
 
@@ -162,7 +167,27 @@ def search_clients(
     limit: int = Query(50, ge=1, le=200),
     auth: AuthContext = Depends(require_auth),
 ) -> list[dict]:
-    return _db.search_clients(q, limit=limit)
+    return _db.search_client_details(
+        q,
+        limit=limit,
+        include_password=_can_read_password(auth),
+    )
+
+
+@app.get("/v1/clients/detail")
+def client_detail(
+    server: str = Query(..., min_length=1, max_length=255),
+    login: str = Query(..., min_length=1, max_length=128),
+    auth: AuthContext = Depends(require_auth),
+) -> dict:
+    row = _db.get_client_detail(
+        server,
+        login,
+        include_password=_can_read_password(auth),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="VPN client not found")
+    return row
 
 
 @app.get("/v1/deleted/search")
@@ -259,7 +284,4 @@ def activity_stream(auth: AuthContext = Depends(require_auth)) -> StreamingRespo
     )
 
 
-# All RouterOS mutations exposed to Helper are authenticated here. The operation
-# layer uses server-side RouterOS credentials, performs a fresh reconciliation,
-# and writes the employee/action audit trail before returning to the desktop.
 app.include_router(build_operations_router(require_auth, _auth, _operations))
