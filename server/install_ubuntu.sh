@@ -110,15 +110,16 @@ SQL
 
 for migration in "${APP_ROOT}"/server/sql/*.sql; do
   migration_name="$(basename "${migration}")"
-  already="$(psql "${DATABASE_URL}" -Atqc "SELECT 1 FROM vpnsync_schema_migrations WHERE name = '${migration_name//\'/\'\'}' LIMIT 1")"
+  [[ "${migration_name}" =~ ^[0-9A-Za-z_.-]+$ ]] || fail "Unsafe migration filename: ${migration_name}"
+  already="$(psql "${DATABASE_URL}" -Atqc "SELECT 1 FROM vpnsync_schema_migrations WHERE name = '${migration_name}' LIMIT 1")"
   if [[ "${already}" == "1" ]]; then
     info "Migration ${migration_name}: already applied"
     continue
   fi
   info "Migration ${migration_name}: applying"
   psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -f "${migration}"
-  psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -c "INSERT INTO vpnsync_schema_migrations(name) VALUES ('${migration_name//\'/\'\'}') ON CONFLICT DO NOTHING" >/dev/null
- done
+  psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -c "INSERT INTO vpnsync_schema_migrations(name) VALUES ('${migration_name}') ON CONFLICT DO NOTHING" >/dev/null
+done
 
 install -m 0644 "${APP_ROOT}/server/systemd/linkvideo-vpnsync.service" "/etc/systemd/system/${SERVICE}"
 systemctl daemon-reload
