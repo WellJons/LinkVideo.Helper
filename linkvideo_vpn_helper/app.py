@@ -195,15 +195,21 @@ def main() -> int:
     # as an explicit disaster-recovery export/restore path.
     from linkvideo_vpn_helper.ui.vpn_sheets_emergency_only import install_sheets_emergency_runtime
     install_sheets_emergency_runtime()
+    from linkvideo_vpn_helper.ui.cloud_activity_nav import install_cloud_activity_nav
+    install_cloud_activity_nav()
 
     from linkvideo_vpn_helper.ui.main_window import MainWindow
     splash.set_status("Открываю интерфейс…")
     window = MainWindow(service, credentials, settings)
-    # The coordinator is retained for manual emergency export/recovery only.
+    # The Sheets coordinator is retained for manual emergency export/recovery only.
     from linkvideo_vpn_helper.ui.vpn_sheets_sync_integration import attach_vpn_sheets_sync
     attach_vpn_sheets_sync(window, service, credentials, settings)
     from linkvideo_vpn_helper.ui.vpn_sheets_emergency_only import install_sheets_emergency_ui
     install_sheets_emergency_ui()
+    # Wrap the already-installed RouterOS operation layers last so every employee
+    # mutation is mirrored to central VPNSync audit without changing its result.
+    from linkvideo_vpn_helper.ui.cloud_activity_bridge import install_cloud_activity_bridge
+    install_cloud_activity_bridge(service, settings)
     splash.close()
     window.show()
     event("APP", "Интерфейс открыт")
