@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import hmac
 from contextlib import asynccontextmanager
+from datetime import timedelta, timezone
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 
+from .auth import AuthContext, AuthService
 from .config import get_settings
 from .db import VPNDatabase
 from .monitor import RouterOSMonitorManager
@@ -13,6 +17,7 @@ from .monitor import RouterOSMonitorManager
 _settings = get_settings()
 _db = VPNDatabase(_settings.database_url, _settings.encryption_key)
 _monitor = RouterOSMonitorManager(_db, _settings)
+_auth = AuthService(_db, _settings.api_token, session_ttl=_settings.session_ttl_seconds)
 
 
 @asynccontextmanager
@@ -28,23 +33,36 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="LinkVideo.VPNSync",
-    version="0.2.1",
+    version="0.3.0",
     docs_url=None,
     redoc_url=None,
     lifespan=lifespan,
 )
 
 
-def require_token(authorization: Annotated[str | None, Header()] = None) -> None:
-    expected = f"Bearer {_settings.api_token}"
-    if authorization != expected:
+class LoginRequest(BaseModel):
+    username: str = Field(..., min_length=1, max_length=128)
+    password: str = Field(..., min_length=1, max_length=512)
+
+
+def require_auth(authorization: Annotated[str | None, Header()] = None) -> AuthContext:
+    value = str(authorization or "").strip()
+    if not value.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Unauthorized")
+    token = value[7:].strip()
+    if hmac.compare_digest(token, _settings.api_token):
+        return AuthContext(username="legacy-api-token", role="admin", legacy=True)
+    try:
+        return _auth.verify_token(token)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Unauthorized") from None
 
 
 @app.get("/health")
 def health() -> dict:
     info = _db.ping()
     monitor_status = _monitor.status()
+    offset = int(_settings.business_utc_offset_hours)
     return {
         "ok": True,
         "database": info.get("database"),
@@ -54,25 +72,104 @@ def health() -> dict:
         "routeros_workers_alive": monitor_status.get("workers_alive", 0),
         "routeros": monitor_status,
         "retention_enabled": bool(_settings.retention_enabled),
+        "business_timezone": f"UTC{offset:+d}",
+        "auth": "operator-session",
     }
 
 
-@app.get("/v1/servers", dependencies=[Depends(require_token)])
-def servers() -> list[dict]:
+@app.post("/v1/auth/login")
+def login(payload: LoginRequest, request: Request) -> dict:
+    actor = str(payload.username or "").strip()
+    try:
+        token, context, expires_in = _auth.login(actor, payload.password)
+    except ValueError:
+        try:
+            _auth.audit(
+                actor=actor,
+                source="desktop",
+                action="auth.login",
+                success=False,
+                details={"remote": request.client.host if request.client else ""},
+            )
+        except Exception:
+            pass
+        raise HTTPException(status_code=401, detail="Invalid username or password") from None
+    _auth.audit(
+        actor=context.username,
+        role=context.role,
+        source="desktop",
+        action="auth.login",
+        success=True,
+        details={"remote": request.client.host if request.client else ""},
+    )
+    offset = int(_settings.business_utc_offset_hours)
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_in": expires_in,
+        "username": context.username,
+        "role": context.role,
+        "business_timezone": f"UTC{offset:+d}",
+    }
+
+
+@app.get("/v1/auth/me")
+def auth_me(auth: AuthContext = Depends(require_auth)) -> dict:
+    return {"username": auth.username, "role": auth.role, "legacy": auth.legacy}
+
+
+@app.get("/v1/servers")
+def servers(auth: AuthContext = Depends(require_auth)) -> list[dict]:
     return _db.list_servers()
 
 
-@app.get("/v1/clients/search", dependencies=[Depends(require_token)])
+@app.get("/v1/clients/search")
 def search_clients(
     q: str = Query(..., min_length=1, max_length=128),
     limit: int = Query(50, ge=1, le=200),
+    auth: AuthContext = Depends(require_auth),
 ) -> list[dict]:
     return _db.search_clients(q, limit=limit)
 
 
-@app.get("/v1/deleted/search", dependencies=[Depends(require_token)])
+@app.get("/v1/deleted/search")
 def search_deleted(
     q: str = Query(..., min_length=1, max_length=128),
     limit: int = Query(50, ge=1, le=200),
+    auth: AuthContext = Depends(require_auth),
 ) -> list[dict]:
     return _db.search_deleted_clients(q, limit=limit)
+
+
+@app.get("/v1/activity")
+def activity(
+    limit: int = Query(200, ge=1, le=1000),
+    login: str = Query("", max_length=128),
+    source: str = Query("", max_length=64),
+    auth: AuthContext = Depends(require_auth),
+) -> list[dict]:
+    conditions: list[str] = []
+    params: list[object] = []
+    if str(login or "").strip():
+        conditions.append("lower(a.login) LIKE %s")
+        params.append(f"%{str(login).strip().lower()}%")
+    if str(source or "").strip():
+        conditions.append("lower(a.source) = lower(%s)")
+        params.append(str(source).strip())
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    params.append(int(limit))
+    with _db.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT a.activity_id, a.operation_id, a.created_at, a.source,
+                   a.actor, a.role, a.action, a.login, a.success, a.details,
+                   s.hostname AS server
+              FROM vpnsync_activity a
+              LEFT JOIN vpn_servers s ON s.id = a.server_id
+              {where}
+             ORDER BY a.created_at DESC
+             LIMIT %s
+            """,
+            tuple(params),
+        )
+        return [dict(row) for row in cur.fetchall()]
