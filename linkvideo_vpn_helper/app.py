@@ -145,10 +145,12 @@ def main() -> int:
     install_retention_seed_guard()
     from linkvideo_vpn_helper.services.vpn_sheets_retention_compat import install_vpn_sheets_retention_compat
     install_vpn_sheets_retention_compat()
-    from linkvideo_vpn_helper.services.vpn_sheets_operator_view import install_vpn_sheets_operator_view
-    install_vpn_sheets_operator_view()
     from linkvideo_vpn_helper.services.vpn_sheets_resilience import install_vpn_sheets_resilience
     install_vpn_sheets_resilience()
+    # Final operator-facing layer must run after resilience because it deliberately
+    # replaces the now-removed LV Summary dependency and extends its sheet styling.
+    from linkvideo_vpn_helper.services.vpn_sheets_operator_view import install_vpn_sheets_operator_view
+    install_vpn_sheets_operator_view()
     from linkvideo_vpn_helper.ui.background_ux_integration import install_background_ux
     install_background_ux()
     from linkvideo_vpn_helper.ui.manual_scan_feedback import install_manual_scan_feedback
