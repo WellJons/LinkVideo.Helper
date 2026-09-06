@@ -3,6 +3,7 @@ from __future__ import annotations
 """Expose lifecycle/retention reasons in the RouterOS -> Google Sheets mirror."""
 
 from datetime import datetime
+import re
 
 from linkvideo_vpn_helper.services.app_logging import event
 from linkvideo_vpn_helper.services.vpn_retention_policy import DAY_NS, parse_extended_comment
@@ -24,6 +25,27 @@ def _parse_dt(value: str) -> datetime | None:
         except Exception:
             pass
     return None
+
+
+def _external_ports_text(value: str) -> str:
+    """Keep the operator-facing NAT column compact: external ports only.
+
+    Full protocol/to-port data remains available in RouterOS snapshot and is used
+    by restore logic. The visible sheet should not repeat ``tcp 10001→10001`` for
+    the common 1:1 mapping.
+    """
+    result: list[str] = []
+    for part in str(value or "").split(";"):
+        token = part.strip()
+        if not token:
+            continue
+        match = re.match(r"(?:(?:tcp|udp)\s+)?([^→\s]+)\s*→", token, re.I)
+        if match:
+            suffix = " [off]" if "[off]" in token.lower() else ""
+            result.append(f"{match.group(1)}{suffix}")
+        else:
+            result.append(token)
+    return "; ".join(result)
 
 
 def _reason_text(reason: str, state: str = "") -> str:
@@ -106,6 +128,33 @@ def _history_event(reason: str, row: dict[str, str], source: str) -> str | None:
     return None
 
 
+def _retention_overdue(rows: list[dict[str, str]], now: datetime | None = None) -> list[str]:
+    """Return clients that should already have been removed by LV-Aging."""
+    moment = now or datetime.now()
+    overdue: list[str] = []
+    for row in rows:
+        login = str(row.get("Логин", "") or "").strip()
+        if not login:
+            continue
+        try:
+            days = int(str(row.get("Дней без связи", "") or "").strip())
+        except Exception:
+            days = -1
+        if days >= 365:
+            overdue.append(login)
+            continue
+
+        # Never-connected accounts have no numeric inactivity age. Use the first
+        # successful mirror observation as a conservative fallback: only after 30
+        # full days in Sheets is the safety sweep allowed to enforce deletion.
+        lifecycle = str(row.get("Lifecycle", "") or "").strip()
+        if lifecycle == "Последняя активность неизвестна":
+            first = _parse_dt(str(row.get("Первое обнаружение", "") or ""))
+            if first is not None and (moment - first).days >= 30:
+                overdue.append(login)
+    return overdue
+
+
 def install_vpn_sheets_retention_compat() -> None:
     global _INSTALLED
     if _INSTALLED:
@@ -120,6 +169,7 @@ def install_vpn_sheets_retention_compat() -> None:
 
     original_build = sheets.build_current_clients
     original_reconcile = sheets.reconcile_records
+    original_sync_server = sheets.VPNSheetsSyncService.sync_server
 
     def build_current_clients(service, snapshot):
         current = original_build(service, snapshot)
@@ -127,6 +177,9 @@ def install_vpn_sheets_retention_compat() -> None:
             comment = str(record.row.get("Комментарий RouterOS", "") or "")
             meta = parse_extended_comment(comment)
             record.row["Причина"] = _reason_text(meta.reason, meta.state)
+            record.row["NAT / Порты"] = _external_ports_text(
+                str(record.row.get("NAT / Порты", "") or "")
+            )
         return current
 
     def reconcile_records(server, existing_rows, current_clients, *, source, initiator, now=None, sync_id=None):
@@ -280,7 +333,76 @@ def install_vpn_sheets_retention_compat() -> None:
             encoded_rows.append([""] * len(sheets.SERVER_COLUMNS))
         self.put_values(f"'{sheet}'!A2:T{write_count + 1}", encoded_rows)
 
+    def update_summary(self, server, synced_at, result) -> None:
+        # LV Сводка removed from the live workbook. Keep the base sync call as a
+        # harmless no-op instead of issuing a failing Values API request each run.
+        return None
+
+    def sync_server(self, server, creds, *, source="RouterOS sync", initiator=""):
+        # First mirror the complete RouterOS state to Google. This guarantees a
+        # recovery snapshot exists before any retention safety sweep can delete
+        # RouterOS objects.
+        result = original_sync_server(
+            self,
+            server,
+            creds,
+            source=source,
+            initiator=initiator,
+        )
+        try:
+            rows = self.backend.read_server_rows(server)
+            overdue = _retention_overdue(rows)
+            if not overdue:
+                return result
+
+            # Respect an operator-disabled LV-Aging switch. The safety sweep only
+            # compensates for a missed/failed daily scheduler when retention itself
+            # is actually enabled on this server.
+            from linkvideo_vpn_helper.services.vpn_automation_service import VPNAutomationService
+            from linkvideo_vpn_helper.services.vpn_retention_policy import apply_policy_now
+
+            status = VPNAutomationService().get_status(server, creds)
+            if not status.aging_enabled:
+                event(
+                    "LV",
+                    "Просрочено retention-удаление",
+                    f"{server} · {len(overdue)} учёток 365+/never-active 30+, но LV-Aging выключен",
+                    level=30,
+                )
+                return result
+
+            counts = apply_policy_now(server, creds)
+            if int(counts.get("deleted", 0) or 0) <= 0:
+                event(
+                    "LV",
+                    "Retention safety sweep не удалил просроченные учётки",
+                    f"{server} · найдено {len(overdue)}: {', '.join(overdue[:8])}",
+                    level=30,
+                )
+                return result
+
+            # Re-read after successful deletion so disappeared accounts are moved
+            # to LV Удалённые immediately, with the last full snapshot from the
+            # first pass preserved as the recovery source.
+            return original_sync_server(
+                self,
+                server,
+                creds,
+                source=source,
+                initiator=initiator,
+            )
+        except Exception as exc:
+            event(
+                "LV",
+                "Ошибка retention safety sweep",
+                f"{server} · {str(exc)[:220]}",
+                level=30,
+            )
+            return result
+
     sheets.GoogleSheetsBackend.ensure_sheet_columns = ensure_sheet_columns
     sheets.GoogleSheetsBackend.read_server_rows = read_server_rows
     sheets.GoogleSheetsBackend.write_server_rows = write_server_rows
+    sheets.GoogleSheetsBackend.update_summary = update_summary
+    sheets.VPNSheetsSyncService.sync_server = sync_server
     _INSTALLED = True
