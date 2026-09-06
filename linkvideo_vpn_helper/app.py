@@ -135,32 +135,24 @@ def main() -> int:
     install_service_runtime_hardening()
     from linkvideo_vpn_helper.services.vpn_automation_resilience import install_vpn_automation_resilience
     install_vpn_automation_resilience()
-    # 3.0.10 uses one authoritative retention implementation. It owns script
-    # sources, LV2 metadata migration and immediate postcondition verification.
+    # Legacy retention code is imported for compatibility with existing pages,
+    # then hard-blocked below after every old wrapper has been installed.
     from linkvideo_vpn_helper.services.vpn_retention_policy import install_retention_policy
     install_retention_policy()
-    # The legacy seed routine only understands state/last and would drop the LV2
-    # creation/reference day. Replace that one entry point after policy install.
     from linkvideo_vpn_helper.services.vpn_retention_seed_guard import install_retention_seed_guard
     install_retention_seed_guard()
     from linkvideo_vpn_helper.services.vpn_sheets_retention_compat import install_vpn_sheets_retention_compat
     install_vpn_sheets_retention_compat()
     from linkvideo_vpn_helper.services.vpn_sheets_resilience import install_vpn_sheets_resilience
     install_vpn_sheets_resilience()
-    # Final operator-facing layer must run after resilience because it deliberately
-    # replaces the now-removed LV Summary dependency and extends its sheet styling.
     from linkvideo_vpn_helper.services.vpn_sheets_operator_view import install_vpn_sheets_operator_view
     install_vpn_sheets_operator_view()
-    # Compact Sheets rows still remain recoverable even if an old archive entry
-    # lost its full RouterOS snapshot: infer a conservative TCP 1:1 fallback.
     from linkvideo_vpn_helper.services.vpn_restore_compact_ports import install_vpn_restore_compact_ports
     install_vpn_restore_compact_ports()
     from linkvideo_vpn_helper.ui.background_ux_integration import install_background_ux
     install_background_ux()
     from linkvideo_vpn_helper.ui.manual_scan_feedback import install_manual_scan_feedback
     install_manual_scan_feedback()
-    # Restore the three archive download transports before the UX wrapper captures
-    # ArchiveDownloadPage methods. FFmpeg is downloaded/cached only on first use.
     from linkvideo_vpn_helper.services.archive_download_methods import install_archive_download_methods
     install_archive_download_methods()
     from linkvideo_vpn_helper.ui.archive_download_ux import install_archive_download_ux
@@ -187,12 +179,14 @@ def main() -> int:
     install_nested_scroll_guard()
     from linkvideo_vpn_helper.ui.vpn_automation_sheets_bridge import install_vpn_automation_sheets_bridge
     install_vpn_automation_sheets_bridge()
+    # This must run after the legacy automation/UI wrappers above so no desktop
+    # path can re-enable LV-Aging/LV-Activity/LV-AutoRestore afterwards.
+    from linkvideo_vpn_helper.services.central_retention_guard import install_central_retention_guard
+    install_central_retention_guard()
     from linkvideo_vpn_helper.ui.vpn_sheets_coordinator_resilience import install_vpn_sheets_coordinator_resilience
     install_vpn_sheets_coordinator_resilience()
     from linkvideo_vpn_helper.ui.cloud_settings_integration import install_cloud_settings_ui
     install_cloud_settings_ui()
-    # PostgreSQL/VPNSync is authoritative. Google Sheets remains available only
-    # as an explicit disaster-recovery export/restore path.
     from linkvideo_vpn_helper.ui.vpn_sheets_emergency_only import install_sheets_emergency_runtime
     install_sheets_emergency_runtime()
     from linkvideo_vpn_helper.ui.cloud_activity_nav import install_cloud_activity_nav
@@ -201,15 +195,18 @@ def main() -> int:
     from linkvideo_vpn_helper.ui.main_window import MainWindow
     splash.set_status("Открываю интерфейс…")
     window = MainWindow(service, credentials, settings)
-    # The Sheets coordinator is retained for manual emergency export/recovery only.
+    # Google Sheets is retained only for explicit disaster-recovery export/restore.
     from linkvideo_vpn_helper.ui.vpn_sheets_sync_integration import attach_vpn_sheets_sync
     attach_vpn_sheets_sync(window, service, credentials, settings)
     from linkvideo_vpn_helper.ui.vpn_sheets_emergency_only import install_sheets_emergency_ui
     install_sheets_emergency_ui()
-    # Wrap the already-installed RouterOS operation layers last so every employee
-    # mutation is mirrored to central VPNSync audit without changing its result.
+    # Transitional audit wrapper is installed first. The authoritative operation
+    # bridge installed after it bypasses direct RouterOS when cloud is configured;
+    # therefore server-side operations are audited once, not twice.
     from linkvideo_vpn_helper.ui.cloud_activity_bridge import install_cloud_activity_bridge
     install_cloud_activity_bridge(service, settings)
+    from linkvideo_vpn_helper.services.cloud_operations_bridge import install_cloud_operations_bridge
+    install_cloud_operations_bridge(service, settings)
     splash.close()
     window.show()
     event("APP", "Интерфейс открыт")
