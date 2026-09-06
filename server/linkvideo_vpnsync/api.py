@@ -28,7 +28,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="LinkVideo.VPNSync",
-    version="0.2.0",
+    version="0.2.1",
     docs_url=None,
     redoc_url=None,
     lifespan=lifespan,
@@ -44,12 +44,15 @@ def require_token(authorization: Annotated[str | None, Header()] = None) -> None
 @app.get("/health")
 def health() -> dict:
     info = _db.ping()
+    monitor_status = _monitor.status()
     return {
         "ok": True,
         "database": info.get("database"),
         "database_time": info.get("now"),
-        "routeros_monitor": _monitor.enabled,
-        "routeros_servers": len(_monitor.targets),
+        "routeros_monitor": monitor_status.get("enabled", False),
+        "routeros_servers": monitor_status.get("target_count", 0),
+        "routeros_workers_alive": monitor_status.get("workers_alive", 0),
+        "routeros": monitor_status,
         "retention_enabled": bool(_settings.retention_enabled),
     }
 
