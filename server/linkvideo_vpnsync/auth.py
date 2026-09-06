@@ -59,6 +59,25 @@ class AuthService:
         if len(self.signing_secret) < 24:
             raise ValueError("Auth signing secret is too short")
 
+    def _current_user(self, username: str) -> AuthContext:
+        with self.db.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT username, role, enabled
+                  FROM vpnsync_users
+                 WHERE lower(username)=lower(%s)
+                 LIMIT 1
+                """,
+                (str(username or ""),),
+            )
+            row = cur.fetchone()
+        if not row or not bool(row.get("enabled")):
+            raise ValueError("Session user is disabled or missing")
+        return AuthContext(
+            username=str(row.get("username") or ""),
+            role=str(row.get("role") or "operator"),
+        )
+
     def login(self, username: str, password: str) -> tuple[str, AuthContext, int]:
         wanted = str(username or "").strip()
         if not wanted or not password:
@@ -123,10 +142,13 @@ class AuthService:
         if int(payload.get("exp") or 0) <= int(time.time()):
             raise ValueError("Session expired")
         username = str(payload.get("sub") or "").strip()
-        role = str(payload.get("role") or "operator")
         if not username:
             raise ValueError("Invalid session token")
-        return AuthContext(username=username, role=role)
+
+        # Do not trust an old role embedded in a still-valid token. This DB read
+        # makes operator disable/role changes effective immediately instead of
+        # waiting for the 12-hour token TTL to expire.
+        return self._current_user(username)
 
     def audit(
         self,
