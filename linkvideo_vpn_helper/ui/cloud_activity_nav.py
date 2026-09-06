@@ -10,6 +10,13 @@ def install_cloud_activity_nav() -> None:
     if _INSTALLED:
         return
 
+    # Archive recovery belongs inside the normal client-search workflow. It is
+    # installed here because this hook already initializes the read-only cloud
+    # support surface, while active search and normal mutations stay direct to
+    # MikroTik.
+    from linkvideo_vpn_helper.ui.cloud_archive_search_integration import install_cloud_archive_search
+    install_cloud_archive_search()
+
     from linkvideo_vpn_helper.ui.main_window import MainWindow
 
     if not any(item[0] == "vpn_activity" for item in MainWindow.NAV_ITEMS):
