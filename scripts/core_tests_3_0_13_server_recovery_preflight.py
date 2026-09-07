@@ -16,9 +16,15 @@ def main() -> int:
         "/v1/archive/restore",
     ):
         assert route in source
-    assert "_db.search_client_details(" in source
+
+    # PostgreSQL is passive backup/archive storage. Installer preflight must
+    # validate deleted-client recovery reads, not reintroduce active Helper
+    # search through PostgreSQL.
     assert "_db.search_deleted_clients(" in source
-    assert "PostgreSQL active/deleted reads OK" in source
+    assert "_db.get_deleted_client_detail(" in source
+    assert "_db.search_client_details(" not in source
+    assert "PostgreSQL archive OK" in source
+    assert "interactive Helper VPN work stays direct to RouterOS" in source
     assert source.index("Preflight: importing FastAPI") < source.index("Stopping ${SERVICE}")
 
     print("SERVER_RECOVERY_PREFLIGHT_OK")
