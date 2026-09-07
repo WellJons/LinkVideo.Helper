@@ -41,7 +41,7 @@ def install_cloud_activity_nav() -> None:
     if not any(item[0] == "vpn_activity" for item in MainWindow.NAV_ITEMS):
         items = list(MainWindow.NAV_ITEMS)
         insert_at = next((index + 1 for index, item in enumerate(items) if item[0] == "vpn_servers"), len(items))
-        items.insert(insert_at, ("vpn_activity", "≡", "История VPN", "Действия сотрудников, MikroTik и автоматическая архивация"))
+        items.insert(insert_at, ("vpn_activity", "≡", "Журнал действий", "Кто и что менял в VPN-клиентах"))
         MainWindow.NAV_ITEMS = tuple(items)
 
     original_factory = MainWindow._factory
