@@ -123,3 +123,9 @@ def install_sheets_emergency_ui() -> None:
 
     VPNServersPage._build = build
     _UI_INSTALLED = True
+
+    # This hook runs after all legacy/Sheets VPN-server wrappers are composed and
+    # before lazy pages are constructed, so the final desktop surface can be
+    # simplified without touching the underlying recovery/audit mechanics.
+    from linkvideo_vpn_helper.ui.operator_ux_polish import install_operator_ux_polish
+    install_operator_ux_polish()
