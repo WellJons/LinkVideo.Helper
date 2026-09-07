@@ -106,7 +106,7 @@ info "Preflight: compiling VPNSync Python modules"
 "${APP_ROOT}/.venv/bin/python" -m compileall -q "${APP_ROOT}/server/linkvideo_vpnsync" \
   || fail "Python compile preflight failed; current service was not stopped"
 
-info "Preflight: importing FastAPI, recovery routes and PostgreSQL reads"
+info "Preflight: importing FastAPI, routes and PostgreSQL archive"
 PYTHONPATH="${APP_ROOT}/server" "${APP_ROOT}/.venv/bin/python" - <<'PY'
 from linkvideo_vpnsync.api import app, _db
 
@@ -114,46 +114,37 @@ paths = {getattr(route, "path", "") for route in app.routes}
 required = {
     "/health",
     "/v1/auth/login",
-    "/v1/clients/search",
-    "/v1/clients/detail",
+    "/v1/activity",
+    "/v1/activity/stream",
+    "/v1/activity/desktop",
     "/v1/deleted/search",
     "/v1/archive/restore/preflight",
     "/v1/archive/restore/server-preflight",
     "/v1/archive/restore",
-    "/v1/activity",
-    "/v1/activity/stream",
-    "/v1/operations/clients/create",
-    "/v1/operations/ports/add",
-    "/v1/operations/clients/password",
-    "/v1/operations/clients/delete",
 }
 missing = sorted(required - paths)
 if missing:
     raise SystemExit("Missing VPNSync route(s): " + ", ".join(missing))
 
-# Execute both active and deleted read paths against the existing schema before
-# touching the running service. Impossible queries return zero rows but still
-# verify SQL syntax, archive metadata columns and psycopg adaptation.
+# Execute archive reads against the existing schema before touching the running
+# service. The impossible queries return no rows while still checking SQL,
+# decryption-path setup and psycopg parameter adaptation.
 _db.open()
 try:
-    active_rows = _db.search_client_details(
-        "__vpnsync_preflight_no_match__",
-        limit=1,
+    rows = _db.search_deleted_clients("__vpnsync_preflight_no_match__", limit=1)
+    if rows:
+        raise SystemExit("Unexpected VPNSync deleted-archive preflight result")
+    row = _db.get_deleted_client_detail(
+        "__vpnsync_preflight_no_server__",
+        "__vpnsync_preflight_no_login__",
         include_password=False,
     )
-    if active_rows:
-        raise SystemExit("Unexpected VPNSync active preflight search result")
-
-    deleted_rows = _db.search_deleted_clients(
-        "__vpnsync_preflight_no_deleted_match__",
-        limit=1,
-    )
-    if deleted_rows:
-        raise SystemExit("Unexpected VPNSync deleted preflight search result")
+    if row is not None:
+        raise SystemExit("Unexpected VPNSync deleted-detail preflight result")
 finally:
     _db.close()
 
-print(f"[VPNSync] Preflight OK: {len(paths)} API routes loaded; PostgreSQL active/deleted reads OK")
+print(f"[VPNSync] Preflight OK: {len(paths)} API routes loaded; PostgreSQL archive OK")
 PY
 
 # Schema/index migrations must not race a running sync worker. Stop the service
@@ -184,6 +175,14 @@ for migration in "${APP_ROOT}"/server/sql/*.sql; do
   psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -c "INSERT INTO vpnsync_schema_migrations(name) VALUES ('${migration_name}') ON CONFLICT DO NOTHING" >/dev/null
 done
 
+OPERATOR_COUNT="$(psql "${DATABASE_URL}" -Atqc "SELECT count(*) FROM vpnsync_users WHERE enabled = TRUE" 2>/dev/null || echo 0)"
+if [[ "${OPERATOR_COUNT}" =~ ^[0-9]+$ ]] && (( OPERATOR_COUNT == 0 )); then
+  info "No enabled VPNSync desktop operator exists yet. SSH/Termius credentials are separate."
+  info "Create one after install: sudo env PYTHONPATH=${APP_ROOT}/server ${APP_ROOT}/.venv/bin/python ${APP_ROOT}/server/manage_operator.py --username <login> --role admin"
+else
+  info "VPNSync desktop operators enabled: ${OPERATOR_COUNT}"
+fi
+
 install -m 0644 "${APP_ROOT}/server/systemd/linkvideo-vpnsync.service" "/etc/systemd/system/${SERVICE}"
 systemctl daemon-reload
 systemctl enable "${SERVICE}" >/dev/null
@@ -200,7 +199,7 @@ for _ in $(seq 1 30); do
     info "Installation/update completed successfully"
     info "API: ${HEALTH_URL%/health}"
     info "Secrets: ${ENV_FILE} (not printed)"
-    info "PostgreSQL stays local; employee desktops use the authenticated VPNSync API."
+    info "PostgreSQL is backup/archive storage; interactive Helper VPN work stays direct to RouterOS."
     exit 0
   fi
   sleep 1
