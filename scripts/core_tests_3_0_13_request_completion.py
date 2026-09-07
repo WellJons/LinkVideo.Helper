@@ -53,6 +53,18 @@ def main() -> None:
     assert "self._deleted_lookup_pending = False" in archive
     assert "Архив удалённых недоступен" in archive
 
+    auth_message = (root / "linkvideo_vpn_helper/services/cloud_auth_message_compat.py").read_text(encoding="utf-8")
+    assert "Сервер VPNSync доступен" in auth_message
+    assert "SSH (Termius)" in auth_message
+
+    audit_bridge = (root / "linkvideo_vpn_helper/ui/cloud_activity_bridge.py").read_text(encoding="utf-8")
+    assert 'settings.value("username"' in audit_bridge
+    assert 'audit_details["employee"]' in audit_bridge
+
+    activity_ui = (root / "linkvideo_vpn_helper/ui/vpn_activity_details_compat.py").read_text(encoding="utf-8")
+    assert 'details.get("employee")' in activity_ui
+    assert 'row["actor"] = employee' in activity_ui
+
     print("CORE TESTS 3.0.13 REQUEST-DRIVEN SEARCH/ARCHIVE COMPLETION OK")
 
 
