@@ -21,7 +21,10 @@ def main() -> int:
     assert "self.cloud_remember.setEnabled(False)" in source
     assert "remember=True" in source
     assert "Пароль защищён Windows DPAPI" in source
-    assert "фоновой истории действий" in source
+    assert "автоматической истории и восстановления" in source
+    assert "Логин VPNSync (не SSH)" in source
+    assert "Ubuntu/SSH (Termius)" in source
+    assert "Сервер доступен, вход не выполнен" in source
     assert "UTC+7" in source
 
     print("CLOUD_CREDENTIALS_PERSISTENCE_OK")
