@@ -165,7 +165,9 @@ def _patch_search_archive() -> None:
         self.detail_l.addStretch(1)
 
     SearchManagePage.cancel_current_action = cancel_current_action
-    SearchManagePage._render_deleted = render_deleted
+    # cloud_archive_search_integration exposes this exact renderer. Patching an
+    # unused _render_deleted attribute leaves the legacy technical card visible.
+    SearchManagePage._render_deleted_client = render_deleted
 
 
 def _patch_activity_page() -> None:
