@@ -14,13 +14,22 @@ def read(path: str) -> str:
 def main() -> int:
     compat_path = "server/linkvideo_vpnsync/db_deleted_read_compat.py"
     init_path = "server/linkvideo_vpnsync/__init__.py"
+    migration_path = "server/sql/004_routeros_address_values.sql"
     compat = read(compat_path)
     package_init = read(init_path)
+    migration = read(migration_path)
     ast.parse(compat, filename=compat_path)
     ast.parse(package_init, filename=init_path)
 
     assert "install_deleted_read_compat" in package_init
-    assert "host(d.local_address) AS local_address" in compat
+    assert "ALTER COLUMN remote_address TYPE TEXT" in migration
+    assert "ALTER COLUMN local_address TYPE TEXT" in migration
+    assert "host(d.remote_address)" not in compat
+    assert "host(d.local_address)" not in compat
+    assert "COALESCE(d.remote_address, '') AS remote_address" in compat
+    assert "COALESCE(d.local_address, '') AS local_address" in compat
+    assert "strpos(lower(d.login), lower(%s)) > 0" in compat
+    assert 'f"%{wanted.lower()}%"' not in compat
     assert "d.profile, d.service, d.routeros_comment" in compat
     assert "d.deleted_reason" in compat
     assert "d.deleted_by, d.source" in compat
