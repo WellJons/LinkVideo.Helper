@@ -106,7 +106,7 @@ info "Preflight: compiling VPNSync Python modules"
 "${APP_ROOT}/.venv/bin/python" -m compileall -q "${APP_ROOT}/server/linkvideo_vpnsync" \
   || fail "Python compile preflight failed; current service was not stopped"
 
-info "Preflight: importing FastAPI, routes and PostgreSQL search"
+info "Preflight: importing FastAPI, recovery routes and PostgreSQL reads"
 PYTHONPATH="${APP_ROOT}/server" "${APP_ROOT}/.venv/bin/python" - <<'PY'
 from linkvideo_vpnsync.api import app, _db
 
@@ -116,6 +116,10 @@ required = {
     "/v1/auth/login",
     "/v1/clients/search",
     "/v1/clients/detail",
+    "/v1/deleted/search",
+    "/v1/archive/restore/preflight",
+    "/v1/archive/restore/server-preflight",
+    "/v1/archive/restore",
     "/v1/activity",
     "/v1/activity/stream",
     "/v1/operations/clients/create",
@@ -127,22 +131,29 @@ missing = sorted(required - paths)
 if missing:
     raise SystemExit("Missing VPNSync route(s): " + ", ".join(missing))
 
-# Execute the new read path against the existing schema before touching the
-# running service. The impossible query should return zero rows but still checks
-# SQL syntax, TEXT address compatibility and psycopg parameter adaptation.
+# Execute both active and deleted read paths against the existing schema before
+# touching the running service. Impossible queries return zero rows but still
+# verify SQL syntax, archive metadata columns and psycopg adaptation.
 _db.open()
 try:
-    rows = _db.search_client_details(
+    active_rows = _db.search_client_details(
         "__vpnsync_preflight_no_match__",
         limit=1,
         include_password=False,
     )
-    if rows:
-        raise SystemExit("Unexpected VPNSync preflight search result")
+    if active_rows:
+        raise SystemExit("Unexpected VPNSync active preflight search result")
+
+    deleted_rows = _db.search_deleted_clients(
+        "__vpnsync_preflight_no_deleted_match__",
+        limit=1,
+    )
+    if deleted_rows:
+        raise SystemExit("Unexpected VPNSync deleted preflight search result")
 finally:
     _db.close()
 
-print(f"[VPNSync] Preflight OK: {len(paths)} API routes loaded; PostgreSQL search OK")
+print(f"[VPNSync] Preflight OK: {len(paths)} API routes loaded; PostgreSQL active/deleted reads OK")
 PY
 
 # Schema/index migrations must not race a running sync worker. Stop the service
