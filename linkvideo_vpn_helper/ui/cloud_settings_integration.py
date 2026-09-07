@@ -49,8 +49,8 @@ def install_cloud_settings_ui() -> None:
         title = QLabel("Облачный сервер")
         title.setObjectName("SectionTitle")
         hint = QLabel(
-            "Центральный LinkVideo.VPNSync: PostgreSQL, история и автоматическая синхронизация MikroTik. "
-            "Сейчас можно использовать IP; после подключения домена достаточно заменить адрес и включить HTTPS."
+            "Центральный LinkVideo.VPNSync: резерв/архив PostgreSQL, история действий и автоматическое слежение за изменениями MikroTik. "
+            "Обычный поиск и управление клиентами остаются прямыми к MikroTik. Сейчас можно использовать IP; после подключения домена достаточно заменить адрес и включить HTTPS."
         )
         hint.setObjectName("Muted")
         hint.setWordWrap(True)
@@ -74,18 +74,18 @@ def install_cloud_settings_ui() -> None:
         self.cloud_port.setRange(1, 65535)
         self.cloud_port.setValue(int(config.port))
         self.cloud_user = QLineEdit(config.username)
-        self.cloud_user.setPlaceholderText("Логин сотрудника")
+        self.cloud_user.setPlaceholderText("Учётная запись VPNSync")
         self.cloud_password = QLineEdit(config.password)
         self.cloud_password.setEchoMode(QLineEdit.EchoMode.Password)
-        self.cloud_password.setPlaceholderText("Пароль")
+        self.cloud_password.setPlaceholderText("Пароль VPNSync")
 
         form.addWidget(QLabel("IP / домен"), 0, 0)
         form.addWidget(self.cloud_host, 1, 0)
         form.addWidget(QLabel("Порт"), 0, 1)
         form.addWidget(self.cloud_port, 1, 1)
-        form.addWidget(QLabel("Логин"), 2, 0)
+        form.addWidget(QLabel("Логин VPNSync (не SSH)"), 2, 0)
         form.addWidget(self.cloud_user, 3, 0)
-        form.addWidget(QLabel("Пароль"), 2, 1)
+        form.addWidget(QLabel("Пароль VPNSync"), 2, 1)
         form.addWidget(self.cloud_password, 3, 1)
         form.setColumnStretch(0, 3)
         form.setColumnStretch(1, 2)
@@ -116,8 +116,8 @@ def install_cloud_settings_ui() -> None:
         layout.addLayout(options)
 
         note = QLabel(
-            "Пароль облачного сервера сохраняется через Windows DPAPI, а не открытым текстом. "
-            "Он доступен только текущему пользователю Windows и нужен для фоновой истории действий. "
+            "Учётная запись VPNSync отделена от Ubuntu/SSH (Termius). При желании можно создать VPNSync-пользователя с тем же логином и паролем, "
+            "но сервер хранит пароль VPNSync отдельно в виде хэша. На этом компьютере пароль сохраняется через Windows DPAPI. "
             "Google Sheets остаётся только аварийным резервом и не является рабочей базой."
         )
         note.setObjectName("TinyMuted")
@@ -199,8 +199,13 @@ def install_cloud_settings_ui() -> None:
         self._cloud_testing = False
         self.cloud_test_button.setEnabled(True)
         if error is not None:
-            self.cloud_status.setText("Нет подключения")
-            self.task.error("Облачный сервер недоступен", str(error))
+            text = str(error)
+            if "Сервер VPNSync доступен" in text or "Неверный логин или пароль" in text:
+                self.cloud_status.setText("Ошибка входа")
+                self.task.error("Сервер доступен, вход не выполнен", text)
+            else:
+                self.cloud_status.setText("Нет подключения")
+                self.task.error("Облачный сервер недоступен", text)
             return
         config, probe, payload = result
         try:
