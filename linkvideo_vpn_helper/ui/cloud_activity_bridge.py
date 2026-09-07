@@ -55,12 +55,19 @@ def install_cloud_activity_bridge(service: VPNService, settings) -> None:
                         or bool(fresh.use_tls) != bool(current.use_tls)
                     ):
                         client.set_config(fresh, save=False)
+                    audit_details = dict(details or {})
+                    # The VPNSync login may be a shared transport/service account.
+                    # Preserve the actual Helper employee separately so the VPN
+                    # history still answers who performed the direct MikroTik action.
+                    employee = str(settings.value("username", "", str) or "").strip()
+                    if employee:
+                        audit_details["employee"] = employee
                     client.record_activity(
                         action,
                         server=server,
                         login=login,
                         success=success,
-                        details=details or {},
+                        details=audit_details,
                     )
             except Exception as exc:
                 error("CLOUD", "Не удалось отправить действие в VPNSync", exc)
