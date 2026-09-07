@@ -94,8 +94,15 @@ def install_cloud_settings_ui() -> None:
         options = QHBoxLayout()
         self.cloud_tls = QCheckBox("HTTPS")
         self.cloud_tls.setChecked(bool(config.use_tls))
-        self.cloud_remember = QCheckBox("Сохранять вход на этом компьютере")
-        self.cloud_remember.setChecked(bool(config.remember))
+        self.cloud_remember = QCheckBox("Вход сохранён через Windows DPAPI")
+        # VPNSync is a continuous archive/audit service. Losing the password
+        # after closing Settings would silently disable history and recovery,
+        # so cloud credentials are always persisted securely for this Windows user.
+        self.cloud_remember.setChecked(True)
+        self.cloud_remember.setEnabled(False)
+        self.cloud_remember.setToolTip(
+            "Нужно для автоматической истории и восстановления. Пароль защищён Windows DPAPI."
+        )
         self.cloud_password_visible = QCheckBox("Показать пароль")
         self.cloud_password_visible.toggled.connect(
             lambda visible: self.cloud_password.setEchoMode(
@@ -110,6 +117,7 @@ def install_cloud_settings_ui() -> None:
 
         note = QLabel(
             "Пароль облачного сервера сохраняется через Windows DPAPI, а не открытым текстом. "
+            "Он доступен только текущему пользователю Windows и нужен для фоновой истории действий. "
             "Google Sheets остаётся только аварийным резервом и не является рабочей базой."
         )
         note.setObjectName("TinyMuted")
@@ -142,7 +150,7 @@ def install_cloud_settings_ui() -> None:
             username=self.cloud_user.text().strip(),
             password=self.cloud_password.text(),
             use_tls=bool(self.cloud_tls.isChecked()),
-            remember=bool(self.cloud_remember.isChecked()),
+            remember=True,
         )
 
     def _cloud_save(self, show_status: bool = False) -> CloudServerConfig | None:
