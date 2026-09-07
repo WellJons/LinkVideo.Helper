@@ -147,8 +147,9 @@ def main() -> None:
     assert "мин" in uptime
 
     bridge = (root / "linkvideo_vpn_helper/ui/vpn_automation_sheets_bridge.py").read_text(encoding="utf-8")
-    assert "notify_mutation" in bridge
-    assert "включение автокарантина" in bridge
+    assert "Google Sheets is disaster-recovery only" in bridge
+    assert "notify_mutation" not in bridge
+    assert "vpn_final_3_0_13_ux" not in bridge
 
     sheets_resilience = (root / "linkvideo_vpn_helper/services/vpn_sheets_resilience.py").read_text(encoding="utf-8")
     assert "_MAX_ATTEMPTS = 3" in sheets_resilience

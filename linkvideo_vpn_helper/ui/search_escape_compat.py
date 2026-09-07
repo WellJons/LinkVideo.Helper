@@ -11,6 +11,11 @@ def install_search_escape_compat() -> None:
     if _INSTALLED:
         return
 
+    # Search completion must be driven by actual RouterOS responses/errors, and
+    # the floating busy dialog must close on the same completion signal.
+    from linkvideo_vpn_helper.ui.request_completion_compat import install_request_completion_compat
+    install_request_completion_compat()
+
     from linkvideo_vpn_helper.ui.pages.search_manage_page import SearchManagePage
 
     original_cancel = SearchManagePage.cancel_current_action

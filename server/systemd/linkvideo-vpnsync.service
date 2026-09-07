@@ -1,0 +1,24 @@
+[Unit]
+Description=LinkVideo.VPNSync
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=linkvideo-vpnsync
+Group=linkvideo-vpnsync
+WorkingDirectory=/opt/linkvideo-vpnsync/server
+EnvironmentFile=/etc/linkvideo-vpnsync/vpnsync.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/linkvideo-vpnsync/.venv/bin/python -m linkvideo_vpnsync.main
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=45
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/linkvideo-vpnsync /var/log/linkvideo-vpnsync
+
+[Install]
+WantedBy=multi-user.target

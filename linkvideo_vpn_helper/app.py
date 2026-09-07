@@ -135,32 +135,22 @@ def main() -> int:
     install_service_runtime_hardening()
     from linkvideo_vpn_helper.services.vpn_automation_resilience import install_vpn_automation_resilience
     install_vpn_automation_resilience()
-    # 3.0.10 uses one authoritative retention implementation. It owns script
-    # sources, LV2 metadata migration and immediate postcondition verification.
     from linkvideo_vpn_helper.services.vpn_retention_policy import install_retention_policy
     install_retention_policy()
-    # The legacy seed routine only understands state/last and would drop the LV2
-    # creation/reference day. Replace that one entry point after policy install.
     from linkvideo_vpn_helper.services.vpn_retention_seed_guard import install_retention_seed_guard
     install_retention_seed_guard()
     from linkvideo_vpn_helper.services.vpn_sheets_retention_compat import install_vpn_sheets_retention_compat
     install_vpn_sheets_retention_compat()
     from linkvideo_vpn_helper.services.vpn_sheets_resilience import install_vpn_sheets_resilience
     install_vpn_sheets_resilience()
-    # Final operator-facing layer must run after resilience because it deliberately
-    # replaces the now-removed LV Summary dependency and extends its sheet styling.
     from linkvideo_vpn_helper.services.vpn_sheets_operator_view import install_vpn_sheets_operator_view
     install_vpn_sheets_operator_view()
-    # Compact Sheets rows still remain recoverable even if an old archive entry
-    # lost its full RouterOS snapshot: infer a conservative TCP 1:1 fallback.
     from linkvideo_vpn_helper.services.vpn_restore_compact_ports import install_vpn_restore_compact_ports
     install_vpn_restore_compact_ports()
     from linkvideo_vpn_helper.ui.background_ux_integration import install_background_ux
     install_background_ux()
     from linkvideo_vpn_helper.ui.manual_scan_feedback import install_manual_scan_feedback
     install_manual_scan_feedback()
-    # Restore the three archive download transports before the UX wrapper captures
-    # ArchiveDownloadPage methods. FFmpeg is downloaded/cached only on first use.
     from linkvideo_vpn_helper.services.archive_download_methods import install_archive_download_methods
     install_archive_download_methods()
     from linkvideo_vpn_helper.ui.archive_download_ux import install_archive_download_ux
@@ -187,17 +177,35 @@ def main() -> int:
     install_nested_scroll_guard()
     from linkvideo_vpn_helper.ui.vpn_automation_sheets_bridge import install_vpn_automation_sheets_bridge
     install_vpn_automation_sheets_bridge()
+    # Scheduled lifecycle automation remains centrally safety-gated, but the
+    # PostgreSQL service is not an interactive search/write backend for Helper.
+    from linkvideo_vpn_helper.services.central_retention_guard import install_central_retention_guard
+    install_central_retention_guard()
     from linkvideo_vpn_helper.ui.vpn_sheets_coordinator_resilience import install_vpn_sheets_coordinator_resilience
     install_vpn_sheets_coordinator_resilience()
+    from linkvideo_vpn_helper.ui.cloud_settings_integration import install_cloud_settings_ui
+    install_cloud_settings_ui()
+    from linkvideo_vpn_helper.services.cloud_http_error_compat import install_cloud_http_error_details
+    install_cloud_http_error_details()
+    from linkvideo_vpn_helper.ui.vpn_sheets_emergency_only import install_sheets_emergency_runtime
+    install_sheets_emergency_runtime()
+    # Activity/history is read-only support functionality. It never replaces
+    # direct Helper -> MikroTik search or mutation paths.
+    from linkvideo_vpn_helper.ui.cloud_activity_nav import install_cloud_activity_nav
+    install_cloud_activity_nav()
 
     from linkvideo_vpn_helper.ui.main_window import MainWindow
     splash.set_status("Открываю интерфейс…")
     window = MainWindow(service, credentials, settings)
-    # Google Sheets — вторичное зеркало/аварийная база. Подключаем его уже
-    # после создания основного окна, чтобы отсутствие ключа или сети никогда
-    # не мешало запуску Helper и работе с RouterOS.
+    # Google Sheets is retained only for explicit disaster-recovery export/restore.
     from linkvideo_vpn_helper.ui.vpn_sheets_sync_integration import attach_vpn_sheets_sync
     attach_vpn_sheets_sync(window, service, credentials, settings)
+    from linkvideo_vpn_helper.ui.vpn_sheets_emergency_only import install_sheets_emergency_ui
+    install_sheets_emergency_ui()
+    # Search, creation and all interactive VPN management remain direct RouterOS calls.
+    # Employee actions are mirrored asynchronously only for audit/history.
+    from linkvideo_vpn_helper.ui.cloud_activity_bridge import install_cloud_activity_bridge
+    install_cloud_activity_bridge(service, settings)
     splash.close()
     window.show()
     event("APP", "Интерфейс открыт")

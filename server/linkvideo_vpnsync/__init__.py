@@ -1,0 +1,19 @@
+"""LinkVideo.VPNSync server package."""
+
+from .db_routeros_address_compat import install_routeros_address_compat
+from .db_nat_rule_compat import install_nat_rule_compat
+from .db_cloud_read_compat import install_cloud_read_compat
+from .db_deleted_read_compat import install_deleted_read_compat
+from .timezone_compat import install_business_timezone
+from .monitor_runtime_compat import install_monitor_runtime_compat
+from .activity_compat import install_activity_tracking
+from .deadline_timezone_compat import install_deadline_timezone_compat
+
+install_routeros_address_compat()
+install_nat_rule_compat()
+install_cloud_read_compat()
+install_deleted_read_compat()
+install_business_timezone()
+install_monitor_runtime_compat()
+install_activity_tracking()
+install_deadline_timezone_compat()
