@@ -12,7 +12,28 @@ def install_vpn_activity_details() -> None:
     if _INSTALLED:
         return
 
+    from linkvideo_vpn_helper.services.cloud_vpnsync import CloudVPNSyncClient
     from linkvideo_vpn_helper.ui.pages import vpn_activity_page as page_module
+
+    # The cloud login can be a shared service account. Direct Helper actions put
+    # the actual desktop employee in non-secret audit details; present that name
+    # in the Employee column while keeping the transport account in PostgreSQL.
+    original_activity = CloudVPNSyncClient.activity
+
+    def activity(self, *args, **kwargs):
+        rows = list(original_activity(self, *args, **kwargs) or [])
+        for row in rows:
+            if not isinstance(row, dict) or str(row.get("source") or "") != "desktop":
+                continue
+            details = row.get("details") or {}
+            if not isinstance(details, dict):
+                continue
+            employee = str(details.get("employee") or "").strip()
+            if employee:
+                row["actor"] = employee
+        return rows
+
+    CloudVPNSyncClient.activity = activity
 
     VPNActivityPage = page_module.VPNActivityPage
     page_module._SOURCE_LABELS.update({
