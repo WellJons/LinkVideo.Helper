@@ -23,6 +23,11 @@ def install_cloud_activity_nav() -> None:
     from linkvideo_vpn_helper.ui.cloud_archive_search_integration import install_cloud_archive_search
     install_cloud_archive_search()
 
+    # History must show the actual non-secret parameters of employee actions
+    # (ports, enabled/disabled state, remote address), not only the action name.
+    from linkvideo_vpn_helper.ui.vpn_activity_details_compat import install_vpn_activity_details
+    install_vpn_activity_details()
+
     from linkvideo_vpn_helper.ui.main_window import MainWindow
 
     if not any(item[0] == "vpn_activity" for item in MainWindow.NAV_ITEMS):
