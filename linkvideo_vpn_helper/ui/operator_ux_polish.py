@@ -74,8 +74,10 @@ def _patch_search_archive() -> None:
             self._highlight_result(None)
             self.open_hint.setText("Клик по записи — открыть карточку")
             self.query.setFocus()
-        except Exception:
-            pass
+        except RuntimeError:
+            # The card itself is already closed; a disposed decoration widget
+            # must not turn a successful Escape navigation into a failure.
+            return True
         return True
 
     def render_deleted(self) -> None:
