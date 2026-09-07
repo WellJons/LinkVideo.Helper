@@ -37,9 +37,10 @@ def main() -> int:
 
     # Protect against a silent monkey-patch typo: archive integration renders via
     # _render_deleted_client, so the final UX layer must replace that exact method.
-    assert "SearchManagePage._render_deleted_client = render_deleted" in ux
+    target = "SearchManagePage._render_deleted_client = render_deleted"
+    assert target in ux
     assert "SearchManagePage._render_deleted = render_deleted" not in ux
-    assert "SearchManagePage._render_deleted_client = render_deleted" in archive
+    assert target in archive
 
     # Audit page defaults to employee actions and no longer live-rebuilds the
     # entire 300-row table for every RouterOS /listen event.
