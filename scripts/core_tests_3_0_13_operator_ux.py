@@ -42,14 +42,14 @@ def main() -> int:
     assert "SearchManagePage._render_deleted = render_deleted" not in ux
     assert target in archive
 
-    # Audit page defaults to employee actions and no longer live-rebuilds the
-    # entire 300-row table for every RouterOS /listen event.
-    assert '"Журнал действий"' in ux
-    assert 'self.source_filter.addItem("Действия сотрудников", "desktop")' in ux
-    assert "self.cloud.activity(120" in ux
-    assert 'def start_stream(self) -> None:' in ux
-    assert "iter_activity_events" not in ux
-    assert 'str(row.get("action") or "") != "auth.login"' in ux
+    # The old global audit page implementation may remain as dormant support
+    # code, but it must not be exposed in the desktop navigation. Audit records
+    # continue to be collected in PostgreSQL for future per-client history.
+    assert 'item[0] != "vpn_activity"' in nav
+    assert "items.insert(" not in nav
+    assert "VPNActivityPage" not in nav
+    assert "install_cloud_archive_search" in nav
+    assert "install_cloud_archive_completion_compat" in nav
 
     # VPN Servers keeps the infrastructure overview but removes duplicate
     # lifecycle/expert controls from the default surface.
@@ -60,10 +60,9 @@ def main() -> int:
     assert 'button.setText("Создать резерв")' in ux
 
     # Final polish must be installed only after legacy/Sheets page wrappers have
-    # been composed, and the navigation name must explain the page's purpose.
+    # been composed.
     assert "install_operator_ux_polish" in sheets
     assert sheets.index("VPNServersPage._build = build") < sheets.index("install_operator_ux_polish")
-    assert '("vpn_activity", "≡", "Журнал действий", "Кто и что менял в VPN-клиентах")' in nav
 
     print("OPERATOR_UX_POLISH_OK")
     return 0
