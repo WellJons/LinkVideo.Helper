@@ -35,8 +35,8 @@ def main() -> int:
     assert "Восстановление выполняется из PostgreSQL" not in ux
     assert '"Причина удаления"' in ux
 
-    # Protect against a silent monkey-patch typo: archive integration renders via
-    # _render_deleted_client, so the final UX layer must replace that exact method.
+    # Protect against the exact regression seen in the RC: the cloud archive
+    # calls _render_deleted_client. A patch on _render_deleted is never invoked.
     target = "SearchManagePage._render_deleted_client = render_deleted"
     assert target in ux
     assert "SearchManagePage._render_deleted = render_deleted" not in ux
