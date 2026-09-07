@@ -10,6 +10,12 @@ def install_cloud_activity_nav() -> None:
     if _INSTALLED:
         return
 
+    # Preserve structured VPNSync recovery errors before any cloud-backed
+    # support UI is initialized. Active search and normal mutations still go
+    # directly to MikroTik.
+    from linkvideo_vpn_helper.services.cloud_http_error_compat import install_cloud_http_error_details
+    install_cloud_http_error_details()
+
     # Archive recovery belongs inside the normal client-search workflow. It is
     # installed here because this hook already initializes the read-only cloud
     # support surface, while active search and normal mutations stay direct to
