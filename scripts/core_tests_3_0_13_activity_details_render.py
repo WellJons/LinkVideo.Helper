@@ -19,7 +19,11 @@ def main() -> int:
     ast.parse(compat, filename=compat_path)
     ast.parse(nav, filename=nav_path)
 
-    assert "install_vpn_activity_details" in nav
+    # Audit formatting support remains available for future per-client history,
+    # but the standalone activity page is intentionally not installed in nav.
+    assert "install_vpn_activity_details" not in nav
+    assert 'item[0] != "vpn_activity"' in nav
+
     assert '"archive": "Восстановление"' in compat
     assert '"retention": "Автоматика"' in compat
     assert '"archive.restore": "Восстановление VPN-клиента"' in compat
