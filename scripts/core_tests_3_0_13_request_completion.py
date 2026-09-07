@@ -61,6 +61,10 @@ def main() -> None:
     assert "separate from the Ubuntu/SSH account" in operator
     assert "PBKDF2 hash" in operator
 
+    installer = (root / "server/install_ubuntu.sh").read_text(encoding="utf-8")
+    assert "SSH/Termius credentials are separate" in installer
+    assert "manage_operator.py --username <login> --role admin" in installer
+
     audit_bridge = (root / "linkvideo_vpn_helper/ui/cloud_activity_bridge.py").read_text(encoding="utf-8")
     assert 'settings.value("username"' in audit_bridge
     assert 'audit_details["employee"]' in audit_bridge
