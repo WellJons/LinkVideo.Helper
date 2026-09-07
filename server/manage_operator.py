@@ -10,7 +10,13 @@ from linkvideo_vpnsync.db import VPNDatabase
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Create or update a LinkVideo.VPNSync desktop operator")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Create or update a LinkVideo.VPNSync desktop operator. "
+            "This is an API account, separate from the Ubuntu/SSH account; "
+            "you may intentionally choose the same password if desired."
+        )
+    )
     parser.add_argument("--username", required=True)
     parser.add_argument("--role", default="operator", choices=("operator", "admin", "viewer"))
     parser.add_argument("--disable", action="store_true")
@@ -36,8 +42,12 @@ def main() -> None:
             print(f"[VPNSync] Operator disabled: {username}")
             return
 
-        password = getpass.getpass("New password: ")
-        confirm = getpass.getpass("Repeat password: ")
+        print(
+            "[VPNSync] This password is for the VPNSync API, not SSH/Termius. "
+            "It is stored only as a PBKDF2 hash in PostgreSQL."
+        )
+        password = getpass.getpass("New VPNSync password: ")
+        confirm = getpass.getpass("Repeat VPNSync password: ")
         if password != confirm:
             raise SystemExit("Passwords do not match")
         salt, digest, iterations = hash_password(password)
