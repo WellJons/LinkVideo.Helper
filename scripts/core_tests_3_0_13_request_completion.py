@@ -52,6 +52,8 @@ def main() -> None:
     archive = (root / "linkvideo_vpn_helper/ui/cloud_archive_completion_compat.py").read_text(encoding="utf-8")
     assert "self._deleted_lookup_pending = False" in archive
     assert "Архив удалённых недоступен" in archive
+    assert "not report.matches" in archive
+    assert "recovery fallback, not part of normal active" in archive
 
     auth_message = (root / "linkvideo_vpn_helper/services/cloud_auth_message_compat.py").read_text(encoding="utf-8")
     assert "Сервер VPNSync доступен" in auth_message
