@@ -5,7 +5,13 @@ _INSTALLED = False
 
 
 def install_cloud_activity_nav() -> None:
-    """Expose central audit/history without changing direct MikroTik workflows."""
+    """Install cloud-backed recovery support without exposing a global audit page.
+
+    Employee audit records are still written to PostgreSQL by the activity
+    bridge. The desktop no longer has a separate activity/history navigation
+    item: if operator history is exposed again, it should be scoped to the
+    client currently opened from Search & Manage.
+    """
     global _INSTALLED
     if _INSTALLED:
         return
@@ -22,35 +28,15 @@ def install_cloud_activity_nav() -> None:
     from linkvideo_vpn_helper.services.cloud_http_error_compat import install_cloud_http_error_details
     install_cloud_http_error_details()
 
-    # Archive recovery belongs inside the normal client-search workflow. It is
-    # installed here because this hook already initializes the read-only cloud
-    # support surface, while active search and normal mutations stay direct to
-    # MikroTik.
+    # Archive recovery belongs inside the normal client-search workflow.
     from linkvideo_vpn_helper.ui.cloud_archive_search_integration import install_cloud_archive_search
     install_cloud_archive_search()
     from linkvideo_vpn_helper.ui.cloud_archive_completion_compat import install_cloud_archive_completion_compat
     install_cloud_archive_completion_compat()
 
-    # History must show the actual non-secret parameters of employee actions
-    # (ports, enabled/disabled state, remote address), not only the action name.
-    from linkvideo_vpn_helper.ui.vpn_activity_details_compat import install_vpn_activity_details
-    install_vpn_activity_details()
-
+    # Keep the main navigation intentionally small. This also removes the item
+    # defensively if another compatibility layer happened to add it earlier.
     from linkvideo_vpn_helper.ui.main_window import MainWindow
 
-    if not any(item[0] == "vpn_activity" for item in MainWindow.NAV_ITEMS):
-        items = list(MainWindow.NAV_ITEMS)
-        insert_at = next((index + 1 for index, item in enumerate(items) if item[0] == "vpn_servers"), len(items))
-        items.insert(insert_at, ("vpn_activity", "≡", "Журнал действий", "Кто и что менял в VPN-клиентах"))
-        MainWindow.NAV_ITEMS = tuple(items)
-
-    original_factory = MainWindow._factory
-
-    def factory(self, key: str):
-        if key == "vpn_activity":
-            from linkvideo_vpn_helper.ui.pages.vpn_activity_page import VPNActivityPage
-            return VPNActivityPage(self.settings, self)
-        return original_factory(self, key)
-
-    MainWindow._factory = factory
+    MainWindow.NAV_ITEMS = tuple(item for item in MainWindow.NAV_ITEMS if item[0] != "vpn_activity")
     _INSTALLED = True
