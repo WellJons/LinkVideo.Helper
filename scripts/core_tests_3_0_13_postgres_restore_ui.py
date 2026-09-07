@@ -17,6 +17,7 @@ def parse(path: str) -> None:
 
 def main() -> int:
     files = (
+        "linkvideo_vpn_helper/app.py",
         "linkvideo_vpn_helper/ui/cloud_archive_search_integration.py",
         "linkvideo_vpn_helper/services/cloud_http_error_compat.py",
         "linkvideo_vpn_helper/ui/cloud_activity_nav.py",
@@ -26,6 +27,10 @@ def main() -> int:
     )
     for path in files:
         parse(path)
+
+    app = read("linkvideo_vpn_helper/app.py")
+    assert "install_cloud_http_error_details" in app
+    assert "install_cloud_activity_nav()" in app
 
     archive_ui = read("linkvideo_vpn_helper/ui/cloud_archive_search_integration.py")
     assert 'QPushButton("Восстановить клиента")' in archive_ui
