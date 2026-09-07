@@ -9,6 +9,10 @@ def install_deleted_read_compat() -> None:
     PostgreSQL remains an archive/backup source only. This read adapter adds the
     fields needed to show a trustworthy recovery card after the live MikroTik
     search has already completed.
+
+    Migration 004 deliberately stores RouterOS PPP local/remote address values
+    as TEXT because RouterOS accepts pool names as well as literal IP addresses.
+    Do not use PostgreSQL host() here: host(text) is undefined.
     """
     from . import db as db_module
 
@@ -25,8 +29,8 @@ def install_deleted_read_compat() -> None:
             cur.execute(
                 """
                 SELECT d.id, s.hostname AS server, d.login,
-                       host(d.remote_address) AS remote_address,
-                       host(d.local_address) AS local_address,
+                       COALESCE(d.remote_address, '') AS remote_address,
+                       COALESCE(d.local_address, '') AS local_address,
                        d.profile, d.service, d.routeros_comment,
                        d.lifecycle_state, d.last_seen_at, d.first_seen_at,
                        TRUE AS deleted, d.deleted_at, d.deleted_reason,
@@ -36,13 +40,13 @@ def install_deleted_read_compat() -> None:
                        d.ports
                   FROM vpn_deleted_clients d
                   JOIN vpn_servers s ON s.id = d.server_id
-                 WHERE lower(d.login) LIKE %s
+                 WHERE strpos(lower(d.login), lower(%s)) > 0
                  ORDER BY
                        CASE WHEN lower(d.login) = lower(%s) THEN 0 ELSE 1 END,
                        d.deleted_at DESC, d.login, s.hostname
                  LIMIT %s
                 """,
-                (f"%{wanted.lower()}%", wanted, maximum),
+                (wanted, wanted, maximum),
             )
             return [dict(row) for row in cur.fetchall()]
 
