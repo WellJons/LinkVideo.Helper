@@ -16,7 +16,7 @@ def install_cloud_activity_bridge(service: VPNService, settings) -> None:
 
     Interactive work remains direct to MikroTik. Audit transport is asynchronous
     and best-effort: VPNSync/PostgreSQL availability must never change the result
-    of the RouterOS operation itself.
+    of the RouterOS operation itself. Password values are never sent to audit.
     """
     global _INSTALLED
     if _INSTALLED:
@@ -67,6 +67,35 @@ def install_cloud_activity_bridge(service: VPNService, settings) -> None:
 
         threading.Thread(target=worker, daemon=True, name="vpnsync-desktop-audit").start()
 
+    def operation_details(name: str, args, kwargs, result=None) -> dict:
+        """Return useful non-secret audit context for a direct RouterOS operation."""
+        def arg(index: int, key: str, default=None):
+            return args[index] if len(args) > index else kwargs.get(key, default)
+
+        if name == "create_clients_batch":
+            details = {
+                "ports_per_client": int(arg(3, "ports_per_client", 0) or 0),
+                "accounts_count": int(arg(4, "accounts_count", 0) or 0),
+            }
+            return details
+        if name == "add_ports":
+            return {"count": int(arg(3, "count", 0) or 0)}
+        if name in {"remove_port", "recreate_port"}:
+            return {"port": int(arg(3, "port", 0) or 0)}
+        if name == "set_password":
+            # Never include the old/new password itself in activity history.
+            return {"password_changed": True}
+        if name == "set_secret_enabled":
+            return {"enabled": bool(arg(3, "enabled", False))}
+        if name == "set_port_enabled":
+            return {
+                "port": int(arg(3, "port", 0) or 0),
+                "enabled": bool(arg(4, "enabled", False)),
+            }
+        if name == "disconnect_client_session":
+            return {"session_removed": bool(result)} if result is not None else {}
+        return {}
+
     for method_name, action in methods.items():
         original = getattr(VPNService, method_name, None)
         if not callable(original):
@@ -79,25 +108,33 @@ def install_cloud_activity_bridge(service: VPNService, settings) -> None:
                 try:
                     result = fn(self, *args, **kwargs)
                 except Exception as exc:
+                    details = operation_details(wrapped_name, args, kwargs)
+                    details["error"] = str(exc)[:600]
                     submit(
                         action_name,
                         server=server,
                         login=login,
                         success=False,
-                        details={"error": str(exc)[:600]},
+                        details=details,
                     )
                     raise
 
+                base_details = operation_details(wrapped_name, args, kwargs, result=result)
                 if wrapped_name == "create_clients_batch":
                     records = list(result or [])
                     if records:
                         for record in records:
                             record_login = str(getattr(record, "login", "") or login)
-                            submit(action_name, server=server, login=record_login, success=True)
+                            details = dict(base_details)
+                            details.update({
+                                "remote_address": str(getattr(record, "remote_address", "") or ""),
+                                "ports": [int(port) for port in list(getattr(record, "ports", []) or [])],
+                            })
+                            submit(action_name, server=server, login=record_login, success=True, details=details)
                     else:
-                        submit(action_name, server=server, login=login, success=True)
+                        submit(action_name, server=server, login=login, success=True, details=base_details)
                 else:
-                    submit(action_name, server=server, login=login, success=True)
+                    submit(action_name, server=server, login=login, success=True, details=base_details)
                 return result
 
             wrapper.__name__ = getattr(fn, "__name__", wrapped_name)
