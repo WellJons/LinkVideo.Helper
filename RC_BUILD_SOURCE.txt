@@ -1,3 +1,0 @@
-LinkVideo.Helper 3.0.13 PostgreSQL recovery RC source.
-Client restore is exposed only inside Search and Manage.
-Normal active search and mutations remain direct MikroTik.
