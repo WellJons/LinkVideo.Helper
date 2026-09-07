@@ -124,8 +124,10 @@ def install_sheets_emergency_ui() -> None:
     VPNServersPage._build = build
     _UI_INSTALLED = True
 
-    # This hook runs after all legacy/Sheets VPN-server wrappers are composed and
-    # before lazy pages are constructed, so the final desktop surface can be
-    # simplified without touching the underlying recovery/audit mechanics.
+    # These hooks run after all legacy/Sheets VPN-server wrappers are composed
+    # and before lazy pages are constructed. First apply general operator polish,
+    # then remove the obsolete RouterOS LV Scheduler surface completely.
     from linkvideo_vpn_helper.ui.operator_ux_polish import install_operator_ux_polish
     install_operator_ux_polish()
+    from linkvideo_vpn_helper.ui.vpn_servers_centralized_ui import install_vpn_servers_centralized_ui
+    install_vpn_servers_centralized_ui()
