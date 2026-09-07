@@ -32,6 +32,7 @@ _SOURCE_LABELS = {
     "RouterOS event": "MikroTik → БД",
     "VPNSync startup": "VPNSync",
     "server": "Сервер",
+    "archive": "Восстановление",
 }
 
 _ACTION_LABELS = {
@@ -51,6 +52,9 @@ _ACTION_LABELS = {
     "nat.remove_port": "Удаление NAT-порта",
     "nat.enabled_change": "Включение / отключение NAT-порта",
     "nat.recreate": "Пересоздание NAT-порта",
+    "archive.restore.preflight": "Проверка перед восстановлением",
+    "archive.restore.server_preflight": "Проверка сервера перед восстановлением",
+    "archive.restore": "Восстановление VPN-клиента",
     "created": "Создано",
     "changed": "Изменено",
     "deleted": "Удалено",
@@ -99,6 +103,7 @@ class VPNActivityPage(QWidget):
         self.source_filter.addItem("MikroTik /listen", "RouterOS listen")
         self.source_filter.addItem("MikroTik → БД", "RouterOS event")
         self.source_filter.addItem("VPNSync startup", "VPNSync startup")
+        self.source_filter.addItem("Восстановление", "archive")
         self.source_filter.currentIndexChanged.connect(lambda _index: self.refresh())
         self.refresh_button = QPushButton("Обновить")
         self.refresh_button.setProperty("role", "primary")
@@ -191,6 +196,14 @@ class VPNActivityPage(QWidget):
                 if key in details:
                     values.append(f"{label} {details.get(key)}")
             return " · ".join(values)
+
+        if action.startswith("archive.restore"):
+            conflicts = list(details.get("conflicts") or [])
+            if conflicts:
+                return f"Восстановление заблокировано · конфликтов: {len(conflicts)}"
+            restored = details.get("restored_objects")
+            if restored is not None:
+                return f"Создано объектов RouterOS: {restored}"
 
         error_text = str(details.get("error") or "").strip()
         if error_text:
