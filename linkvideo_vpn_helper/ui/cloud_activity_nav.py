@@ -10,6 +10,12 @@ def install_cloud_activity_nav() -> None:
     if _INSTALLED:
         return
 
+    # VPNSync API credentials are intentionally separate from the Ubuntu SSH
+    # account. Make an authentication failure explicit before any operator can
+    # mistake it for a network failure.
+    from linkvideo_vpn_helper.services.cloud_auth_message_compat import install_cloud_auth_message_compat
+    install_cloud_auth_message_compat()
+
     # Preserve structured VPNSync recovery errors before any cloud-backed
     # support UI is initialized. Active search and normal mutations still go
     # directly to MikroTik.
