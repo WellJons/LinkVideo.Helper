@@ -9,10 +9,9 @@ _INSTALLED = False
 def install_central_retention_guard() -> None:
     """Prevent desktop Helper from owning RouterOS retention automation.
 
-    The central VPNSync DeadlineScheduler is the only supported owner of
-    30/90/365 lifecycle decisions. Existing RouterOS LV scripts are migrated
-    separately by the server rollout tool; this guard prevents employees from
-    reinstalling/re-enabling them from an older UI path.
+    Lifecycle ownership has moved away from per-router LV Scheduler tasks and
+    into the centralized LinkVideo.Cloud service. This guard keeps legacy calls
+    fail-closed even if an old UI path or compatibility hook still invokes them.
     """
     global _INSTALLED
     if _INSTALLED:
@@ -24,8 +23,8 @@ def install_central_retention_guard() -> None:
 
     def managed_centrally(*_args, **_kwargs):
         raise RuntimeError(
-            "Автоматика 30/90/365 теперь управляется центральным LinkVideo.VPNSync. "
-            "Изменять LV Scheduler на MikroTik из Helper больше не требуется."
+            "Локальная LV-автоматика на MikroTik больше не управляется из Helper. "
+            "Жизненный цикл VPN-клиентов перенесён в LinkVideo.Cloud; локальные LV-команды заблокированы."
         )
 
     cls.install_or_update = managed_centrally
@@ -36,6 +35,6 @@ def install_central_retention_guard() -> None:
     event(
         "LV",
         "Desktop retention отключён",
-        "30/90/365 управляется центральным VPNSync; RouterOS LV Scheduler из Helper заблокирован",
+        "Управление жизненным циклом перенесено в LinkVideo.Cloud; RouterOS LV Scheduler из Helper заблокирован",
     )
     _INSTALLED = True
