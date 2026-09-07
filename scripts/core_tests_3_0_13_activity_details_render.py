@@ -20,6 +20,10 @@ def main() -> int:
     ast.parse(nav, filename=nav_path)
 
     assert "install_vpn_activity_details" in nav
+    assert '"archive": "Восстановление"' in compat
+    assert '"retention": "Автоматика"' in compat
+    assert '"archive.restore": "Восстановление VPN-клиента"' in compat
+    assert '"retention.quarantine": "Карантин VPN-клиента"' in compat
     assert 'action == "client.create"' in compat
     assert 'action == "nat.add_ports"' in compat
     assert 'action == "nat.remove_port"' in compat
@@ -29,6 +33,7 @@ def main() -> int:
     assert 'action == "nat.enabled_change"' in compat
     assert 'action == "client.disconnect"' in compat
     assert 'action == "client.delete"' in compat
+    assert 'action.startswith("retention.")' in compat
 
     print("ACTIVITY_DETAILS_RENDER_OK")
     return 0
