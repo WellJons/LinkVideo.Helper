@@ -185,6 +185,8 @@ def main() -> int:
     install_vpn_sheets_coordinator_resilience()
     from linkvideo_vpn_helper.ui.cloud_settings_integration import install_cloud_settings_ui
     install_cloud_settings_ui()
+    from linkvideo_vpn_helper.services.cloud_http_error_compat import install_cloud_http_error_details
+    install_cloud_http_error_details()
     from linkvideo_vpn_helper.ui.vpn_sheets_emergency_only import install_sheets_emergency_runtime
     install_sheets_emergency_runtime()
     # Activity/history is read-only support functionality. It never replaces
