@@ -22,6 +22,8 @@ def install_cloud_activity_nav() -> None:
     # MikroTik.
     from linkvideo_vpn_helper.ui.cloud_archive_search_integration import install_cloud_archive_search
     install_cloud_archive_search()
+    from linkvideo_vpn_helper.ui.cloud_archive_completion_compat import install_cloud_archive_completion_compat
+    install_cloud_archive_completion_compat()
 
     # History must show the actual non-secret parameters of employee actions
     # (ports, enabled/disabled state, remote address), not only the action name.
