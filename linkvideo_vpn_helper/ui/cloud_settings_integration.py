@@ -208,7 +208,7 @@ def install_cloud_settings_ui() -> None:
             "Облачный сервер подключён",
             f"{config.base_url} · {auth.get('username', config.username)} · "
             f"RouterOS {health.get('routeros_workers_alive', 0)}/{health.get('routeros_servers', 0)} · "
-            f"время {health.get('business_timezone', 'UTC+3')}",
+            f"время {health.get('business_timezone', 'UTC+7')}",
         )
 
     SettingsPage._build = build
