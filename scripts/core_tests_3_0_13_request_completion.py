@@ -57,6 +57,10 @@ def main() -> None:
     assert "Сервер VPNSync доступен" in auth_message
     assert "SSH (Termius)" in auth_message
 
+    operator = (root / "server/manage_operator.py").read_text(encoding="utf-8")
+    assert "separate from the Ubuntu/SSH account" in operator
+    assert "PBKDF2 hash" in operator
+
     audit_bridge = (root / "linkvideo_vpn_helper/ui/cloud_activity_bridge.py").read_text(encoding="utf-8")
     assert 'settings.value("username"' in audit_bridge
     assert 'audit_details["employee"]' in audit_bridge
