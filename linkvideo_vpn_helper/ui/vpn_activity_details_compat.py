@@ -7,12 +7,28 @@ _INSTALLED = False
 
 
 def install_vpn_activity_details() -> None:
-    """Render useful non-secret parameters for employee RouterOS actions."""
+    """Render useful non-secret parameters for employee and automatic VPN actions."""
     global _INSTALLED
     if _INSTALLED:
         return
 
-    from linkvideo_vpn_helper.ui.pages.vpn_activity_page import VPNActivityPage
+    from linkvideo_vpn_helper.ui.pages import vpn_activity_page as page_module
+
+    VPNActivityPage = page_module.VPNActivityPage
+    page_module._SOURCE_LABELS.update({
+        "archive": "Восстановление",
+        "retention": "Автоматика",
+    })
+    page_module._ACTION_LABELS.update({
+        "archive.restore.preflight": "Проверка перед восстановлением",
+        "archive.restore.server_preflight": "Проверка сервера перед восстановлением",
+        "archive.restore": "Восстановление VPN-клиента",
+        "retention.sleep": "Переход в спящий статус",
+        "retention.quarantine": "Карантин VPN-клиента",
+        "retention.delete": "Автоматическое удаление VPN-клиента",
+        "retention.cancelled_active": "Автоматика отменена: клиент активен",
+        "retention.error": "Ошибка автоматики VPN",
+    })
 
     original = VPNActivityPage._details_text
 
@@ -52,6 +68,16 @@ def install_vpn_activity_details() -> None:
             return "VPN-сессия отключена" if bool(details.get("session_removed")) else "Активная VPN-сессия не найдена"
         if action == "client.delete":
             return "VPN-клиент удалён с MikroTik"
+
+        if action.startswith("retention."):
+            if action == "retention.cancelled_active":
+                active = details.get("active_sessions")
+                return f"Найдена активная VPN-сессия: {active}" if active is not None else "Клиент снова активен"
+            if action == "retention.sleep":
+                return f"Следующее действие: {details.get('next_action_at', '—')}"
+            error_text = str(details.get("error") or "").strip()
+            if error_text:
+                return error_text
 
         return original(row)
 
