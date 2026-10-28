@@ -39,6 +39,11 @@ class BillingLoginPanel(Card):
     def login_verified(self) -> bool:
         return bool(self._token)
 
+    @property
+    def session_token(self) -> str:
+        """Transient bearer secret; never persist or log."""
+        return self._token
+
     def _build(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(19, 17, 19, 17)
@@ -208,9 +213,8 @@ class BillingLoginPanel(Card):
             return
         self.status.set_status("Вход выполнен", "success")
         self.message.setText(
-            "CRM выдала токен входа. Он хранится только в памяти. "
-            "Для загрузки клиентов и тарифов осталось подтвердить "
-            "заголовок авторизации последующих запросов."
+            "Вход выполнен. Теперь можно искать клиентов и просматривать "
+            "тарифы. Токен хранится только до выхода из программы."
         )
 
     def _drop_session(self):
