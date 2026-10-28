@@ -11,11 +11,11 @@ version = (ROOT / "linkvideo_vpn_helper" / "version.py").read_text(encoding="utf
 assert re.search(r'^APP_VERSION\s*=\s*"\d+\.\d+\.\d+"\s*$', version, re.MULTILINE)
 assert '"peach_light": (' not in theme
 assert '"forest_green": (' not in theme
-for name in ("Розовое молочко", "Светлая LinkVideo", "Лавандовая", "Тёмно-синяя", "Полуночная", "Тёмная вишня", "Графитовая"):
+for name in ("Розовое молочко", "LinkVideo · оранжевая", "Лавандовая", "Тёмно-синяя", "Полуночная", "Тёмная вишня", "Графитовая"):
     assert name in theme, name
 assert 'def _apply_qt_palette' in theme
 assert 'QPalette.ColorRole.Highlight' in theme
-assert 'params = Card(kind="accent")' in create
+assert 'params = Card(subtle=True)' in create
 assert 'ClientWorkspaceCard' in search
 assert 'QPalette.ColorRole.Highlight' in components
 print("CORE TESTS 3.0.2 THEME/POLISH OK")
