@@ -33,7 +33,9 @@ assert settings_path("Россия") == "/operators/241/settings"
 assert settings_path("Казахстан") == "/operators/1721/settings"
 assert settings_path("Беларусь") == "/operators/1741/settings"
 assert ADMIN_URL == "https://operator.b2o.goodline.info"
-assert VERIFIED_CREATE_CROSS_SHARING == {"Россия": 0, "Казахстан": 1}
+assert VERIFIED_CREATE_CROSS_SHARING == {
+    "Россия": 0, "Казахстан": 1, "Беларусь": 1,
+}
 assert creation_path("Россия") == "/operators/241/clients"
 assert creation_path("Казахстан") == "/operators/1721/clients"
 assert creation_path("Беларусь") == "/operators/1741/clients"
@@ -126,6 +128,7 @@ for changed in (
 # Observed successful POSTs:
 # Russia, operator 241, type "1", billing=1, sharing=0.
 # Kazakhstan, operator 1721, type "1", billing=1, sharing=1.
+# Belarus, operator 1741, type "1", billing=1, sharing=1.
 verified_draft = B2OClientDraft(
     country="Россия", name="Тест", login="fictional-client",
     password="fictional-password", phone="70000000000",
@@ -156,6 +159,17 @@ expected_kz_payload = {
 }
 assert kz_draft.verified_payload() == expected_kz_payload
 assert type(kz_draft.verified_payload()["cross_sharing_enabled"]) is int
+
+by_draft = B2OClientDraft(**{
+    **verified_draft.__dict__, "country": "Беларусь", "cross_sharing": True,
+})
+expected_by_payload = {
+    **expected_payload, "cross_sharing_enabled": 1,
+}
+assert by_draft.verified_payload() == expected_by_payload
+assert type(by_draft.verified_payload()["account_type"]) is str
+assert type(by_draft.verified_payload()["cross_sharing_enabled"]) is int
+assert type(by_draft.verified_payload()["push_to_billing"]) is int
 
 for forbidden in (
     {"country": "Казахстан"}, {"country": "Беларусь"},
@@ -223,10 +237,28 @@ with patch("urllib.request.urlopen", side_effect=mock_post_kz):
 assert len(kz_posts) == 1
 assert fake.requests[-1].endswith("/operators/1721/clients/12345")
 
+by_posts = []
+
+def mock_post_by(request, timeout):
+    assert timeout == 25
+    assert request.get_method() == "POST"
+    assert request.full_url == BASE_URL + "/operators/1741/clients"
+    assert request.get_header("Token") == fake.session_token
+    assert request.get_header("Content-type") == "application/json"
+    assert json.loads(request.data.decode("utf-8")) == expected_by_payload
+    by_posts.append(request)
+    return FakeReply()
+
+with patch("urllib.request.urlopen", side_effect=mock_post_by):
+    by_result = manager.create_client(by_draft)
+    assert by_result == B2OCreatedClient(12345, True)
+assert len(by_posts) == 1, "A verified Belarus creation must perform one POST"
+assert fake.requests[-1].endswith("/operators/1741/clients/12345")
+
 # Reject unsupported variants before ANY POST, even for authenticated KZ.
 for unsupported_kz in (
     {"cross_sharing": False}, {"create_in_billing": False},
-    {"account_type": "business-unverified"}, {"country": "Беларусь"},
+    {"account_type": "business-unverified"},
 ):
     draft = B2OClientDraft(**{**kz_draft.__dict__, **unsupported_kz})
     with patch("urllib.request.urlopen") as urlopen:
@@ -236,6 +268,22 @@ for unsupported_kz in (
             pass
         else:
             raise AssertionError(f"Unverified KZ variant accepted: {unsupported_kz}")
+        urlopen.assert_not_called()
+
+# Belarus follows the same strict policy as Kazakhstan: do not infer
+# a business type, cross-sharing=0 or creation without billing.
+for unsupported_by in (
+    {"cross_sharing": False}, {"create_in_billing": False},
+    {"account_type": "business-unverified"},
+):
+    draft = B2OClientDraft(**{**by_draft.__dict__, **unsupported_by})
+    with patch("urllib.request.urlopen") as urlopen:
+        try:
+            manager.create_client(draft)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"Unverified Belarus variant accepted: {unsupported_by}")
         urlopen.assert_not_called()
 
 with patch("urllib.request.urlopen", side_effect=mock_post):
@@ -353,10 +401,25 @@ with tempfile.TemporaryDirectory() as temp:
     assert widget.create_button.isEnabled()
     widget.country.setCurrentIndex(2)
     assert "1741" in widget.message.text()
-    assert not widget.create_button.isEnabled()
+    assert widget.cross_share.isChecked()
+    assert widget.create_button.isEnabled(), "Verified BY POST must be enabled"
+    assert widget.draft().verified_payload() == {
+        "account_type": "1", "client_name": "Пример",
+        "cross_sharing_enabled": 1, "login": "demo_operator_01",
+        "password": widget.password.text(), "phone": "",
+        "push_to_billing": 1,
+    }
     widget._on_access(widget._attempt, "Беларусь", True, None)
     assert "1741" in widget.message.text()
-    assert not widget.create_button.isEnabled()
+    assert widget.create_button.isEnabled()
+    widget.cross_share.setChecked(False)
+    assert not widget.create_button.isEnabled(), "Unknown BY sharing=0 must be blocked"
+    widget.cross_share.setChecked(True)
+    assert widget.create_button.isEnabled()
+    widget.account_type.setCurrentIndex(1)
+    assert not widget.create_button.isEnabled(), "Business type unverified for BY"
+    widget.account_type.setCurrentIndex(0)
+    assert widget.create_button.isEnabled()
     widget.country.setCurrentIndex(0)
     assert not widget.cross_share.isChecked()
     assert widget.in_billing.isChecked()
