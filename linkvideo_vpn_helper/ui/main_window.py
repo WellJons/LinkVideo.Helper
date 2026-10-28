@@ -367,7 +367,7 @@ class MainWindow(QMainWindow):
             button.setStyleSheet("QPushButton { text-align:center; padding-left:0px; }" if collapsed else "")
         self.settings_btn.setText("" if collapsed else "Настройки")
         self.settings_btn.setToolTip("Настройки" if collapsed else "")
-        self.settings_btn.setStyleSheet("QPushButton { text-align:center; padding-left:0px; }" if collapsed else "")
+        self.settings_btn.setStyleSheet("QPushButton { text-align:center; padding-left:0px; }")
 
     def _position_toast(self):
         if not hasattr(self, "toast") or not self.toast.isVisible():
