@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """B2O operator client form. Writes restricted to the captured RU payload."""
 
+import re
 import secrets
 import string
 import threading
@@ -19,6 +20,12 @@ from linkvideo_vpn_helper.services.b2o_client_admin import (
     B2OOperatorClientManager, operator_admin_url, operator_for_country,
 )
 from linkvideo_vpn_helper.ui.components import Card, StatusPill
+
+
+def safe_b2o_error_code(exc: Exception) -> str:
+    """Expose only a numeric HTTP status, not API response or credentials."""
+    found = re.search(r"\bHTTP\s+(\d{3})\b", str(exc))
+    return f"HTTP {found.group(1)}" if found else type(exc).__name__
 
 
 def client_credentials_message(login: str, password: str) -> str:
@@ -270,8 +277,8 @@ class B2OClientCreationWidget(QWidget):
                 # GET does not grant write permission, but detects expired B2O
                 # sessions before a non-idempotent POST is sent.
                 self.api.check_access(draft.country, token=token)
-            except Exception:
-                self.createReady.emit(None, "preflight")
+            except Exception as exc:
+                self.createReady.emit(None, "preflight:" + safe_b2o_error_code(exc))
                 return
             try:
                 result = self.api.create_client(draft, token=token)
@@ -326,11 +333,12 @@ class B2OClientCreationWidget(QWidget):
                 "Проверьте логин в админке B2O перед любой повторной отправкой."
             )
             self.access_status.set_status("Проверьте B2O", "warning")
-        elif error == "preflight":
+        elif isinstance(error, str) and error.startswith("preflight:"):
+            code = error.split(":", 1)[1]
             self.message.setText(
-                "Не удалось проверить отдельную сессию B2O до отправки POST. "
+                f"Проверка доступа B2O не прошла ({code}). POST не отправлялся. "
                 "Войдите в B2O через раздел архива и нажмите «Проверить B2O». "
-                "Статус нового биллинга к этому входу не относится. Клиент не отправлялся."
+                "Статус нового биллинга к этому входу не относится."
             )
             self.access_status.set_status("Нет доступа B2O", "warning")
         else:
@@ -351,10 +359,12 @@ class B2OClientCreationWidget(QWidget):
     def _set_form_busy(self, busy: bool):
         for field in (
             self.country, self.in_billing, self.cross_share, self.name,
-            self.login, self.password, self.phone, self.account_type,
+            self.login, self.password, self.phone,
             self.generate_password, self.show_password, self.check_access,
         ):
             field.setEnabled(not busy)
+        # Only a single enum has been verified: no misleading dropdown.
+        self.account_type.setEnabled(False)
 
     def _toggle_password_visibility(self, visible: bool):
         mode = QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
@@ -410,8 +420,8 @@ class B2OClientCreationWidget(QWidget):
                 self.api.check_access(country, token=token)
                 self.accessReady.emit(attempt, country, True, None)
             except Exception as exc:
-                # Don't surface response bodies, headers or token in error UI.
-                self.accessReady.emit(attempt, country, False, type(exc).__name__)
+                # Do not expose response bodies, headers or the B2O token.
+                self.accessReady.emit(attempt, country, False, safe_b2o_error_code(exc))
 
         threading.Thread(target=work, name="b2o-operator-access", daemon=True).start()
 
