@@ -643,11 +643,26 @@ class TariffsPage(QWidget):
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
         self.services_table.setMinimumHeight(320)
+        # Keep the legacy table model available to diagnostics/tests, but the
+        # customer-facing control is a compact scrollable stack of camera cards.
+        self.services_table.hide()
         root.addWidget(self.services_table)
+        self.camera_scroll = QScrollArea()
+        self.camera_scroll.setObjectName("BillingCameraCardsScroll")
+        self.camera_scroll.setWidgetResizable(True)
+        self.camera_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.camera_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.camera_scroll.verticalScrollBar().setSingleStep(26)
+        self.camera_scroll.setMaximumHeight(490)
+        self.camera_scroll.setMinimumHeight(90)
+        self.camera_cards_host = QWidget()
+        self.camera_cards = QVBoxLayout(self.camera_cards_host)
+        self.camera_cards.setContentsMargins(2, 2, 2, 2)
+        self.camera_cards.setSpacing(9)
+        self.camera_scroll.setWidget(self.camera_cards_host)
+        root.addWidget(self.camera_scroll)
         self.services_hint = QLabel(
-            "Кнопка «Тариф» открывает подбор для конкретной камеры: "
-            "страна, валюта, срок архива и календарь. "
-            "Применение через API пока недоступно."
+            "Выберите камеру и тариф. Изменение выполняется после подтверждения."
         )
         self.services_hint.setObjectName("TinyMuted")
         self.services_hint.setWordWrap(True)
@@ -670,6 +685,7 @@ class TariffsPage(QWidget):
         self.login.setEnabled(not busy)
         self.search_btn.setEnabled(not busy)
         self.services_table.setEnabled(not busy)
+        self.camera_scroll.setEnabled(not busy)
         self.catalog_btn.setEnabled(
             not busy and self.client is not None and self.gateway.configured
             and callable(getattr(self.gateway, "reference_catalog", None))
@@ -759,9 +775,12 @@ class TariffsPage(QWidget):
         self.services_hint.setText(
             "Список камер ещё не загружен из CRM."
             if not client.services_loaded and not client.services else
-            "«Тариф» открывает подбор для выбранной камеры. "
-            "Доступны фильтр дней и календарь; применение через API пока отключено."
+            f"Камер: {len(client.services)} · смена тарифа с подтверждением"
         )
+        while self.camera_cards.count():
+            entry = self.camera_cards.takeAt(0)
+            if entry.widget():
+                entry.widget().deleteLater()
         for row, service in enumerate(client.services):
             cells = (
                 service.camera_name + ("\n" + service.camera_id if service.camera_id else ""),
@@ -813,6 +832,55 @@ class TariffsPage(QWidget):
             actions_row.addWidget(secondary)
             self.services_table.setCellWidget(row, 6, actions)
             self.services_table.setRowHeight(row, 58)
+            # New presentation: full-width readable camera card with one
+            # primary action. No clipped 2nd button or grid-like columns.
+            cam_card = Card(subtle=True)
+            cam_card.setObjectName("BillingCameraCard")
+            cam_row = QHBoxLayout(cam_card)
+            cam_row.setContentsMargins(16, 13, 16, 13)
+            cam_row.setSpacing(14)
+            details = QVBoxLayout()
+            details.setSpacing(5)
+            title_row = QHBoxLayout()
+            cam_name = QLabel(service.camera_name or f"Камера {service.camera_id}")
+            cam_name.setObjectName("Value")
+            title_row.addWidget(cam_name)
+            cam_status = StatusPill(service.status, "success" if service.status == "Активный" else "neutral")
+            title_row.addWidget(cam_status)
+            title_row.addStretch(1)
+            details.addLayout(title_row)
+            tariff_label = QLabel(
+                f"Тариф: {service.tariff_name or '—'}"
+                f"   ·   ID камеры: {service.camera_id}"
+            )
+            tariff_label.setObjectName("Muted")
+            tariff_label.setWordWrap(True)
+            details.addWidget(tariff_label)
+            if service.total_text:
+                total_label = QLabel(f"Итого: {service.total_text}")
+                total_label.setObjectName("TinyMuted")
+                details.addWidget(total_label)
+            cam_row.addLayout(details, 1)
+            change_button = QPushButton("Изменить тариф")
+            change_button.setProperty("role", "soft")
+            change_button.setObjectName("BillingCameraChangeTariff")
+            change_button.setMinimumWidth(162)
+            change_button.setMinimumHeight(42)
+            change_button.setEnabled(
+                bool(self.gateway.configured)
+                and callable(getattr(self.gateway, "reference_catalog", None))
+                and not self._busy
+            )
+            change_button.clicked.connect(
+                lambda _checked=False, srv=service: self._request_service_catalog(srv)
+            )
+            cam_row.addWidget(change_button)
+            self.camera_cards.addWidget(cam_card)
+        # Avoid nested scrolling for a short camera list. For larger lists
+        # only the card stack scrolls, in small predictable pixel increments.
+        self.camera_scroll.setFixedHeight(
+            min(490, max(95, len(client.services) * 99 + 16))
+        )
         self.tabs.setCurrentIndex(1)
 
     def _request_catalog(self):
