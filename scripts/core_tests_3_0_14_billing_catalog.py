@@ -125,9 +125,12 @@ app = QApplication.instance() or QApplication([])
 dialog = TariffCatalogDialog(reference, client.legal_type)
 assert dialog.table.rowCount() == 2
 assert dialog.period_table.rowCount() == 3
-assert dialog.table.item(0, 1).text() == "3680 тг."
+assert dialog.period_table.item(0, 1).text() == "0"
+assert dialog.archive_days.value() == 0
+assert dialog.table.item(0, 2).text() == "3680 тг."
 dialog.filter.setText("Тариф 3")
-assert dialog.table.isRowHidden(0) and not dialog.table.isRowHidden(1)
+assert dialog.table.rowCount() == 1
+assert dialog.table.item(0, 0).text() == "Тариф 3"
 dialog.close()
 
 page = TariffsPage(gateway=gateway)
