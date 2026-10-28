@@ -10,7 +10,7 @@ import threading
 from datetime import date
 
 from PySide6.QtCore import QDate, QSettings, Qt, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices
+from PySide6.QtGui import QColor, QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QAbstractItemView, QCalendarWidget, QCheckBox, QComboBox, QDateEdit,
     QDialog, QFormLayout, QMenu, QGridLayout, QHeaderView, QHBoxLayout,
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from linkvideo_vpn_helper.services.billing_catalog import TariffReferenceCatalog
 from linkvideo_vpn_helper.services.billing_search_parser import BillingSearchHit
+from linkvideo_vpn_helper.services.b2o_camera_preview import fetch_camera_preview
 from linkvideo_vpn_helper.services.billing_tariff_filter import (
     archive_days_from_name, bitrate_mbps_from_name, select_tariffs,
 )
@@ -447,6 +448,7 @@ class TariffCatalogDialog(QDialog):
 class TariffsPage(QWidget):
     searchReady = Signal(int, object, object)
     operationReady = Signal(int, str, object, object)
+    cameraPreviewReady = Signal(int, str, str, object)
 
     def __init__(self, parent=None, *, gateway: BillingGateway | None = None,
                  settings: QSettings | None = None):
@@ -457,11 +459,15 @@ class TariffsPage(QWidget):
         self._owned_transport: BillingTokenTransport | None = None
         self._request_id = 0
         self._busy = False
+        self._preview_generation = 0
+        self._preview_widgets = {}
+        self._unknown_status_changes = set()
         self._uncertain_tariff_changes: set[tuple[str, str, str, date]] = set()
         self.client: BillingClient | None = None
         self._build()
         self.searchReady.connect(self._on_search)
         self.operationReady.connect(self._on_operation)
+        self.cameraPreviewReady.connect(self._on_camera_preview)
         self.billing_login.sessionChanged.connect(self._on_billing_session_changed)
 
     def _build(self):
@@ -654,6 +660,8 @@ class TariffsPage(QWidget):
     def _on_billing_session_changed(self, logged_in: bool):
         """Bind CRM login to the existing verified read-only API workflows."""
         self._request_id += 1  # Ignore any in-flight request from former account.
+        self._preview_generation += 1
+        self._preview_widgets.clear()
         self.client = None
         self.result_host.hide()
         self.empty_card.show()
@@ -962,6 +970,10 @@ class TariffsPage(QWidget):
 
     def _render_client(self, client: BillingClient):
         validate_client(client)
+        self._preview_generation += 1
+        generation = self._preview_generation
+        self._preview_widgets.clear()
+        b2o_token = str(self.settings.value("b2o/token", "", str) or "").strip()
         self.empty_card.hide()
         self.result_host.show()
         self.client_heading.setText(client.display_name or client.login)
@@ -1075,9 +1087,10 @@ class TariffsPage(QWidget):
             thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
             thumb.setFixedSize(70, 58)
             thumb.setToolTip(
-                "Превью через B2O появится после подтверждения соответствия "
-                "id_camera_vc и ID камеры оператора. Не подставляем произвольное видео."
+                f"B2O ID камеры: {service.camera_vc_id or 'неизвестен'}. "
+                "Получаем миниатюру через preview_path."
             )
+            self._preview_widgets[service.id] = thumb
             thumb.setStyleSheet(
                 "QLabel#BillingCameraPreview { background: #e9edf2; "
                 "color: #7b8591; border: 1px solid #dce1e7; border-radius: 7px; }"
@@ -1142,6 +1155,54 @@ class TariffsPage(QWidget):
         )
         self._update_bulk_button()
         self.tabs.setCurrentIndex(1)
+        if b2o_token:
+            # Bound concurrent lookups; do not spawn a thread for each of
+            # potentially thousands of cameras on a customer account.
+            candidates = [
+                s for s in client.services[:12] if s.camera_vc_id
+            ]
+            if candidates:
+                threading.Thread(
+                    target=self._load_previews,
+                    args=(generation, client.id, client.country, candidates, b2o_token),
+                    name="billing-b2o-thumbnail-loader", daemon=True
+                ).start()
+        else:
+            for thumb in self._preview_widgets.values():
+                thumb.setToolTip("Для превью выполните вход в B2O в разделе архива.")
+        self.tabs.setCurrentIndex(1)
+
+    def _load_previews(self, generation, account_id, country, services, token):
+        # No QPixmap / QWidget access outside the GUI thread.
+        for service in services:
+            try:
+                image_data = fetch_camera_preview(
+                    country, service.camera_vc_id, token
+                )
+            except Exception:
+                image_data = None
+            self.cameraPreviewReady.emit(
+                generation, account_id, service.id, image_data
+            )
+
+    def _on_camera_preview(self, generation, account_id, camera_id, image_data):
+        if generation != self._preview_generation:
+            return
+        if self.client is None or self.client.id != account_id:
+            return
+        thumb = self._preview_widgets.get(camera_id)
+        if thumb is None:
+            return
+        if isinstance(image_data, bytes):
+            pixmap = QPixmap()
+            if pixmap.loadFromData(image_data):
+                thumb.setPixmap(pixmap.scaled(
+                    thumb.size(), Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                ))
+                thumb.setText("")
+                return
+        thumb.setText("Нет\\nпревью")
 
     def _billing_external_action(self, action: str, service: BillingService):
         # There is no verified CRM API for disable/transfer/history yet.
