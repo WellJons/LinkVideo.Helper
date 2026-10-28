@@ -14,16 +14,17 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QAbstractItemView, QCalendarWidget, QComboBox, QDateEdit,
     QDialog, QFormLayout, QMenu, QGridLayout, QHeaderView, QHBoxLayout,
-    QLabel, QLineEdit, QPushButton, QSpinBox, QTabWidget, QTableWidget,
-    QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
+    QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton, QScrollArea,
+    QSpinBox, QTabWidget, QTableWidget, QTableWidgetItem, QTextEdit,
+    QVBoxLayout, QWidget,
 )
 
 from linkvideo_vpn_helper.services.billing_catalog import TariffReferenceCatalog
 from linkvideo_vpn_helper.services.billing_tariff_filter import (
-    archive_days_from_name, select_tariffs,
+    archive_days_from_name, bitrate_mbps_from_name, select_tariffs,
 )
-from linkvideo_vpn_helper.services.billing_readonly_gateway import BillingReadOnlyGateway
-from linkvideo_vpn_helper.services.billing_token_transport import BillingTokenTransport
+from linkvideo_vpn_helper.services.billing_editable_gateway import BillingEditableGateway, TariffChangeReceipt
+from linkvideo_vpn_helper.services.billing_token_transport import BillingTokenTransport, BillingWriteOutcomeUnknown
 from linkvideo_vpn_helper.services.billing_gateway import (
     BillingClient, BillingGateway, BillingNotConfigured, BillingPermissionDenied,
     BillingService, BillingValidationError, TariffChange, TariffOption,
@@ -353,10 +354,22 @@ class TariffsPage(QWidget):
         self.page_layout = root
         root.addWidget(PageHeader(
             "Клиенты и тарифы",
-            "Поиск абонентов, тарифы и создание клиентов у операторов B2O.",
+            "Поиск, камеры и управление тарифами.",
         ))
-        self.billing_login = BillingLoginPanel(self.settings, self)
-        root.addWidget(self.billing_login)
+        # The CRM is a separate token-based service. B2O credentials can be
+        # entered into the same styled form, but an unrelated B2O token cannot
+        # simply be reused against the CRM host.
+        self.billing_dialog = QDialog(self)
+        self.billing_dialog.setObjectName("BillingAuthenticationDialog")
+        self.billing_dialog.setWindowTitle("Вход в биллинг LinkVideo")
+        self.billing_dialog.setMinimumWidth(660)
+        login_layout = QVBoxLayout(self.billing_dialog)
+        login_layout.setContentsMargins(14, 14, 14, 14)
+        self.billing_login = BillingLoginPanel(self.settings, self.billing_dialog)
+        login_layout.addWidget(self.billing_login)
+        self.billing_login.sessionChanged.connect(
+            lambda ok: self.billing_dialog.accept() if ok else None
+        )
 
         self.workspace_tabs = QTabWidget()
         self.workspace_tabs.setObjectName("SettingsTabs")
@@ -385,9 +398,9 @@ class TariffsPage(QWidget):
         title_row.addStretch(1)
         title_row.addWidget(self.api_status)
         search.addLayout(title_row)
-        hint = QLabel("На первом этапе поддерживаются только Беларусь и Казахстан.")
-        hint.setObjectName("TinyMuted")
-        search.addWidget(hint)
+        self.auth_hint = QLabel("Беларусь и Казахстан · Вход в CRM через окно авторизации")
+        self.auth_hint.setObjectName("TinyMuted")
+        search.addWidget(self.auth_hint)
 
         find_row = QHBoxLayout()
         find_row.setSpacing(8)
@@ -401,12 +414,18 @@ class TariffsPage(QWidget):
         self.search_btn.setProperty("role", "primary")
         self.search_btn.setMinimumHeight(44)
         self.search_btn.clicked.connect(self._find_client)
+        self.auth_btn = QPushButton("Войти в CRM")
+        self.auth_btn.setObjectName("BillingShowLogin")
+        self.auth_btn.setMinimumHeight(44)
+        self.auth_btn.setProperty("role", "soft")
+        self.auth_btn.clicked.connect(self._open_login)
         self.open_billing = QPushButton("Открыть биллинг")
         self.open_billing.setObjectName("OpenBillingButton")
         self.open_billing.setMinimumHeight(44)
         self.open_billing.clicked.connect(self._open_billing)
         find_row.addWidget(self.login, 1)
         find_row.addWidget(self.search_btn)
+        find_row.addWidget(self.auth_btn)
         find_row.addWidget(self.open_billing)
         search.addLayout(find_row)
         root.addWidget(self.search_card)
@@ -489,6 +508,9 @@ class TariffsPage(QWidget):
         self.result_host.hide()
         root.addWidget(self.result_host)
         root.addStretch(1)
+        # A short wheel motion must not jump the entire long page.
+        self.page_scroll.verticalScrollBar().setSingleStep(24)
+        self.page_scroll.verticalScrollBar().setPageStep(400)
         self.api_status.set_status(
             "API настроен" if self.gateway.configured else "API не подключён",
             "success" if self.gateway.configured else "warning",
@@ -529,14 +551,18 @@ class TariffsPage(QWidget):
                 self.billing_login.session_token, header_mode="auto"
             )
             self._owned_transport = transport
-            self.gateway = BillingReadOnlyGateway(transport.get_json)
+            self.gateway = BillingEditableGateway(transport)
             self.api_status.set_status("Авторизован", "success")
+            self.auth_btn.setText("Сменить вход")
+            self.auth_hint.setText("CRM подключён · Беларусь и Казахстан")
             self.empty_hint.setText(
                 "Введите логин клиента или номер учётной записи для поиска в CRM."
             )
         else:
             self.gateway = UnconfiguredBillingGateway()
             self.api_status.set_status("API не подключён", "warning")
+            self.auth_btn.setText("Войти в CRM")
+            self.auth_hint.setText("Для поиска и смены тарифа выполните вход в CRM")
             self.empty_hint.setText(
                 "Войдите в корпоративный биллинг, чтобы искать клиентов."
             )
@@ -660,7 +686,7 @@ class TariffsPage(QWidget):
         if not self.gateway.configured:
             self.task.warning(
                 "Вход в биллинг",
-                "Выполните вход в CRM выше, затем повторите поиск.",
+                "Нажмите «Войти в CRM», затем повторите поиск.",
             )
             return
         self._request_id += 1
@@ -942,6 +968,12 @@ class TariffsPage(QWidget):
         if isinstance(error, (BillingNotConfigured, BillingPermissionDenied, BillingValidationError)):
             return str(error)
         return "Нет ответа от сервера или произошла ошибка API. Проверьте соединение и повторите запрос."
+
+    def _open_login(self):
+        # Reuse the existing login panel and DPAPI-stored credentials.
+        if self.billing_login.login_verified:
+            self.billing_login._logout()
+        self.billing_dialog.open()
 
     def _open_billing(self):
         # The OS browser owns the corporate session. Helper never reuses
