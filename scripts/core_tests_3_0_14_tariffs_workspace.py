@@ -55,7 +55,7 @@ assert not page.task.isVisible()
 assert page.findChild(QPushButton, "OpenBillingButton") is page.open_billing
 page.login.setText("lkz_testclient")
 page._find_client()
-assert "API не подключён" in page.task.title.text()
+assert "Вход в биллинг" in page.task.title.text()
 assert page.client is None
 page.close()
 app.processEvents()
