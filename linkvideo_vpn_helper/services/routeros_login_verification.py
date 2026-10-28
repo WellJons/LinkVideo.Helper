@@ -97,11 +97,8 @@ def verify_routeros_user(
         except Exception as exc:
             # Log only the endpoint, stage and exception class, never the
             # raw exception: a protocol exception may contain a secret.
-            try:
-                from linkvideo_vpn_helper.services.app_logging import event
-                event("LOGIN", "Проверка RouterOS", f"{host} · {stage} · {type(exc).__name__}")
-            except Exception:
-                pass
+            from linkvideo_vpn_helper.services.app_logging import event
+            event("LOGIN", "Проверка RouterOS", f"{host} · {stage} · {type(exc).__name__}")
 
             if _is_auth_failure(exc):
                 # Do not try other servers after explicit bad credentials.
