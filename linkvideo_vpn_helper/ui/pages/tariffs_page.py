@@ -485,10 +485,10 @@ class TariffsPage(QWidget):
 
         self.search_card = Card(kind="hero")
         search = QVBoxLayout(self.search_card)
-        search.setContentsMargins(19, 16, 19, 16)
-        search.setSpacing(10)
+        search.setContentsMargins(16, 12, 16, 12)
+        search.setSpacing(7)
         title_row = QHBoxLayout()
-        title = QLabel("Новый биллинг LinkVideo")
+        title = QLabel("Поиск клиента")
         title.setObjectName("SectionTitle")
         self.api_status = StatusPill("API не подключён", "warning")
         title_row.addWidget(title)
@@ -557,8 +557,8 @@ class TariffsPage(QWidget):
 
         self.summary_card = Card()
         summary = QVBoxLayout(self.summary_card)
-        summary.setContentsMargins(20, 17, 20, 18)
-        summary.setSpacing(11)
+        summary.setContentsMargins(16, 13, 16, 13)
+        summary.setSpacing(6)
         header = QHBoxLayout()
         self.client_heading = QLabel("")
         self.client_heading.setObjectName("SectionTitle")
@@ -590,6 +590,9 @@ class TariffsPage(QWidget):
             cl.addWidget(value)
             self.metrics.addWidget(cell, idx // 4, idx % 4)
             self.metric_values[key] = value
+            # Keep the values for diagnostics but avoid a second bulky
+            # four-column data card repeating the client header.
+            cell.hide()
         summary.addLayout(self.metrics)
         result.addWidget(self.summary_card)
 
@@ -600,6 +603,8 @@ class TariffsPage(QWidget):
         self.tabs.addTab(self._make_services(), "Услуги")
         self.tabs.addTab(self._make_unavailable("Финансовые операции будут доступны после подключения API."), "Финансы")
         self.tabs.addTab(self._make_unavailable("Документы пока не загружаются из биллинга."), "Документы")
+        self.tabs.setTabVisible(2, False)
+        self.tabs.setTabVisible(3, False)
         self.tabs.setCurrentIndex(1)
         result.addWidget(self.tabs)
         self.result_host.hide()
@@ -846,7 +851,13 @@ class TariffsPage(QWidget):
         self.client_heading.setText(client.display_name or client.login)
         positive = client.status.strip().casefold() in {"активный", "активен", "active"}
         self.client_status.set_status(client.status or "Неизвестно", "success" if positive else "neutral")
-        self.client_type.setText(" · ".join(x for x in (client.legal_type, client.country) if x))
+        self.client_type.setText(
+            "   ·   ".join(x for x in (
+                client.legal_type, client.country,
+                f"Договор № {client.contract_number}" if client.contract_number else "",
+                f"Услуг: {len(client.services)}" if client.services_loaded else "",
+            ) if x)
+        )
         for key, text in (
             ("login", client.login),
             ("contract", client.contract_number),
