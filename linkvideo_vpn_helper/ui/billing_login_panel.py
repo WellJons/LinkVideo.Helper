@@ -57,18 +57,38 @@ class BillingLoginPanel(Card):
         header.addWidget(self.status)
         root.addLayout(header)
 
+        self.connected_row = QWidget()
+        connected_layout = QHBoxLayout(self.connected_row)
+        connected_layout.setContentsMargins(0, 0, 0, 0)
+        self.connected_account = QLabel("")
+        self.connected_account.setObjectName("Muted")
+        self.change_account = QPushButton("Сменить вход")
+        self.change_account.setObjectName("BillingChangeAccount")
+        self.change_account.clicked.connect(self._logout)
+        connected_layout.addWidget(self.connected_account)
+        connected_layout.addStretch(1)
+        connected_layout.addWidget(self.change_account)
+        root.addWidget(self.connected_row)
+        self.connected_row.hide()
+
+        self.login_form = QWidget()
+        form = QVBoxLayout(self.login_form)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setSpacing(10)
+        root.addWidget(self.login_form)
+
         explanation = QLabel(
-            "Для CRM используются корпоративные данные. Их можно сохранить "
-            "отдельно, под защитой Windows DPAPI. Вход в MikroTik остаётся независимым."
+            "Используйте корпоративные данные, как при входе в B2O. "
+            "Логин можно взять из уже подключённого B2O."
         )
         explanation.setObjectName("TinyMuted")
         explanation.setWordWrap(True)
-        root.addWidget(explanation)
+        form.addWidget(explanation)
 
         stored = self.store.load()
         fields = QHBoxLayout()
         fields.setSpacing(9)
-        self.username = QLineEdit(stored.username)
+        self.username = QLineEdit(stored.username or self.store.b2o_login_name())
         self.username.setObjectName("BillingLoginUser")
         self.username.setPlaceholderText("Логин CRM")
         self.username.setMinimumHeight(42)
@@ -82,7 +102,7 @@ class BillingLoginPanel(Card):
         self.password.textEdited.connect(self._credentials_edited)
         fields.addWidget(self.username, 1)
         fields.addWidget(self.password, 1)
-        root.addLayout(fields)
+        form.addLayout(fields)
 
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
@@ -93,17 +113,17 @@ class BillingLoginPanel(Card):
         self.show_password.toggled.connect(lambda checked: self.password.setEchoMode(
             QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
         ))
-        self.use_saved = QPushButton("Взять данные из Helper")
+        self.use_saved = QPushButton("Логин из B2O")
         self.use_saved.setObjectName("BillingReuseHelperLogin")
         self.use_saved.setToolTip(
-            "Только по нажатию. Не отправляет пароль на сервер и не сохраняет его автоматически."
+            "Подставить логин сотрудника из B2O. Пароли B2O не хранятся."
         )
         self.use_saved.clicked.connect(self._reuse_saved_credentials)
         buttons.addWidget(self.remember)
         buttons.addWidget(self.show_password)
         buttons.addStretch(1)
         buttons.addWidget(self.use_saved)
-        root.addLayout(buttons)
+        form.addLayout(buttons)
 
         footer = QHBoxLayout()
         self.message = QLabel(
@@ -127,7 +147,7 @@ class BillingLoginPanel(Card):
         footer.addWidget(self.clear_btn)
         footer.addWidget(self.logout_btn)
         footer.addWidget(self.submit)
-        root.addLayout(footer)
+        form.addLayout(footer)
 
     def _credentials_edited(self, *_):
         if self._token:
@@ -138,16 +158,15 @@ class BillingLoginPanel(Card):
     def _reuse_saved_credentials(self):
         if self._busy:
             return
-        old = self.store.helper_credentials()
-        if not old.username or not old.password:
-            self.message.setText("В Helper нет сохранённых данных для переноса.")
+        login = self.store.b2o_login_name()
+        if not login:
+            self.message.setText("Сохранённый логин B2O не найден.")
             return
         self._drop_session()
-        self.username.setText(old.username)
-        self.password.setText(old.password)
+        self.username.setText(login)
+        self.password.clear()
         self.message.setText(
-            "Данные подставлены из Helper. Для CRM они ещё не проверены. "
-            "Нажмите «Войти»."
+            "Логин из B2O подставлен. Введите корпоративный пароль и нажмите «Войти»."
         )
 
     def _set_busy(self, busy: bool):
@@ -211,11 +230,11 @@ class BillingLoginPanel(Card):
                 "Токен действует только в текущем окне."
             )
             return
-        self.status.set_status("Вход выполнен", "success")
-        self.message.setText(
-            "Вход выполнен. Теперь можно искать клиентов и просматривать "
-            "тарифы. Токен хранится только до выхода из программы."
-        )
+        self.status.set_status("Bиллинг подключён", "success")
+        self.message.setText("Вход выполнен.")
+        self.connected_account.setText(self.username.text().strip())
+        self.login_form.hide()
+        self.connected_row.show()
 
     def _drop_session(self):
         was_verified = bool(self._token)
@@ -229,6 +248,8 @@ class BillingLoginPanel(Card):
             return
         self._attempt += 1
         self._drop_session()
+        self.connected_row.hide()
+        self.login_form.show()
         self.status.set_status("Не подключён", "neutral")
         self.message.setText(
             "Вы вышли из CRM в Helper. Сохранённые данные остались "
@@ -241,6 +262,8 @@ class BillingLoginPanel(Card):
         self._attempt += 1
         self._drop_session()
         self.store.clear()
+        self.connected_row.hide()
+        self.login_form.show()
         self.username.clear()
         self.password.clear()
         self.remember.setChecked(False)
