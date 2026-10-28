@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Tiny consistent navigation pictograms drawn by Qt, without web assets."""
 
-from PySide6.QtCore import QByteArray
+from PySide6.QtCore import QByteArray, Qt
 from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
@@ -30,7 +30,7 @@ def navigation_icon(key: str, *, color: str = "#D8E0E8", pixels: int = 20) -> QI
         f'stroke-linecap="round" stroke-linejoin="round">{drawing}</svg>'
     )
     image = QPixmap(size, size)
-    image.fill(__import__("PySide6.QtCore", fromlist=["Qt"]).Qt.GlobalColor.transparent)
+    image.fill(Qt.GlobalColor.transparent)
     painter = QPainter(image)
     renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
     renderer.render(painter)
