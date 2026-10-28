@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
 )
 
 from linkvideo_vpn_helper.services.billing_catalog import TariffReferenceCatalog
+from linkvideo_vpn_helper.services.billing_readonly_gateway import BillingReadOnlyGateway
+from linkvideo_vpn_helper.services.billing_token_transport import BillingTokenTransport
 from linkvideo_vpn_helper.services.billing_gateway import (
     BillingClient, BillingGateway, BillingNotConfigured, BillingPermissionDenied,
     BillingService, BillingValidationError, TariffChange, TariffOption,
@@ -228,12 +230,14 @@ class TariffsPage(QWidget):
         self.setObjectName("TariffsPage")
         self.settings = settings if settings is not None else QSettings("LinkVideo", "LinkVideo.Helper")
         self.gateway = gateway if gateway is not None else UnconfiguredBillingGateway()
+        self._owned_transport: BillingTokenTransport | None = None
         self._request_id = 0
         self._busy = False
         self.client: BillingClient | None = None
         self._build()
         self.searchReady.connect(self._on_search)
         self.operationReady.connect(self._on_operation)
+        self.billing_login.sessionChanged.connect(self._on_billing_session_changed)
 
     def _build(self):
         self.page_scroll, self.page_canvas, root = build_page_scaffold(
@@ -380,6 +384,49 @@ class TariffsPage(QWidget):
             "API настроен" if self.gateway.configured else "API не подключён",
             "success" if self.gateway.configured else "warning",
         )
+        self.search_btn.setEnabled(bool(self.gateway.configured))
+        if not self.gateway.configured:
+            self.empty_hint.setText(
+                "Войдите в корпоративный биллинг, чтобы искать клиентов."
+            )
+
+    def _on_billing_session_changed(self, logged_in: bool):
+        """Bind CRM login to the existing verified read-only API workflows."""
+        self._request_id += 1  # Ignore any in-flight request from former account.
+        self.client = None
+        self.result_host.hide()
+        self.empty_card.show()
+        self.services_table.setRowCount(0)
+        self._set_busy(False)
+        self.task.hide()
+        old = self._owned_transport
+        self._owned_transport = None
+        if old is not None:
+            # Do not block Qt waiting for an old HTTP request to finish.
+            old.token = ""
+            threading.Thread(
+                target=old.close, name="crm-close-session", daemon=True
+            ).start()
+
+        if logged_in and self.billing_login.session_token:
+            transport = BillingTokenTransport(
+                self.billing_login.session_token, header_mode="auto"
+            )
+            self._owned_transport = transport
+            self.gateway = BillingReadOnlyGateway(transport.get_json)
+            self.api_status.set_status("Авторизован", "success")
+            self.empty_hint.setText(
+                "Введите логин клиента или номер учётной записи для поиска в CRM."
+            )
+        else:
+            self.gateway = UnconfiguredBillingGateway()
+            self.api_status.set_status("API не подключён", "warning")
+            self.empty_hint.setText(
+                "Войдите в корпоративный биллинг, чтобы искать клиентов."
+            )
+        self.all_tariffs_page.set_gateway(self.gateway)
+        self.search_btn.setEnabled(bool(self.gateway.configured))
+        self.catalog_btn.setEnabled(False)
 
     def _make_information(self) -> QWidget:
         container = Card()
@@ -487,8 +534,8 @@ class TariffsPage(QWidget):
             return
         if not self.gateway.configured:
             self.task.warning(
-                "API не подключён",
-                "Сайт CRM можно открыть в браузере, но поиск через Helper ещё не настроен.",
+                "Вход в биллинг",
+                "Выполните вход в CRM выше, затем повторите поиск.",
             )
             return
         self._request_id += 1
