@@ -423,4 +423,21 @@ def get_theme_style(key: str = "rose_milk") -> str:
         border-radius: 14px;
     }}
     QLabel#CreateEmptySymbol {{ color: {c['muted']}; font-size: 30px; }}
+    QFrame#ThemePreviewSidebar {{
+        background: #1F262E; border: 1px solid #303B46; border-radius: 13px;
+    }}
+    QFrame#ThemePreviewSidebar QLabel#PreviewBrand {{
+        color: #FFFFFF; font-size: 15px; font-weight: 750;
+    }}
+    QFrame#ThemePreviewSidebar QLabel#PreviewActive {{
+        background: {c['accent']}; color: #FFFFFF; font-weight: 720;
+        border-radius: 8px; padding: 0 10px;
+    }}
+    QFrame#ThemePreviewSidebar QLabel#PreviewInactive {{
+        color: #D8E0E8; padding: 0 10px;
+    }}
+    QLabel#PreviewButton {{
+        color: #FFFFFF; background: {c['accent']};
+        border-radius: 10px; font-weight: 700;
+    }}
     """
