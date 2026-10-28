@@ -1205,17 +1205,220 @@ class TariffsPage(QWidget):
         thumb.setText("Нет\\nпревью")
 
     def _billing_external_action(self, action: str, service: BillingService):
-        # There is no verified CRM API for disable/transfer/history yet.
-        # Do not simulate writes or invent endpoints; offer original billing UI.
-        choice = ConfirmDialog(
-            action,
-            f"Камера: {service.camera_name} (ID {service.id}).\n"
-            "API этого действия пока не подтверждён. "
-            "Открыть оригинальный биллинг для выполнения операции?",
-            "Открыть биллинг", False, self,
+        if self._busy or self.client is None or service not in self.client.services:
+            return
+        if action == "Включить / отключить":
+            self._change_camera_status(service)
+        elif action == "История изменений":
+            self._request_camera_history(service)
+        elif action == "Передать камеру":
+            self._transfer_camera_preview(service)
+        else:
+            # Discounts have no verified write endpoint yet.
+            self.task.warning(
+                "Скидки", "Управление скидками доступно в оригинальном CRM."
+            )
+
+    def _change_camera_status(self, service: BillingService):
+        if not callable(getattr(self.gateway, "set_camera_status", None)):
+            self.task.warning("Нет API", "Требуется авторизация CRM.")
+            return
+        if service.status == "Активный":
+            new_status, verb = 0, "Отключить"
+        elif service.status == "Неактивный":
+            new_status, verb = 1, "Включить"
+        else:
+            self.task.warning(
+                "Статус неизвестен", "Обновите клиента перед сменой статуса."
+            )
+            return
+        dialog = QDialog(self)
+        dialog.setObjectName("BillingCameraStatusDialog")
+        dialog.setWindowTitle(f"{verb} камеру")
+        dialog.setMinimumWidth(450)
+        layout = QVBoxLayout(dialog)
+        title = QLabel(f"{verb} камеру «{service.camera_name}»?")
+        title.setObjectName("SectionTitle")
+        layout.addWidget(title)
+        note = QLabel(
+            f"Клиент: {self.client.login} · {self.client.country}\\n"
+            f"ID камеры: {service.id}\\n"
+            f"Текущий статус: {service.status} → "
+            f"{'Неактивный' if new_status == 0 else 'Активный'}"
         )
-        if choice.exec() == QDialog.DialogCode.Accepted:
-            self._open_billing()
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        layout.addWidget(QLabel("Дата изменения"))
+        when = QDateEdit(QDate.currentDate())
+        when.setObjectName("BillingCameraStatusDate")
+        when.setCalendarPopup(True)
+        when.setDisplayFormat("dd.MM.yyyy")
+        when.setMinimumDate(QDate.currentDate())
+        layout.addWidget(when)
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        cancel = QPushButton("Отмена")
+        cancel.clicked.connect(dialog.reject)
+        submit = QPushButton(verb)
+        submit.setObjectName("BillingConfirmCameraStatus")
+        submit.setProperty("role", "primary")
+        submit.clicked.connect(dialog.accept)
+        actions.addWidget(cancel)
+        actions.addWidget(submit)
+        layout.addLayout(actions)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        client = self.client
+        chosen_day = when.date().toPython()
+        fingerprint = (client.id, service.id, new_status, chosen_day)
+        if fingerprint in self._unknown_status_changes:
+            self.task.warning(
+                "Проверьте статус",
+                "Предыдущий запрос мог выполниться. Обновите камеру в CRM.",
+            )
+            return
+        self._request_id += 1
+        request_id = self._request_id
+        self._set_busy(True)
+        self.task.busy_inline("Изменение статуса", f"{verb}: {service.camera_name}")
+
+        def work():
+            try:
+                _, refreshed = self.gateway.set_camera_status(
+                    client, service.id, new_status, chosen_day
+                )
+                self.operationReady.emit(
+                    request_id, "status_changed", (service, new_status, refreshed), None
+                )
+            except BillingWriteOutcomeUnknown as exc:
+                self.operationReady.emit(
+                    request_id, "status_unknown", fingerprint, exc
+                )
+            except Exception as exc:
+                self.operationReady.emit(request_id, "status_error", None, exc)
+        threading.Thread(
+            target=work, name="billing-camera-status-put", daemon=True
+        ).start()
+
+    def _request_camera_history(self, service: BillingService):
+        if not callable(getattr(self.gateway, "camera_history", None)):
+            self.task.warning("Нет API", "Требуется авторизация CRM.")
+            return
+        client = self.client
+        self._request_id += 1
+        request_id = self._request_id
+        self._set_busy(True)
+        self.task.busy_inline("История изменений", service.camera_name)
+
+        def work():
+            try:
+                rows = self.gateway.camera_history(client, service.id)
+                self.operationReady.emit(
+                    request_id, "camera_history", (service, rows), None
+                )
+            except Exception as exc:
+                self.operationReady.emit(request_id, "camera_history", None, exc)
+        threading.Thread(
+            target=work, name="billing-camera-history-get", daemon=True
+        ).start()
+
+    def _show_camera_history(self, service: BillingService, rows):
+        dialog = QDialog(self)
+        dialog.setObjectName("BillingCameraHistoryDialog")
+        dialog.setWindowTitle(f"История · {service.camera_name}")
+        dialog.resize(850, 530)
+        layout = QVBoxLayout(dialog)
+        title = QLabel(f"История изменений · {service.camera_name}")
+        title.setObjectName("SectionTitle")
+        layout.addWidget(title)
+        table = QTableWidget(len(rows), 6)
+        table.setObjectName("BillingCameraHistoryTable")
+        table.setHorizontalHeaderLabels(
+            ("Дата", "Пользователь", "Действие", "Поле", "Было", "Стало")
+        )
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.verticalHeader().hide()
+        table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        table.verticalScrollBar().setSingleStep(24)
+        table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents
+        )
+        for index, row in enumerate(rows):
+            for col, key in enumerate((
+                "date", "user", "action", "field_name", "old_value", "new_value"
+            )):
+                value = str(row.get(key) or "")
+                item = QTableWidgetItem(value)
+                item.setToolTip(value)
+                table.setItem(index, col, item)
+        layout.addWidget(table, 1)
+        close = QPushButton("Закрыть")
+        close.clicked.connect(dialog.accept)
+        layout.addWidget(close, 0, Qt.AlignmentFlag.AlignRight)
+        dialog.exec()
+
+    def _transfer_camera_preview(self, service: BillingService):
+        # Search endpoint has been captured, but the final transfer request has
+        # not. Allow recipient discovery without claiming or sending a transfer.
+        dialog = QDialog(self)
+        dialog.setObjectName("BillingTransferCameraDialog")
+        dialog.setWindowTitle(f"Передать камеру · {service.camera_name}")
+        dialog.setMinimumSize(530, 320)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel(
+            f"Камера: {service.camera_name} · ID {service.id}"
+        ))
+        layout.addWidget(QLabel("Поиск аккаунта получателя"))
+        query = QLineEdit()
+        query.setObjectName("BillingTransferRecipientQuery")
+        query.setPlaceholderText("Логин или номер учётной записи")
+        layout.addWidget(query)
+        choices = QListWidget()
+        choices.setObjectName("BillingTransferRecipientResults")
+        layout.addWidget(choices, 1)
+        hint = QLabel(
+            "Поиск получателя работает. Отправка передачи пока доступна "
+            "в оригинальном биллинге: запрос переноса не подтверждён."
+        )
+        hint.setWordWrap(True)
+        hint.setObjectName("TinyMuted")
+        layout.addWidget(hint)
+        actions = QHBoxLayout()
+        find = QPushButton("Найти получателя")
+        find.setProperty("role", "soft")
+        actions.addWidget(find)
+        actions.addStretch(1)
+        go = QPushButton("Открыть биллинг")
+        go.clicked.connect(lambda: (dialog.accept(), self._open_billing()))
+        close = QPushButton("Закрыть")
+        close.clicked.connect(dialog.reject)
+        actions.addWidget(go)
+        actions.addWidget(close)
+        layout.addLayout(actions)
+        def do_search():
+            value = query.text().strip()
+            if not value:
+                return
+            try:
+                hits = self.gateway.search_clients(value)
+            except Exception:
+                choices.clear()
+                hint.setText("Поиск не выполнен. Проверьте логин и авторизацию.")
+                return
+            choices.clear()
+            for hit in hits:
+                if self.client and hit.id == self.client.id:
+                    continue
+                choices.addItem(
+                    f"{hit.login} · {hit.country} · аккаунт № {hit.id}"
+                )
+            if not choices.count():
+                hint.setText("Аккаунты не найдены.")
+        # Search runs through existing authenticated CRM gateway; never posts.
+        find.clicked.connect(do_search)
+        query.returnPressed.connect(do_search)
+        dialog.exec()
 
     def _selected_camera_services(self):
         if self.client is None:
