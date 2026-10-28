@@ -57,6 +57,22 @@ class TariffReferenceCatalog:
     country: BillingCountry
 
 
+@dataclass(frozen=True)
+class AllTariffsSnapshot:
+    tariffs: tuple[TariffCatalogEntry, ...]
+    countries: tuple[BillingCountry, ...]
+
+
+def parse_all_tariffs_snapshot(
+    tariffs_payload: Mapping[str, Any], countries_payload: Mapping[str, Any],
+) -> AllTariffsSnapshot:
+    """Reference only: /api/tariffs/list/0 plus country currency dictionary."""
+    return AllTariffsSnapshot(
+        tariffs=parse_tariff_catalog(tariffs_payload),
+        countries=parse_countries(countries_payload),
+    )
+
+
 def _records(payload: Mapping[str, Any], label: str) -> list[dict]:
     if not isinstance(payload, Mapping) or payload.get("success") is not True:
         raise BillingValidationError(f"Биллинг не подтвердил получение справочника «{label}».")
