@@ -2,14 +2,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import threading
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QObject, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QVBoxLayout,
 )
 
+from linkvideo_vpn_helper.services.routeros_login_verification import (
+    LoginRejected, LoginUnavailable, verify_routeros_user,
+)
+from linkvideo_vpn_helper.services.server_registry import ServerRegistry
 from linkvideo_vpn_helper.theme import get_theme_style
 from linkvideo_vpn_helper.version import APP_VERSION
 
@@ -20,11 +25,20 @@ class LoginPayload:
     password: str
 
 
+class _LoginVerificationSignals(QObject):
+    finished = Signal(int, object, object)
+
+
 class LoginWindow(QDialog):
     def __init__(self, settings: QSettings | None = None, parent=None):
         super().__init__(parent)
         self.settings = settings or QSettings("LinkVideo", "LinkVideo.Helper")
         self.payload: LoginPayload | None = None
+        self._attempt = 0
+        self._pending = False
+        self._automatic_attempt = False
+        self._verification_signals = _LoginVerificationSignals(self)
+        self._verification_signals.finished.connect(self._on_verified)
         self.setWindowTitle("LinkVideo.Helper")
         icon_path = Path(__file__).resolve().parents[2] / "icon.ico"
         if icon_path.exists():
@@ -35,6 +49,12 @@ class LoginWindow(QDialog):
         self.setObjectName("AppRoot")
         self.setStyleSheet(get_theme_style(str(self.settings.value("ui/theme_v2", "system", str) or "system")))
         self._build()
+        if (
+            self.remember.isChecked()
+            and self.login.text().strip()
+            and self.password.text()
+        ):
+            QTimer.singleShot(0, self._auto_verify_saved)
 
     def _build(self):
         root = QHBoxLayout(self)
@@ -76,7 +96,7 @@ class LoginWindow(QDialog):
         fl.setSpacing(11)
         heading = QLabel("Вход")
         heading.setObjectName("PageTitle")
-        sub = QLabel("Данные используются для подключения к RouterOS API.")
+        sub = QLabel("Вход подтверждается по учётной записи MikroTik в списке /user.")
         sub.setObjectName("Muted")
         sub.setWordWrap(True)
         fl.addWidget(heading)
@@ -113,6 +133,10 @@ class LoginWindow(QDialog):
         self.error.setObjectName("DangerText")
         self.error.setWordWrap(True)
         fl.addWidget(self.error)
+        self.status = QLabel("")
+        self.status.setObjectName("Muted")
+        self.status.setWordWrap(True)
+        fl.addWidget(self.status)
         fl.addStretch(1)
         self.submit = QPushButton("Войти в LinkVideo.Helper")
         self.submit.setProperty("role", "primary")
@@ -132,19 +156,81 @@ class LoginWindow(QDialog):
         self.password.setEchoMode(QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password)
         self.show_password.setText("Скрыть" if visible else "Показать")
 
-    def _submit(self):
+    def _auto_verify_saved(self) -> None:
+        # Saved credentials are never an authorization token. Verify them on
+        # every startup and show this same login form if they are stale.
+        if not self._pending and self.isVisible():
+            self._submit(automatic=True)
+
+    def _set_pending(self, pending: bool) -> None:
+        self._pending = pending
+        for control in (self.login, self.password, self.remember, self.submit, self.show_password):
+            control.setEnabled(not pending)
+        self.submit.setText("Проверяю вход…" if pending else "Войти в LinkVideo.Helper")
+
+    def _submit(self, automatic: bool = False) -> None:
+        if self._pending:
+            return
         user = self.login.text().strip()
         password = self.password.text()
         if not user or not password:
             self.error.setText("Введите логин и пароль MikroTik.")
             return
+
+        self.error.clear()
+        self.status.setText("Проверяю пароль, пользователя и права в MikroTik…")
+        self._automatic_attempt = automatic
+        self._attempt += 1
+        attempt = self._attempt
+        self._set_pending(True)
+        # No queries or DNS lookups on the Qt UI thread.
+        hosts = ServerRegistry(self.settings).hosts()
+
+        def worker() -> None:
+            try:
+                verified = verify_routeros_user(user, password, hosts)
+                self._verification_signals.finished.emit(attempt, verified, None)
+            except (LoginRejected, LoginUnavailable) as exc:
+                self._verification_signals.finished.emit(attempt, None, exc)
+            except Exception:
+                # Never display passwords, raw protocol frames, or internals.
+                self._verification_signals.finished.emit(
+                    attempt, None,
+                    LoginUnavailable("Проверка MikroTik завершилась ошибкой. Повторите попытку."),
+                )
+
+        threading.Thread(target=worker, daemon=True, name="lv-routeros-login").start()
+
+    def _on_verified(self, attempt: int, verified, failure) -> None:
+        if attempt != self._attempt:
+            return
+        self._set_pending(False)
+        self.status.clear()
+
+        if failure is not None or verified is None:
+            if self._automatic_attempt and isinstance(failure, LoginRejected):
+                # Prevent repeated startup attempts using a rejected saved
+                # password. Keep the username visible for correction.
+                self.settings.remove("password")
+            self.error.setText(str(failure or "Не удалось подтвердить вход."))
+            self.password.setFocus()
+            self.password.selectAll()
+            return
+
+        username = self.login.text().strip()
+        password = self.password.text()
+        if username != verified.username:
+            self.error.setText("Данные входа изменились во время проверки. Повторите попытку.")
+            return
+
         remember = self.remember.isChecked()
         self.settings.setValue("remember", remember)
         if remember:
-            self.settings.setValue("username", user)
+            self.settings.setValue("username", username)
             self.settings.setValue("password", password)
         else:
             self.settings.remove("username")
             self.settings.remove("password")
-        self.payload = LoginPayload(user, password)
+        self.settings.sync()
+        self.payload = LoginPayload(username, password)
         self.accept()
