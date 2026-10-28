@@ -7,7 +7,6 @@ import re
 import ssl
 import subprocess
 import tempfile
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
