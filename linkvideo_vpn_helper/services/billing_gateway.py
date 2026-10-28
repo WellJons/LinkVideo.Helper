@@ -9,7 +9,6 @@ configured. All write operations must also be authorized server-side.
 
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
 import re
 from typing import Protocol
 
