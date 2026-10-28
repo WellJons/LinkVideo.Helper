@@ -88,6 +88,28 @@ class BillingAllTariffsWidget(QWidget):
         self.empty.setWordWrap(True)
         root.addWidget(self.empty)
 
+    def set_gateway(self, gateway):
+        """Switch active CRM identity, invalidating old background results."""
+        self._query += 1
+        self.gateway = gateway
+        self._rows = ()
+        self._currencies = {}
+        self.table.setRowCount(0)
+        self.country.blockSignals(True)
+        self.country.clear()
+        self.country.addItem("Все страны", "")
+        self.country.blockSignals(False)
+        self.search.clear()
+        connected = bool(
+            gateway.configured and callable(getattr(gateway, "all_tariffs", None))
+        )
+        self.refresh.setEnabled(connected)
+        self.empty.setText(
+            "Нажмите «Обновить из биллинга» для загрузки каталога."
+            if connected else "Войдите в CRM для просмотра тарифов."
+        )
+        self.status.hide()
+
     def reload(self):
         if not self.refresh.isEnabled():
             return
