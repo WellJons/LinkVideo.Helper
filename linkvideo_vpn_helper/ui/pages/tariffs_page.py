@@ -10,7 +10,7 @@ import threading
 from datetime import date
 
 from PySide6.QtCore import QDate, QSettings, Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QAbstractItemView, QCalendarWidget, QComboBox, QDateEdit,
     QDialog, QFormLayout, QMenu, QGridLayout, QHeaderView, QHBoxLayout,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from linkvideo_vpn_helper.services.billing_catalog import TariffReferenceCatalog
+from linkvideo_vpn_helper.services.billing_search_parser import BillingSearchHit
 from linkvideo_vpn_helper.services.billing_tariff_filter import (
     archive_days_from_name, bitrate_mbps_from_name, select_tariffs,
 )
@@ -451,10 +452,18 @@ class TariffsPage(QWidget):
             self, max_width=1380, min_width=760, margins=22, spacing=12,
         )
         self.page_layout = root
-        root.addWidget(PageHeader(
+        header = QHBoxLayout()
+        header.addWidget(PageHeader(
             "Клиенты и тарифы",
             "Поиск, камеры и управление тарифами.",
-        ))
+        ), 1)
+        self.auth_btn = QPushButton("Войти в CRM")
+        self.auth_btn.setObjectName("BillingShowLogin")
+        self.auth_btn.setMinimumHeight(40)
+        self.auth_btn.setProperty("role", "soft")
+        self.auth_btn.clicked.connect(self._open_login)
+        header.addWidget(self.auth_btn, 0, Qt.AlignmentFlag.AlignTop)
+        root.addLayout(header)
         # The CRM is a separate token-based service. B2O credentials can be
         # entered into the same styled form, but an unrelated B2O token cannot
         # simply be reused against the CRM host.
@@ -513,18 +522,12 @@ class TariffsPage(QWidget):
         self.search_btn.setProperty("role", "primary")
         self.search_btn.setMinimumHeight(44)
         self.search_btn.clicked.connect(self._find_client)
-        self.auth_btn = QPushButton("Войти в CRM")
-        self.auth_btn.setObjectName("BillingShowLogin")
-        self.auth_btn.setMinimumHeight(44)
-        self.auth_btn.setProperty("role", "soft")
-        self.auth_btn.clicked.connect(self._open_login)
         self.open_billing = QPushButton("Открыть биллинг")
         self.open_billing.setObjectName("OpenBillingButton")
         self.open_billing.setMinimumHeight(44)
         self.open_billing.clicked.connect(self._open_billing)
         find_row.addWidget(self.login, 1)
         find_row.addWidget(self.search_btn)
-        find_row.addWidget(self.auth_btn)
         find_row.addWidget(self.open_billing)
         search.addLayout(find_row)
         root.addWidget(self.search_card)
@@ -541,8 +544,7 @@ class TariffsPage(QWidget):
         empty_title.setObjectName("SectionTitle")
         empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_hint = QLabel(
-            "Введите логин клиента в строке поиска. "
-            "Для получения сведений из CRM необходимо подключить согласованный API."
+            "Введите логин клиента или номер учётной записи в строке поиска."
         )
         self.empty_hint.setObjectName("Muted")
         self.empty_hint.setWordWrap(True)
