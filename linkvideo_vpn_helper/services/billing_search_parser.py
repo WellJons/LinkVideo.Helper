@@ -56,6 +56,8 @@ def parse_search_response(payload: Mapping[str, Any]) -> tuple[BillingSearchHit,
         if identifier in seen:
             raise BillingValidationError("Биллинг вернул дублирующиеся ID аккаунтов.")
         seen.add(identifier)
+        if not isinstance(row.get("login"), str):
+            raise BillingValidationError("Биллинг вернул логин в некорректном формате.")
         login = _field(row, "login")
         if not login:
             raise BillingValidationError("В результате поиска отсутствует логин.")
