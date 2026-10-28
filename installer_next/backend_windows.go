@@ -463,7 +463,7 @@ func installProduct(opts installOptions, progress progressFunc) (string, error) 
     progress(5, "Подготовка обновления…")
     // Prevent an already registered background patch task from racing the full
     // installer for the same Program Files directory. Full Setup supersedes
-    // any staged differential patch and registers a fresh task after success.
+    // any staged differential patch. The task is never recreated.
     removeSilentUpdateTask()
     stopHelperProcesses()
     if err := recoverInterruptedRuntimeUpgrade(dest); err != nil {
@@ -504,24 +504,10 @@ func installProduct(opts installOptions, progress progressFunc) (string, error) 
         return "", fmt.Errorf("не удалось зарегистрировать удаление: %w", err)
     }
 
-    // Silent differential patches are an update convenience, not a prerequisite
-    // for using Helper. Corporate policy, a disabled Task Scheduler service or
-    // a broken Windows component must not roll back/brick an otherwise complete
-    // application installation. When provisioning fails, Helper simply falls
-    // back to its visible full-Setup update path.
-    progress(95, "Настройка фоновых патчей…")
-    var silentErr error
-    if err := registerSilentUpdateTask(dest); err != nil {
-        silentErr = err
-    } else if err := verifySilentUpdateTask(dest); err != nil {
-        silentErr = err
-        removeSilentUpdateTask()
-    }
-    recordSilentUpdateWarning(silentErr)
-
-    if silentErr != nil {
-        progress(99, "Программа установлена · фоновые патчи недоступны, будет использоваться обычное обновление")
-    }
+    // The old SYSTEM scheduled task was already removed at the beginning of
+    // this installation. Do not recreate it: all future updates use the
+    // normal visible full-Setup workflow and an explicit user confirmation.
+    recordSilentUpdateWarning(nil)
     progress(100, "LinkVideo.Helper установлен")
     return appPath, nil
 }
