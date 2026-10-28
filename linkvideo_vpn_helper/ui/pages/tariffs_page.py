@@ -619,8 +619,9 @@ class TariffsPage(QWidget):
         self.services_table.setMinimumHeight(320)
         root.addWidget(self.services_table)
         self.services_hint = QLabel(
-            "Смена тарифов выполняется по каждой услуге отдельно. "
-            "Без подтверждённого API изменение отключено."
+            "Кнопка «Тариф» открывает подбор для конкретной камеры: "
+            "страна, валюта, срок архива и календарь. "
+            "Применение через API пока недоступно."
         )
         self.services_hint.setObjectName("TinyMuted")
         self.services_hint.setWordWrap(True)
@@ -732,8 +733,8 @@ class TariffsPage(QWidget):
         self.services_hint.setText(
             "Список камер ещё не загружен из CRM."
             if not client.services_loaded and not client.services else
-            "Смена тарифов выполняется по каждой услуге отдельно. "
-            "Без подтверждённого API изменение отключено."
+            "«Тариф» открывает подбор для выбранной камеры. "
+            "Доступны фильтр дней и календарь; применение через API пока отключено."
         )
         for row, service in enumerate(client.services):
             cells = (
@@ -754,13 +755,20 @@ class TariffsPage(QWidget):
             action.setMinimumWidth(100)
             action.setMinimumHeight(36)
             action.setObjectName("TariffChangeButton")
-            action.setEnabled(bool(self.gateway.can_change_tariffs))
-            action.setToolTip(
-                "Сменить тариф у этой камеры"
-                if self.gateway.can_change_tariffs
-                else "Нужен подтверждённый API и право на изменение тарифов"
+            can_preview = (
+                bool(self.gateway.configured)
+                and callable(getattr(self.gateway, "reference_catalog", None))
             )
-            action.clicked.connect(lambda _checked=False, srv=service: self._request_options(srv))
+            action.setEnabled(can_preview or bool(self.gateway.can_change_tariffs))
+            action.setToolTip(
+                "Подобрать тариф по стране и глубине архива для этой камеры"
+                if can_preview else "Нет подтверждённого справочника тарифов"
+            )
+            action.clicked.connect(
+                lambda _checked=False, srv=service: self._request_service_catalog(srv)
+                if callable(getattr(self.gateway, "reference_catalog", None))
+                else self._request_options(srv)
+            )
             secondary = QPushButton("⋯")
             secondary.setObjectName("TariffOtherActionsButton")
             secondary.setProperty("role", "soft")
@@ -802,6 +810,37 @@ class TariffsPage(QWidget):
 
         threading.Thread(target=work, name="billing-tariff-catalog", daemon=True).start()
 
+    def _request_service_catalog(self, service: BillingService):
+        """Read-only tariff selection for one camera; no update POST."""
+        if (
+            self._busy or self.client is None
+            or service not in self.client.services
+            or not self.gateway.configured
+            or not callable(getattr(self.gateway, "reference_catalog", None))
+        ):
+            return
+        self._request_id += 1
+        request_id = self._request_id
+        client = self.client
+        self._set_busy(True)
+        self.task.busy_inline(
+            "Подбор тарифа",
+            "Загружаю справочник для страны и типа выбранного клиента…",
+        )
+
+        def work():
+            try:
+                snapshot = self.gateway.reference_catalog(client)
+                self.operationReady.emit(
+                    request_id, "service_catalog", (service, snapshot), None,
+                )
+            except Exception as exc:
+                self.operationReady.emit(request_id, "service_catalog", None, exc)
+
+        threading.Thread(
+            target=work, name="billing-service-tariff-preview", daemon=True
+        ).start()
+
     def _request_options(self, service: BillingService):
         if self._busy or self.client is None or not self.gateway.can_change_tariffs:
             return
@@ -831,6 +870,17 @@ class TariffsPage(QWidget):
                 return
             self.task.hide()
             dialog = TariffCatalogDialog(result, self.client.legal_type, self)
+            dialog.exec()
+        elif operation == "service_catalog":
+            if self.client is None:
+                return
+            service, snapshot = result
+            if service not in self.client.services:
+                return
+            self.task.hide()
+            dialog = TariffCatalogDialog(
+                snapshot, self.client.legal_type, self, service=service,
+            )
             dialog.exec()
         elif operation == "options":
             service, choices = result
