@@ -92,7 +92,7 @@ class MainWindow(QMainWindow):
 
         self.sidebar = QFrame()
         self.sidebar.setObjectName("Sidebar")
-        self.sidebar.setFixedWidth(244)
+        self.sidebar.setFixedWidth(254)
         sl = QVBoxLayout(self.sidebar)
         sl.setContentsMargins(14, 18, 14, 14)
         sl.setSpacing(5)
@@ -122,6 +122,7 @@ class MainWindow(QMainWindow):
 
         user_card = Card(subtle=True)
         self.user_card = user_card
+        user_card.setObjectName("SidebarUserCard")
         ul = QHBoxLayout(user_card)
         ul.setContentsMargins(11, 9, 9, 9)
         ul.setSpacing(8)
@@ -132,6 +133,7 @@ class MainWindow(QMainWindow):
         user_text = QVBoxLayout()
         user_text.setSpacing(0)
         self.user = QLabel(self.credentials.username)
+        self.user.setToolTip(self.credentials.username)
         self.user.setObjectName("Value")
         role = QLabel("MikroTik")
         role.setObjectName("TinyMuted")
@@ -168,7 +170,6 @@ class MainWindow(QMainWindow):
         self.settings_btn = QPushButton("⚙    Настройки")
         self.settings_btn.setProperty("nav", "true")
         self.settings_btn.setProperty("footerNav", "true")
-        self.settings_btn.setStyleSheet("QPushButton { text-align:center; padding-left:0px; }")
         self.settings_btn.clicked.connect(lambda: self._go("settings"))
         sl.addWidget(self.settings_btn)
 

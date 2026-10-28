@@ -5,7 +5,7 @@ import re
 import threading
 import time
 
-from PySide6.QtCore import QEasingCurve, QPointF, QPropertyAnimation, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QSettings, QEasingCurve, QPointF, QPropertyAnimation, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
     QBoxLayout, QDialog, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
@@ -273,6 +273,53 @@ class SearchManagePage(QWidget):
             self, max_width=1360, min_width=760, margins=22, spacing=12
         )
 
+        self.page_layout.addWidget(PageHeader(
+            "Поиск и управление",
+            "Найдите клиента, проверьте состояние VPN и управляйте его портами."
+        ))
+
+        # The search remains visible when a client is selected: switching to
+        # another account should not require returning to an empty search view.
+        self.search_form = Card(kind="hero")
+        sfl = QVBoxLayout(self.search_form)
+        sfl.setContentsMargins(16, 15, 16, 15)
+        sfl.setSpacing(9)
+        search_row = QHBoxLayout()
+        search_row.setSpacing(8)
+        self.query = QLineEdit()
+        self.query.setPlaceholderText("Введите логин клиента")
+        self.query.setMinimumHeight(44)
+        self.query.returnPressed.connect(self._search)
+        self.btn_search = QPushButton("⌕  Найти")
+        self.btn_search.setProperty("role", "primary")
+        self.btn_search.setMinimumHeight(44)
+        self.btn_search.clicked.connect(self._search)
+        self.btn_refresh = QPushButton("Обновить")
+        self.btn_refresh.setMinimumHeight(44)
+        self.btn_refresh.clicked.connect(self._refresh_search)
+        search_row.addWidget(self.query, 1)
+        search_row.addWidget(self.btn_search)
+        search_row.addWidget(self.btn_refresh)
+        sfl.addLayout(search_row)
+
+        options = QHBoxLayout()
+        options.setSpacing(10)
+        self.mode = SegmentedControl([("login", "По логину"), ("port", "По порту")], "login")
+        self.mode.changed.connect(self._set_mode)
+        options.addWidget(self.mode)
+        self.server_picker = ServerPicker(self.registry, allow_auto=False)
+        self.server_picker.addRequested.connect(self._add_server)
+        self.server_picker.refresh()
+        self.server_picker.hide()
+        options.addWidget(self.server_picker, 1)
+        options.addStretch(1)
+        sfl.addLayout(options)
+
+        self.task = TaskStatus()
+        self.task.hide()
+        sfl.addWidget(self.task)
+        self.page_layout.addWidget(self.search_form)
+
         self.workspace = QWidget()
         workspace_l = QHBoxLayout(self.workspace)
         workspace_l.setContentsMargins(0, 0, 0, 0)
@@ -283,50 +330,6 @@ class SearchManagePage(QWidget):
         ll = QVBoxLayout(self.left_card)
         ll.setContentsMargins(18, 16, 18, 16)
         ll.setSpacing(10)
-
-        self.search_form = QWidget()
-        sfl = QVBoxLayout(self.search_form)
-        sfl.setContentsMargins(0, 0, 0, 0)
-        sfl.setSpacing(10)
-        title = QLabel("Поиск клиента")
-        title.setObjectName("SectionTitle")
-        hint = QLabel("Введите логин или внешний порт. Выберите найденную учётную запись — карточка откроется здесь же, без нового окна.")
-        hint.setObjectName("Muted")
-        hint.setWordWrap(True)
-        sfl.addWidget(title)
-        sfl.addWidget(hint)
-
-        self.mode = SegmentedControl([("login", "По логину"), ("port", "По порту")], "login")
-        self.mode.changed.connect(self._set_mode)
-        sfl.addWidget(self.mode)
-
-        self.server_picker = ServerPicker(self.registry, allow_auto=False)
-        self.server_picker.addRequested.connect(self._add_server)
-        self.server_picker.refresh()
-        self.server_picker.hide()
-        sfl.addWidget(self.server_picker)
-
-        self.query = QLineEdit()
-        self.query.setPlaceholderText("Например: 890000001")
-        self.query.returnPressed.connect(self._search)
-        sfl.addWidget(self.query)
-
-        search_actions = QHBoxLayout()
-        search_actions.setSpacing(8)
-        self.btn_search = QPushButton("Найти")
-        self.btn_search.setProperty("role", "primary")
-        self.btn_search.setMinimumHeight(44)
-        self.btn_search.clicked.connect(self._search)
-        self.btn_refresh = QPushButton("Обновить результаты")
-        self.btn_refresh.clicked.connect(self._refresh_search)
-        search_actions.addWidget(self.btn_search, 1)
-        search_actions.addWidget(self.btn_refresh, 1)
-        sfl.addLayout(search_actions)
-
-        self.task = TaskStatus()
-        self.task.hide()
-        sfl.addWidget(self.task)
-        ll.addWidget(self.search_form)
 
         results_row = QHBoxLayout()
         self.results_title = QLabel("Результаты")
@@ -397,7 +400,6 @@ class SearchManagePage(QWidget):
         self.detail_route_title.setText(f"Клиент {self.current.login}")
         self.client_task.hide()
         self.detail_panel.show()
-        self.search_form.hide()
         self.open_hint.setText("Выберите другую запись")
         self.results_title.setText("Найденные клиенты")
         self._animate_search_panel(compact=True)
@@ -408,7 +410,6 @@ class SearchManagePage(QWidget):
         if immediate:
             self._deleted_current = None
             self.detail_panel.hide()
-            self.search_form.show()
             self.left_card.setMaximumWidth(16777215)
             self.results_title.setText("Результаты")
             self.open_hint.setText("Клик — открыть карточку")
@@ -416,7 +417,6 @@ class SearchManagePage(QWidget):
         if not self.detail_panel.isVisible():
             return
         self.detail_panel.hide()
-        self.search_form.show()
         self.results_title.setText("Результаты")
         self.open_hint.setText("Клик — открыть карточку")
         self._animate_search_panel(compact=False)
@@ -426,8 +426,11 @@ class SearchManagePage(QWidget):
         # внутри web-приложения, но остаётся обычным QWidget без отдельного окна.
         if self._panel_anim is not None:
             self._panel_anim.stop()
-        start = max(270, self.left_card.width())
-        end = 300 if compact else max(760, self.workspace.width() - 24)
+        if not bool(QSettings("LinkVideo", "LinkVideo.Helper").value("ui/animations_enabled", True, bool)):
+            self.left_card.setMaximumWidth(335 if compact else 16777215)
+            return
+        start = max(320, self.left_card.width())
+        end = 335 if compact else max(760, self.workspace.width() - 24)
         anim = QPropertyAnimation(self.left_card, b"maximumWidth", self)
         anim.setDuration(230)
         anim.setStartValue(start)
@@ -761,7 +764,6 @@ class SearchManagePage(QWidget):
         self.detail_route_title.setText(f"Удалённый клиент {record.login}")
         self.client_task.hide()
         self.detail_panel.show()
-        self.search_form.hide()
         self.open_hint.setText("Выберите другую запись")
         self.results_title.setText("Найденные клиенты")
         self._animate_search_panel(compact=True)
@@ -975,7 +977,6 @@ class SearchManagePage(QWidget):
         main_info = QLabel(
             f"Сервер: {c.server}\n"
             f"Логин: {c.login}\n"
-            f"Пароль: {c.password}\n"
             f"Remote Address: {c.remote_address or '—'}\n"
             f"Порты: {', '.join(str(x) for x in c.ports) if c.ports else '—'}"
         )
@@ -985,6 +986,32 @@ class SearchManagePage(QWidget):
         main_info.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         dl.addWidget(dt)
         dl.addWidget(main_info, 1)
+
+        # Sensitive client credentials are concealed until the operator
+        # explicitly requests visibility; copying VPN configuration still works.
+        password_row = QHBoxLayout()
+        password_row.setSpacing(6)
+        password_label = QLabel("Пароль:")
+        password_label.setObjectName("TinyMuted")
+        password_view = QLineEdit(c.password)
+        password_view.setReadOnly(True)
+        password_view.setEchoMode(QLineEdit.EchoMode.Password)
+        password_view.setToolTip("Пароль скрыт. Для просмотра нажмите «Показать».")
+        password_toggle = QPushButton("Показать")
+        password_toggle.setCheckable(True)
+        password_toggle.setProperty("role", "soft")
+        password_toggle.toggled.connect(
+            lambda visible: (
+                password_view.setEchoMode(
+                    QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
+                ),
+                password_toggle.setText("Скрыть" if visible else "Показать")
+            )
+        )
+        password_row.addWidget(password_label)
+        password_row.addWidget(password_view, 1)
+        password_row.addWidget(password_toggle)
+        dl.addLayout(password_row)
 
         vpn = Card()
         vl = QVBoxLayout(vpn)
@@ -1088,8 +1115,24 @@ class SearchManagePage(QWidget):
                     item.setToolTip("Конфликт NAT: этот внешний TCP-порт встречается в другой учётке на том же сервере")
                     item.setForeground(QColor("#D97706"))
                 else:
-                    item.setText(f"Порт {port}" + ("    • новый" if int(port) in self._recent_new_ports else ""))
-                item.setSizeHint(QSize(0, 42))
+                    current_port = int(port)
+                    if current_port in c.disabled_ports:
+                        status = "Отключён"
+                    elif current_port in c.active_ports:
+                        status = "Включён"
+                    else:
+                        status = "Статус неизвестен"
+                    byte_value = c.port_bytes.get(current_port)
+                    connections = c.port_connections.get(current_port)
+                    details = [status]
+                    if byte_value is not None:
+                        details.append(f"NAT: {self._fmt_bytes(byte_value)}")
+                    if connections is not None:
+                        details.append(f"Пакеты/соединения: {connections}")
+                    if current_port in self._recent_new_ports:
+                        details.append("Новый")
+                    item.setText(f"Порт {port}    ·    " + "    ·    ".join(details))
+                item.setSizeHint(QSize(0, 50))
                 self.port_list.addItem(item)
             desired = self._selected_port if self._selected_port in c.ports else c.ports[0]
             for i in range(self.port_list.count()):

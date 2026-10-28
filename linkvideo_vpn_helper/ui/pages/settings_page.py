@@ -4,7 +4,7 @@ import threading
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QBoxLayout, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
+    QBoxLayout, QCheckBox, QGridLayout, QHBoxLayout, QLabel, QPushButton, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from linkvideo_vpn_helper.services.errors import classify_exception
@@ -58,8 +58,35 @@ class SettingsPage(QWidget):
         )
         root.addWidget(self.header)
 
-        self.top_settings = QBoxLayout(QBoxLayout.Direction.LeftToRight)
-        self.top_settings.setSpacing(12)
+        self.settings_tabs = QTabWidget()
+        self.settings_tabs.setObjectName("SettingsTabs")
+        self.settings_tabs.setDocumentMode(True)
+
+        self.appearance_tab = QWidget()
+        self.appearance_layout = QVBoxLayout(self.appearance_tab)
+        self.appearance_layout.setContentsMargins(0, 14, 0, 0)
+        self.appearance_layout.setSpacing(12)
+
+        self.archive_tab = QWidget()
+        self.archive_layout = QVBoxLayout(self.archive_tab)
+        self.archive_layout.setContentsMargins(0, 14, 0, 0)
+        self.archive_layout.setSpacing(12)
+
+        self.servers_tab = QWidget()
+        self.servers_layout = QVBoxLayout(self.servers_tab)
+        self.servers_layout.setContentsMargins(0, 14, 0, 0)
+        self.servers_layout.setSpacing(12)
+
+        self.about_tab = QWidget()
+        self.about_layout = QVBoxLayout(self.about_tab)
+        self.about_layout.setContentsMargins(0, 14, 0, 0)
+        self.about_layout.setSpacing(12)
+
+        self.settings_tabs.addTab(self.appearance_tab, "Внешний вид")
+        self.settings_tabs.addTab(self.archive_tab, "Архив")
+        self.settings_tabs.addTab(self.servers_tab, "VPN-серверы")
+        self.settings_tabs.addTab(self.about_tab, "О программе")
+        root.addWidget(self.settings_tabs)
 
         appearance = Card()
         al = QVBoxLayout(appearance)
@@ -85,6 +112,13 @@ class SettingsPage(QWidget):
             btn.clicked.connect(lambda checked=False, k=key: self._theme_changed(k))
             self._theme_buttons[key] = btn
         al.addLayout(self.theme_grid)
+        self.animations_enabled = QCheckBox("Плавные анимации интерфейса")
+        self.animations_enabled.setToolTip("Плавное появление страниц и короткая анимация при неверном пароле.")
+        self.animations_enabled.setChecked(bool(self.settings.value("ui/animations_enabled", True, bool)))
+        self.animations_enabled.toggled.connect(
+            lambda enabled: self.settings.setValue("ui/animations_enabled", enabled)
+        )
+        al.addWidget(self.animations_enabled)
         al.addStretch(1)
         self.appearance_card = appearance
 
@@ -127,9 +161,46 @@ class SettingsPage(QWidget):
         ar.addStretch(1)
         self.archive_card = archive
 
-        self.top_settings.addWidget(appearance, 3)
-        self.top_settings.addWidget(archive, 2)
-        root.addLayout(self.top_settings)
+        # Theme selection and a realistic mini-preview share one tab.
+        preview = Card()
+        pv = QVBoxLayout(preview)
+        pv.setContentsMargins(20, 18, 20, 18)
+        pv.setSpacing(11)
+        pv_title = QLabel("Предпросмотр")
+        pv_title.setObjectName("SectionTitle")
+        pv.addWidget(pv_title)
+        pv_hint = QLabel("Навигация, обычный пункт и основная кнопка")
+        pv_hint.setObjectName("TinyMuted")
+        pv.addWidget(pv_hint)
+        preview_side = Card(subtle=True)
+        preview_side.setObjectName("ThemePreviewSidebar")
+        ps = QVBoxLayout(preview_side)
+        ps.setContentsMargins(16, 15, 16, 15)
+        ps.setSpacing(9)
+        demo_logo = QLabel("▣  LinkVideo.Helper")
+        demo_logo.setObjectName("PreviewBrand")
+        demo_on = QLabel("  ◉   Активный раздел")
+        demo_on.setObjectName("PreviewActive")
+        demo_off = QLabel("  ◇   Другой раздел")
+        demo_off.setObjectName("PreviewInactive")
+        for preview_label in (demo_logo, demo_on, demo_off):
+            preview_label.setMinimumHeight(33)
+            ps.addWidget(preview_label)
+        pv.addWidget(preview_side)
+        main_action = QLabel("Основная кнопка")
+        main_action.setObjectName("PreviewButton")
+        main_action.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        main_action.setMinimumHeight(42)
+        pv.addWidget(main_action)
+        pv.addStretch(1)
+        appearance_row = QHBoxLayout()
+        appearance_row.setSpacing(12)
+        appearance_row.addWidget(appearance, 6)
+        appearance_row.addWidget(preview, 4)
+        self.appearance_layout.addLayout(appearance_row)
+        self.appearance_layout.addStretch(1)
+        self.archive_layout.addWidget(archive)
+        self.archive_layout.addStretch(1)
 
         # Список внутренних DVR/vcore намеренно не показываем сотруднику.
         # В 3.0.3 он обновляется фоново из B2O только как аварийный fallback;
@@ -160,7 +231,8 @@ class SettingsPage(QWidget):
         sl.addLayout(self.server_rows)
         self._render_servers()
         self.servers_card = servers
-        root.addWidget(servers)
+        self.servers_layout.addWidget(servers)
+        self.servers_layout.addStretch(1)
 
         about = Card(subtle=True)
         bl = QHBoxLayout(about)
@@ -176,7 +248,8 @@ class SettingsPage(QWidget):
         upd.clicked.connect(self.updateRequested.emit)
         bl.addLayout(about_text, 1)
         bl.addWidget(upd)
-        root.addWidget(about)
+        self.about_layout.addWidget(about)
+        self.about_layout.addStretch(1)
 
         self.task = TaskStatus()
         self.task.hide()
@@ -193,8 +266,6 @@ class SettingsPage(QWidget):
         if not hasattr(self, "page_layout"):
             return
         width = self.width()
-        compact = width < 1050
-        self.top_settings.setDirection(QBoxLayout.Direction.TopToBottom if compact else QBoxLayout.Direction.LeftToRight)
         columns = 4 if width >= 1450 else (3 if width >= 1080 else 2)
         self._relayout_themes(columns)
 

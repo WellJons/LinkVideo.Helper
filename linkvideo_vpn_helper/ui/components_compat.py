@@ -8,7 +8,7 @@ toast implementation while allowing TaskStatus.busy_inline to live in the base
 module.
 """
 
-from PySide6.QtCore import QEvent, QLocale, QPoint, QPropertyAnimation, Qt, QTimer, Signal, QEasingCurve
+from PySide6.QtCore import QEvent, QLocale, QPoint, QPropertyAnimation, QSettings, Qt, QTimer, Signal, QEasingCurve
 from PySide6.QtGui import QGuiApplication, QIntValidator
 from PySide6.QtWidgets import (
     QApplication, QCalendarWidget, QFrame, QGraphicsOpacityEffect, QHBoxLayout,
@@ -42,6 +42,12 @@ class AnimatedStack(QWidget):
             self._pages[self._current].hide()
         new = self._pages[key]
         new.show()
+        # Respect the motion preference; a page switch must always work without
+        # effects, including on remote sessions and low-performance machines.
+        if not bool(QSettings("LinkVideo", "LinkVideo.Helper").value("ui/animations_enabled", True, bool)):
+            new.setGraphicsEffect(None)
+            self._current = key
+            return
         effect = QGraphicsOpacityEffect(new)
         effect.setOpacity(0.0)
         new.setGraphicsEffect(effect)
