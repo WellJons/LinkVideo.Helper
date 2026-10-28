@@ -80,12 +80,13 @@ with tempfile.TemporaryDirectory() as temp:
 calls = []
 req = BillingLoginRequest(" fake.crm.user ", "fictional-crm-secret")
 result = check_billing_login(req, sender=sender_for(
-    FakeResponse(200, {"success": True, "access_token": "fake-secret-token"},
+    FakeResponse(200, {"token": "fake-secret-token"},
                  {"set-cookie": "session=fake-cookie"}), calls,
 ))
 assert result.status_code == 200
 assert result.has_cookie and result.has_token_field
-assert result.response_keys == ("access_token", "success")
+assert result.response_keys == ("token",)
+assert result.token == "fake-secret-token"
 assert result.session_known is False
 assert "fake-secret-token" not in repr(result)
 assert "fake-cookie" not in repr(result)
@@ -99,6 +100,10 @@ for response in (
     FakeResponse(403, {"detail": "forbidden"}),
     FakeResponse(302, {"success": True}),
     FakeResponse(200, {"success": False}),
+    FakeResponse(200, {"access_token": "different-contract"}),
+    FakeResponse(200, {"token": ""}),
+    FakeResponse(200, {"token": 42}),
+    FakeResponse(200, {"token": "line\\r\\nbreak"}),
 ):
     try:
         check_billing_login(req, sender=sender_for(response, []))
@@ -126,7 +131,21 @@ with tempfile.TemporaryDirectory() as temp:
     panel.use_saved.click()
     assert panel.username.text() == "existing.helper"
     assert panel.password.text() == "fictional-helper-password"
+    assert panel.submit.text() == "Войти"
+    assert not panel.login_verified
     assert not settings.contains("billing/crm/password_dpapi")
+    # Confirmed token becomes a RAM-only session. Avoid network in smoke.
+    panel._on_login_done(0, result, None)
+    assert panel.login_verified
+    assert panel.status.text() == "Вход выполнен"
+    assert panel.logout_btn.isEnabled()
+    assert panel.store.load().password == "fictional-helper-password"
+    assert not settings.contains("billing/crm/token")
+    assert "fake-secret-token" not in Path(temp, "ui.ini").read_text(encoding="utf-8")
+    panel.logout_btn.click()
+    assert not panel.login_verified
+    assert panel.store.load().password == "fictional-helper-password"
+    assert panel.status.text() == "Не подключён"
     panel.clear_btn.click()
     assert not panel.username.text() and not panel.password.text()
     panel.close()
