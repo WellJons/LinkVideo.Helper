@@ -386,7 +386,8 @@ class TariffsPage(QWidget):
         for key, text in (
             ("login", client.login),
             ("contract", client.contract_number),
-            ("services", str(len(client.services)) if client.services_loaded or client.services else "—"),
+            ("services", client.services_status or
+             (str(len(client.services)) if client.services_loaded or client.services else "—")),
             ("balance", client.balance_text),
         ):
             self.metric_values[key].setText(_value(text))
@@ -400,7 +401,7 @@ class TariffsPage(QWidget):
             self.info_values[key].setText(_value(value))
         self.services_table.setRowCount(len(client.services))
         self.services_hint.setText(
-            "Список камер ещё не загружен из CRM. Нужен ответ /api/accounts/{id}/cameras."
+            "Список камер ещё не загружен из CRM."
             if not client.services_loaded and not client.services else
             "Смена тарифов выполняется по каждой услуге отдельно. "
             "Без подтверждённого API изменение отключено."
