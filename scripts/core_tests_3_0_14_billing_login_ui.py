@@ -142,6 +142,11 @@ with tempfile.TemporaryDirectory() as temp:
     assert panel.store.load().password == "fictional-helper-password"
     assert not settings.contains("billing/crm/token")
     assert "fake-secret-token" not in Path(temp, "ui.ini").read_text(encoding="utf-8")
+    panel._credentials_edited()
+    assert not panel.login_verified  # editing fields invalidates session
+    assert panel.status.text() == "Не подключён"
+    panel._on_login_done(0, result, None)
+    assert panel.login_verified
     panel.logout_btn.click()
     assert not panel.login_verified
     assert panel.store.load().password == "fictional-helper-password"
