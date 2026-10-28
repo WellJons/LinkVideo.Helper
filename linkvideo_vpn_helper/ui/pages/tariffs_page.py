@@ -823,8 +823,9 @@ class TariffsPage(QWidget):
 
         def work():
             try:
-                result = self.gateway.find_client(login)
-                if result is not None:
+                resolver = getattr(self.gateway, "find_client_or_choices", None)
+                result = resolver(login) if callable(resolver) else self.gateway.find_client(login)
+                if isinstance(result, BillingClient):
                     validate_client(result)
                 self.searchReady.emit(request_id, result, None)
             except Exception as exc:
@@ -844,9 +845,90 @@ class TariffsPage(QWidget):
             self.result_host.hide()
             self.empty_card.show()
             return
+        if isinstance(client, tuple) and client and all(
+            isinstance(hit, BillingSearchHit) for hit in client
+        ):
+            chosen = self._choose_billing_account(client)
+            if chosen is None:
+                self.task.warning("Выбор отменён", "Нужно выбрать страну и аккаунт.")
+                return
+            self._load_selected_account(chosen)
+            return
+        if not isinstance(client, BillingClient):
+            self.task.error("Некорректный ответ CRM", "Не удалось определить аккаунт.")
+            return
         self.client = client
         self.task.hide()
         self._render_client(client)
+
+    def _choose_billing_account(self, hits: tuple[BillingSearchHit, ...]):
+        """Always require explicit selection when one login has several accounts."""
+        dialog = QDialog(self)
+        dialog.setObjectName("BillingChooseAccountDialog")
+        dialog.setWindowTitle("Выберите аккаунт и страну")
+        dialog.setMinimumSize(560, 320)
+        layout = QVBoxLayout(dialog)
+        note = QLabel(
+            "Найдено несколько аккаунтов. Выберите нужную страну и договор "
+            "перед открытием камер или сменой тарифа."
+        )
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        choices = QListWidget()
+        choices.setObjectName("BillingDuplicateAccountList")
+        choices.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        choices.setStyleSheet(
+            "QListWidget::item { padding: 11px; margin: 3px; }"
+            "QListWidget::item:hover { background: palette(alternate-base); }"
+        )
+        for hit in hits:
+            display = (
+                f"{hit.country}   •   ID {hit.id}   •   {hit.account_type or 'Тип не указан'}\n"
+                f"{hit.login}   {hit.account_name if hit.account_name != hit.login else ''}"
+            )
+            choices.addItem(QListWidgetItem(display))
+        layout.addWidget(choices)
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        cancel = QPushButton("Отмена")
+        cancel.clicked.connect(dialog.reject)
+        select = QPushButton("Открыть аккаунт")
+        select.setProperty("role", "primary")
+        select.setEnabled(False)
+        select.setObjectName("BillingSelectAccount")
+        choices.currentRowChanged.connect(lambda row: select.setEnabled(row >= 0))
+        choices.itemDoubleClicked.connect(lambda item: dialog.accept())
+        select.clicked.connect(dialog.accept)
+        actions.addWidget(cancel)
+        actions.addWidget(select)
+        layout.addLayout(actions)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        row = choices.currentRow()
+        return hits[row] if 0 <= row < len(hits) else None
+
+    def _load_selected_account(self, hit: BillingSearchHit):
+        if self._busy or not callable(getattr(self.gateway, "find_client_by_hit", None)):
+            self.task.error("Нет доступа", "Не удалось открыть выбранный аккаунт.")
+            return
+        self._request_id += 1
+        request_id = self._request_id
+        self._set_busy(True)
+        self.task.busy_inline("Открытие аккаунта", f"{hit.country} · ID {hit.id}")
+
+        def work():
+            try:
+                client = self.gateway.find_client_by_hit(hit)
+                validate_client(client)
+                if client.id != hit.id or client.country != hit.country:
+                    raise BillingValidationError("Ответ относится к другому аккаунту.")
+                self.searchReady.emit(request_id, client, None)
+            except Exception as exc:
+                self.searchReady.emit(request_id, None, exc)
+
+        threading.Thread(
+            target=work, name="billing-selected-account", daemon=True
+        ).start()
 
     def _render_client(self, client: BillingClient):
         validate_client(client)
