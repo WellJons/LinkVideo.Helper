@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QDialog, QHBoxLayout, QLabel, QProgressBar, QVBoxLayout, QWidget
 
@@ -101,19 +101,18 @@ def main() -> int:
     theme_style = get_theme_style(str(settings.value("ui/theme_v2", "linkvideo_2026", str) or "linkvideo_2026"))
     app.setStyleSheet(theme_style)
 
-    saved_username = str(settings.value("username", "", str) or "").strip()
-    saved_password = str(settings.value("password", "", str) or "")
+    # Never trust saved credentials without asking RouterOS to authenticate.
+    # The login dialog can retry after an invalid saved password or network error.
+    from linkvideo_vpn_helper.ui.login_window import LoginWindow
+    login = LoginWindow(settings)
     remember = bool(settings.value("remember", True, bool))
-    if remember and saved_username and saved_password:
-        credential_values = (saved_username, saved_password)
-    else:
-        from linkvideo_vpn_helper.ui.login_window import LoginWindow
-        login = LoginWindow(settings)
-        if login.exec() != QDialog.DialogCode.Accepted or login.payload is None:
-            event("APP", "Авторизация отменена")
-            shutdown_runtime_logging()
-            return 0
-        credential_values = (login.payload.username, login.payload.password)
+    if remember and login.login.text().strip() and login.password.text():
+        QTimer.singleShot(0, login._submit)
+    if login.exec() != QDialog.DialogCode.Accepted or login.payload is None:
+        event("APP", "Авторизация отменена")
+        shutdown_runtime_logging()
+        return 0
+    credential_values = (login.payload.username, login.payload.password)
     event("APP", "Авторизация RouterOS", credential_values[0])
 
     splash = StartupSplash(theme_style)
