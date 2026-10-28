@@ -27,8 +27,8 @@ assert 'LEGACY_GOOGLE_DRIVE_MANIFEST_URL' in update_text
 assert '("github", GITHUB_UPDATE_MANIFEST_URL)' in update_text
 assert '("google_drive", fallback_manifest_url or LEGACY_GOOGLE_DRIVE_MANIFEST_URL)' in update_text
 assert 'data.get("download_url") or data.get("url")' in update_text
-assert 'if _same_version(str(from_version), APP_VERSION)' in update_text
-assert 'artifact_kind = "patch"' in update_text
+assert 'patches = data.get' not in update_text
+assert 'artifact_kind = "setup"' in update_text
 assert "required=True" in update_text
 assert "_MAX_SETUP_BYTES" in update_text
 
@@ -66,9 +66,9 @@ info = svc._parse_manifest(
     source="github",
 )
 assert info.has_update
-assert info.is_patch
-assert info.setup_url.lower().endswith("patch.exe")
-assert info.sha256 == "b" * 64
+assert not info.is_patch
+assert info.setup_url.lower().endswith("setup.exe")
+assert info.sha256 == "a" * 64
 assert "re.search" in update_text
 
 for bad_manifest in (
