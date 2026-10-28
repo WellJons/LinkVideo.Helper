@@ -490,8 +490,16 @@ class TariffsPage(QWidget):
         head = self.services_table.horizontalHeader()
         head.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         head.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        for idx in range(2, 7):
-            head.setSectionResizeMode(idx, QHeaderView.ResizeMode.ResizeToContents)
+        # ResizeToContents on a column made entirely of cell widgets can
+        # calculate a width too small for even the first button. Keep an
+        # explicit minimum width for the action column and let the table
+        # show its own horizontal scrollbar when space is limited.
+        for idx, width in ((2, 80), (3, 85), (4, 80), (5, 112), (6, 184)):
+            head.setSectionResizeMode(idx, QHeaderView.ResizeMode.Fixed)
+            self.services_table.setColumnWidth(idx, width)
+        self.services_table.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
         self.services_table.setMinimumHeight(320)
         root.addWidget(self.services_table)
         self.services_hint = QLabel(
@@ -627,6 +635,8 @@ class TariffsPage(QWidget):
             actions_row.setSpacing(5)
             action = QPushButton("Тариф")
             action.setProperty("role", "soft")
+            action.setMinimumWidth(100)
+            action.setMinimumHeight(36)
             action.setObjectName("TariffChangeButton")
             action.setEnabled(bool(self.gateway.can_change_tariffs))
             action.setToolTip(
@@ -638,6 +648,8 @@ class TariffsPage(QWidget):
             secondary = QPushButton("⋯")
             secondary.setObjectName("TariffOtherActionsButton")
             secondary.setProperty("role", "soft")
+            secondary.setFixedWidth(46)
+            secondary.setMinimumHeight(36)
             secondary.setToolTip("Другие действия с услугой")
             menu = QMenu(secondary)
             # Operations pictured in the billing UI are not enabled until
@@ -647,7 +659,7 @@ class TariffsPage(QWidget):
                 item.setEnabled(False)
                 item.setToolTip("Метод API пока не подтверждён")
             secondary.setMenu(menu)
-            actions_row.addWidget(action)
+            actions_row.addWidget(action, 1)
             actions_row.addWidget(secondary)
             self.services_table.setCellWidget(row, 6, actions)
             self.services_table.setRowHeight(row, 58)
