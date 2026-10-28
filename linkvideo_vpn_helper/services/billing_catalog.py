@@ -201,12 +201,11 @@ def filter_tariffs_for_client(
     validate_client(client)
     if not client.legal_type:
         raise BillingValidationError("Тип клиента не подтверждён. Каталог не может быть отфильтрован.")
-    # No inference from is_showed, is_start, count_cameras or Monitor flags:
-    # those are not confirmed server-side rules for tariff eligibility.
-    return tuple(
-        tariff for tariff in tariffs
-        if tariff.country == client.country and tariff.account_type == client.legal_type
-    )
+    # CRM's real dropdown contains corporate/ЮЛ, Monitor and starter plans
+    # even on individual client accounts. An exact legal-type equality check
+    # incorrectly hid them. Country is a verified boundary; plan type is
+    # metadata for display and the server decides actual eligibility on PUT.
+    return tuple(tariff for tariff in tariffs if tariff.country == client.country)
 
 
 def build_tariff_reference(
