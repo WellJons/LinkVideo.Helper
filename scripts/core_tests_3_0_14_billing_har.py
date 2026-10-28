@@ -47,7 +47,7 @@ assert sum(results.values()) == 2
 output = "\n".join(str(x) for x in results)
 assert "GET" in output and "POST" in output
 assert "/api/v1/tariffs/:value" in output
-assert "/api/v2/clients/:value/:value" in output
+assert "/api/v2/clients/:value/update" in output
 for secret in ("super_secret", "89143397169", "evstegneev", "mypassword", "private"):
     assert secret not in output
 assert module.safe_route("/api/v1/subscriptions/abcXYZ").endswith("/:value")
