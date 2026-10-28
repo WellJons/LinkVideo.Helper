@@ -32,8 +32,10 @@ assert "return nil" in verify
 
 # Failure to provision optional silent patches may never abort a complete app
 # install. Full Setup remains the fallback update path.
-assert "recordSilentUpdateWarning(silentErr)" in backend
-assert "if silentErr != nil" in backend
+assert "recordSilentUpdateWarning(nil)" in backend
+install_body = backend.split("func installProduct(", 1)[1].split("func removeShortcuts", 1)[0]
+assert "registerSilentUpdateTask(" not in install_body
+assert "removeSilentUpdateTask()" in install_body
 assert 'progress(100, "LinkVideo.Helper установлен")' in backend
 assert "return appPath, nil" in backend
 
