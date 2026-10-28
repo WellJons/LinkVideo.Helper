@@ -40,6 +40,7 @@ rows = (
     tariff("30", "BYN ЮЛ 30 дней"),
     tariff("mix", "BYN KZT ЮЛ 20 дней"),
     tariff("kz", "KZT ЮЛ 7 дней", "Казахстан"),
+    tariff("plain", "ЮЛ 14 дней", "Беларусь"),
 )
 assert archive_days_from_name("ЮЛ 30 дней") == 30
 assert archive_days_from_name("Заявка 14 дней") == 14
@@ -51,7 +52,7 @@ assert country_tariff_visible(rows[0], "Беларусь")
 assert not country_tariff_visible(rows[2], "Беларусь")
 assert not country_tariff_visible(rows[-1], "Беларусь")
 assert [r.id for r in select_tariffs(rows, country="Беларусь")] == [
-    "10", "30", "90", "x"
+    "10", "plain", "30", "90", "x"
 ]
 assert [r.id for r in select_tariffs(rows, country="Беларусь", days=30)] == ["30"]
 assert [r.id for r in select_tariffs(
@@ -84,10 +85,10 @@ snapshot = TariffReferenceCatalog(
 
 app = QApplication.instance() or QApplication([])
 dialog = TariffCatalogDialog(snapshot, client.legal_type, service=service)
-assert dialog.table.rowCount() == 4
+assert dialog.table.rowCount() == 5
 assert dialog.table.item(0, 0).text() == "BYN ЮЛ 10 дней"
 assert dialog.table.item(0, 1).text() == "10 дн."
-assert dialog.table.item(2, 0).text() == "BYN ЮЛ 90 дней"
+assert dialog.table.item(3, 0).text() == "BYN ЮЛ 90 дней"
 assert dialog.period_table.item(0, 1).text() == "10"
 assert dialog.table.item(0, 4).text() == "2"  # Trial, not retention.
 assert dialog.findChild(QPushButton, "TariffPreviewDateButton")
@@ -123,7 +124,7 @@ all_tariffs._on_result(
 )
 assert all_tariffs.table.rowCount() == len(rows)
 all_tariffs.country.setCurrentIndex(all_tariffs.country.findData("Беларусь"))
-assert all_tariffs.table.rowCount() == 4
+assert all_tariffs.table.rowCount() == 5
 assert all_tariffs.table.item(0, 1).text() == "BYN ЮЛ 10 дней"
 all_tariffs.archive_days.setValue(90)
 assert all_tariffs.table.rowCount() == 1
