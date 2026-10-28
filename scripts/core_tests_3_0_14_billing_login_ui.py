@@ -169,13 +169,13 @@ with tempfile.TemporaryDirectory() as temp:
     assert page.workspace_tabs.tabText(0) == "Поиск клиента"
     assert page.workspace_tabs.tabText(1) == "Создать клиента"
     assert page.workspace_tabs.tabText(2) == "Все тарифы"
-    assert page.create_country.count() == 3
-    assert not page.create_crm_btn.isEnabled()
-    requested = []
-    page.openVpnCreate.connect(requested.append)
-    page.create_country.setCurrentIndex(1)
-    page.create_vpn_btn.click()
-    assert requested == ["Казахстан"]
+    assert page.b2o_creator.country.count() == 3
+    assert page.b2o_creator.country.itemData(0) == 241
+    assert page.b2o_creator.country.itemData(1) == 1721
+    assert page.b2o_creator.country.itemData(2) == 1741
+    assert not page.b2o_creator.create_button.isEnabled()
+    assert not hasattr(page, "create_crm_btn")
+    assert not hasattr(page, "create_vpn_btn")
     assert isinstance(page.all_tariffs_page, BillingAllTariffsWidget)
     assert page.billing_login is not None
     assert not page.all_tariffs_page.refresh.isEnabled()
