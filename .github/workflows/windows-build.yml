@@ -47,20 +47,6 @@ jobs:
         shell: pwsh
         run: ./scripts/verify_release.ps1
 
-      # Test installer requested for manual validation of the tariffs PR.
-      # Keep production Releases untouched; artifact expires automatically.
-      - name: Upload experimental tariffs Setup
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'feature/3.0.13-tariffs-billing'
-        uses: actions/upload-artifact@v4
-        with:
-          name: LinkVideo.Helper_3.0.13_Tariffs_RC
-          path: |
-            release_candidate/LinkVideo.Helper_Setup_3.0.13_RC.exe
-            release_candidate/verification.json
-          if-no-files-found: error
-          retention-days: 7
-          compression-level: 0
-
       # RC builds do not use Actions artifacts. One private draft RC is replaced
       # in-place, so quota and historical build clutter are not part of the
       # release chain.
