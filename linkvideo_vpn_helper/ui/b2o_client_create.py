@@ -7,7 +7,7 @@ import secrets
 import string
 import threading
 
-from PySide6.QtCore import QSettings, QUrl, Signal
+from PySide6.QtCore import QSettings, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -52,7 +52,7 @@ class B2OClientCreationWidget(QWidget):
         self._creating = False
         self._created = False
         self._outcome_unknown = False
-        self._processed_logins: set[str] = set()
+        self._processed_logins: set[tuple[str, str]] = set()
         self._pending_draft: B2OClientDraft | None = None
         self._result_message = ""
         self.accessReady.connect(self._on_access)
@@ -220,6 +220,9 @@ class B2OClientCreationWidget(QWidget):
     def _country_changed(self, *_):
         self._attempt += 1
         self.access_status.set_status("Доступ не проверен", "neutral")
+        if hasattr(self, "result_card") and not self._creating:
+            self._clear_displayed_creation()
+            self._refresh_create_enabled()
         if hasattr(self, "cross_share"):
             # Set the observed sharing flag for the newly selected operator.
             # This does not create anything; the operator can see the flag
@@ -266,11 +269,32 @@ class B2OClientCreationWidget(QWidget):
             )
         self._refresh_create_enabled()
 
-    def _reset_creation_lock_for_new_login(self, *_):
-        # A distinct login is required before a second POST after success/uncertainty.
+    def _parent_scroll_position(self):
+        page = self.parent()
+        scroll = getattr(page, "page_scroll", None)
+        return (scroll, scroll.verticalScrollBar().value()) if scroll else (None, 0)
+
+    def _restore_scroll(self, saved):
+        scroll, position = saved
+        if scroll is not None:
+            QTimer.singleShot(
+                0, lambda s=scroll, y=position: s.verticalScrollBar().setValue(y)
+            )
+
+    def _clear_displayed_creation(self):
+        saved = self._parent_scroll_position()
         self._created = False
         self._outcome_unknown = False
+        self._result_message = ""
+        self.result_text.clear()
+        self.result_card.hide()
         self.create_button.setText("Создать клиента у оператора")
+        self.access_status.set_status("Доступ не проверен", "neutral")
+        self._restore_scroll(saved)
+
+    def _reset_creation_lock_for_new_login(self, *_):
+        if hasattr(self, "result_card") and not self._creating:
+            self._clear_displayed_creation()
         self._refresh_create_enabled()
 
     def _refresh_create_enabled(self, *_):
@@ -293,7 +317,9 @@ class B2OClientCreationWidget(QWidget):
             try:
                 draft = self.draft()
                 draft.verified_payload()
-                allowed = draft.login.casefold() not in self._processed_logins
+                allowed = (
+                    draft.country, draft.login.casefold()
+                ) not in self._processed_logins
             except ValueError:
                 allowed = False
         self.create_button.setEnabled(allowed)
@@ -304,8 +330,8 @@ class B2OClientCreationWidget(QWidget):
         try:
             draft = self.draft()
             draft.verified_payload()
-            if draft.login.casefold() in self._processed_logins:
-                raise ValueError("Для этого логина уже была отправка. Проверьте его в B2O.")
+            if (draft.country, draft.login.casefold()) in self._processed_logins:
+                raise ValueError("Для этого логина и страны отправка уже была. Проверьте B2O.")
         except ValueError as exc:
             self.message.setText(str(exc))
             self._refresh_create_enabled()
@@ -365,6 +391,7 @@ class B2OClientCreationWidget(QWidget):
         threading.Thread(target=work, name="b2o-client-create", daemon=True).start()
 
     def _on_created(self, result: object, error: object):
+        old_scroll = self._parent_scroll_position()
         submitted = self._pending_draft
         self._pending_draft = None
         self._creating = False
@@ -372,7 +399,9 @@ class B2OClientCreationWidget(QWidget):
         if result is not None:
             self._created = True
             if submitted is not None:
-                self._processed_logins.add(submitted.login.casefold())
+                self._processed_logins.add(
+                    (submitted.country, submitted.login.casefold())
+                )
                 self._result_message = client_credentials_message(
                     submitted.login, submitted.password
                 )
@@ -395,7 +424,9 @@ class B2OClientCreationWidget(QWidget):
         elif error == "unknown":
             self._outcome_unknown = True
             if submitted is not None:
-                self._processed_logins.add(submitted.login.casefold())
+                self._processed_logins.add(
+                    (submitted.country, submitted.login.casefold())
+                )
             self.message.setText(
                 "Результат POST неизвестен. Клиент мог быть создан. "
                 "Проверьте логин в админке B2O перед любой повторной отправкой."
@@ -423,6 +454,7 @@ class B2OClientCreationWidget(QWidget):
             )
             self.access_status.set_status("Не создан", "warning")
         self._refresh_create_enabled()
+        self._restore_scroll(old_scroll)
 
     def _set_form_busy(self, busy: bool):
         for field in (
