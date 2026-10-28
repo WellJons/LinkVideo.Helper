@@ -15,7 +15,7 @@ for forbidden in ("#FFAD19", "#EB9600", "#FFF9EC"):
     assert forbidden not in brand, f"broad amber runtime override returned: {forbidden}"
 
 # The stable linkvideo_2026 key uses neutral gray surfaces and orange accents.
-for token in ("#F3F4F6", "#F8F9FA", "#FFFFFF", "#ECEFF2", "#DCE1E6", "#F07119", "#D95C0A"):
+for token in ("#F3F4F6", "#F8F9FA", "#FFFFFF", "#ECEFF2", "#DCE1E6", "#C94E08", "#B74405"):
     assert token in theme, token
 
 # Clean installations default to LinkVideo while an explicit old dark theme is preserved.
