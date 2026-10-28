@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Operator B2O form and read-only GET contract, no client mutations."""
+"""Operator B2O verified POST contract using fake transport only."""
 
 import json
 import os
