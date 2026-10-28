@@ -1321,8 +1321,13 @@ class TariffsPage(QWidget):
             if self.client is not None and refreshed is not None and refreshed.id == self.client.id:
                 self.client = refreshed
                 self._render_client(refreshed)
-            good = sum(1 for _, status, _ in outcomes if status == "ok")
-            summary = "; ".join(f"{camera}: {message}" for camera, _, message in outcomes)
+            good = sum(1 for item in outcomes if item[1] == "ok")
+            for item in outcomes:
+                if item[1] == "unknown" and len(item) > 3:
+                    self._uncertain_tariff_changes.add(item[3])
+            summary = "; ".join(
+                f"{item[0]}: {item[2]}" for item in outcomes
+            )
             if good == len(outcomes):
                 self.task.done("Тарифы назначены", f"Подтверждено камер: {good}. {summary[:900]}")
             else:
@@ -1406,10 +1411,11 @@ class TariffsPage(QWidget):
                     result = self.gateway.change_tariff(change, client=client)
                     outcomes.append((service.camera_name, "ok", result.message))
                 except BillingWriteOutcomeUnknown:
-                    self._uncertain_tariff_changes.add(fingerprint)
+                    # Mutate UI state only in the GUI-thread completion slot.
                     outcomes.append((
                         service.camera_name, "unknown",
-                        "Исход запроса неизвестен; дальнейшие изменения остановлены"
+                        "Исход запроса неизвестен; дальнейшие изменения остановлены",
+                        fingerprint,
                     ))
                     break
                 except Exception:
@@ -1419,7 +1425,7 @@ class TariffsPage(QWidget):
                     ))
                     break
             try:
-                refreshed = self.gateway.find_client_by_id(client)  # optional
+                refreshed = self.gateway.refresh_client(client)
             except Exception:
                 refreshed = None
             self.operationReady.emit(
