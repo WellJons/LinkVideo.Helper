@@ -82,6 +82,40 @@ except BillingNotConfigured:
     pass
 transport.header_mode = "authorization_raw"
 
+# No manual header setup needed: try the token header first. On a
+# 401 alone, another known same-origin authentication header may be tried.
+class HeaderNegotiationSession(DummySession):
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        headers = kwargs.get("headers", {})
+        if "token" in headers:
+            return DummyResponse(401)
+        if headers.get("Authorization", "").startswith("Bearer "):
+            return DummyResponse(200)
+        return DummyResponse(401)
+
+negotiation = HeaderNegotiationSession()
+auto = BillingTokenTransport("fake-token", header_mode="auto", _session=negotiation)
+assert auto.ready
+assert auto.get_json("/api/accounts/725")["success"] is True
+assert auto.header_mode == "authorization_bearer"
+assert len(negotiation.calls) == 2
+auto.get_json("/api/accounts/725/cameras")
+assert len(negotiation.calls) == 3
+assert negotiation.calls[-1][1]["headers"]["Authorization"] == "Bearer fake-token"
+auto.close()
+
+# 403 must not trigger fallback: it may be a genuine permission denial.
+denied = DummySession(code=403)
+no_retry = BillingTokenTransport("fake-token", header_mode="auto", _session=denied)
+try:
+    no_retry.get_json("/api/accounts/725")
+    raise AssertionError("Permission denial ignored")
+except BillingPermissionDenied:
+    pass
+assert len(denied.calls) == 1
+no_retry.close()
+
 session.code = 401
 try:
     transport.get_json("/api/accounts/725/cameras")
