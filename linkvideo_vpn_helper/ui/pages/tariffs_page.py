@@ -12,7 +12,7 @@ from datetime import date
 from PySide6.QtCore import QDate, QSettings, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (
-    QApplication, QAbstractItemView, QCalendarWidget, QComboBox, QDateEdit,
+    QApplication, QAbstractItemView, QCalendarWidget, QCheckBox, QComboBox, QDateEdit,
     QDialog, QFormLayout, QMenu, QGridLayout, QHeaderView, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton, QScrollArea,
     QSpinBox, QTabWidget, QTableWidget, QTableWidgetItem, QTextEdit,
@@ -113,7 +113,8 @@ class TariffCatalogDialog(QDialog):
     """A read-only CRM catalog, never a list of approved service mutations."""
 
     def __init__(self, snapshot: TariffReferenceCatalog, account_type: str,
-                 parent=None, *, service: BillingService | None = None):
+                 parent=None, *, service: BillingService | None = None,
+                 selected_count: int = 1):
         super().__init__(parent)
         self.setObjectName("TariffCatalogDialog")
         self.setWindowTitle("Подбор тарифа" if service else "Справочник тарифов")
@@ -126,7 +127,11 @@ class TariffCatalogDialog(QDialog):
         root.setContentsMargins(22, 19, 22, 19)
         root.setSpacing(11)
 
-        title = QLabel("Подобрать тариф для камеры" if service else "Каталог тарифов")
+        title = QLabel(
+            f"Изменить тариф для {selected_count} камер"
+            if service and selected_count > 1 else
+            "Подобрать тариф для камеры" if service else "Каталог тарифов"
+        )
         title.setObjectName("SectionTitle")
         root.addWidget(title)
         if service:
@@ -734,6 +739,13 @@ class TariffsPage(QWidget):
             "Справочник тарифов выбранной страны и типа клиента без изменения услуг"
         )
         self.catalog_btn.clicked.connect(self._request_catalog)
+        self.bulk_btn = QPushButton("Изменить выбранным (0)")
+        self.bulk_btn.setObjectName("BulkTariffChange")
+        self.bulk_btn.setProperty("role", "primary")
+        self.bulk_btn.setMinimumHeight(40)
+        self.bulk_btn.setEnabled(False)
+        self.bulk_btn.clicked.connect(self._request_bulk_catalog)
+        header_row.addWidget(self.bulk_btn)
         header_row.addWidget(self.catalog_btn)
         root.addLayout(header_row)
         self.services_table = QTableWidget(0, 7)
@@ -774,6 +786,7 @@ class TariffsPage(QWidget):
         self.camera_scroll.setMaximumHeight(490)
         self.camera_scroll.setMinimumHeight(90)
         self.camera_cards_host = QWidget()
+        self.camera_checks = {}
         self.camera_cards = QVBoxLayout(self.camera_cards_host)
         self.camera_cards.setContentsMargins(2, 2, 2, 2)
         self.camera_cards.setSpacing(9)
@@ -804,6 +817,11 @@ class TariffsPage(QWidget):
         self.search_btn.setEnabled(not busy)
         self.services_table.setEnabled(not busy)
         self.camera_scroll.setEnabled(not busy)
+        if hasattr(self, "bulk_btn"):
+            self.bulk_btn.setEnabled(
+                not busy and bool(self.gateway.can_change_tariffs)
+                and any(x.isChecked() for x in self.camera_checks.values())
+            )
         self.catalog_btn.setEnabled(
             not busy and self.client is not None and self.gateway.configured
             and callable(getattr(self.gateway, "reference_catalog", None))
@@ -983,6 +1001,7 @@ class TariffsPage(QWidget):
             if not client.services_loaded and not client.services else
             f"Камер: {len(client.services)} · смена тарифа с подтверждением"
         )
+        self.camera_checks.clear()
         while self.camera_cards.count():
             entry = self.camera_cards.takeAt(0)
             if entry.widget():
@@ -1043,8 +1062,27 @@ class TariffsPage(QWidget):
             cam_card = Card(subtle=True)
             cam_card.setObjectName("BillingCameraCard")
             cam_row = QHBoxLayout(cam_card)
-            cam_row.setContentsMargins(16, 13, 16, 13)
-            cam_row.setSpacing(14)
+            cam_row.setContentsMargins(13, 12, 13, 12)
+            cam_row.setSpacing(12)
+            check = QCheckBox()
+            check.setObjectName("BillingCameraSelect")
+            check.setToolTip(f"Выбрать {service.camera_name} для смены тарифа")
+            check.toggled.connect(self._update_bulk_button)
+            self.camera_checks[service.id] = check
+            cam_row.addWidget(check)
+            thumb = QLabel("Нет\nпревью")
+            thumb.setObjectName("BillingCameraPreview")
+            thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            thumb.setFixedSize(70, 58)
+            thumb.setToolTip(
+                "Превью через B2O появится после подтверждения соответствия "
+                "id_camera_vc и ID камеры оператора. Не подставляем произвольное видео."
+            )
+            thumb.setStyleSheet(
+                "QLabel#BillingCameraPreview { background: #e9edf2; "
+                "color: #7b8591; border: 1px solid #dce1e7; border-radius: 7px; }"
+            )
+            cam_row.addWidget(thumb)
             details = QVBoxLayout()
             details.setSpacing(5)
             title_row = QHBoxLayout()
@@ -1081,13 +1119,81 @@ class TariffsPage(QWidget):
                 lambda _checked=False, srv=service: self._request_service_catalog(srv)
             )
             cam_row.addWidget(change_button)
+            other = QPushButton("⋯")
+            other.setObjectName("BillingCameraOtherActions")
+            other.setToolTip("Отключить, передать, история изменений")
+            other.setProperty("role", "soft")
+            other.setFixedWidth(42)
+            other.setMinimumHeight(42)
+            popup = QMenu(other)
+            for label in ("Включить / отключить", "Передать камеру", "История изменений", "Скидка"):
+                operation = popup.addAction(label)
+                operation.triggered.connect(
+                    lambda checked=False, name=label, srv=service:
+                    self._billing_external_action(name, srv)
+                )
+            other.setMenu(popup)
+            cam_row.addWidget(other)
             self.camera_cards.addWidget(cam_card)
         # Avoid nested scrolling for a short camera list. For larger lists
         # only the card stack scrolls, in small predictable pixel increments.
         self.camera_scroll.setFixedHeight(
             min(490, max(95, len(client.services) * 99 + 16))
         )
+        self._update_bulk_button()
         self.tabs.setCurrentIndex(1)
+
+    def _billing_external_action(self, action: str, service: BillingService):
+        # There is no verified CRM API for disable/transfer/history yet.
+        # Do not simulate writes or invent endpoints; offer original billing UI.
+        choice = ConfirmDialog(
+            action,
+            f"Камера: {service.camera_name} (ID {service.id}).\n"
+            "API этого действия пока не подтверждён. "
+            "Открыть оригинальный биллинг для выполнения операции?",
+            "Открыть биллинг", False, self,
+        )
+        if choice.exec() == QDialog.DialogCode.Accepted:
+            self._open_billing()
+
+    def _selected_camera_services(self):
+        if self.client is None:
+            return ()
+        return tuple(
+            service for service in self.client.services
+            if service.id in self.camera_checks
+            and self.camera_checks[service.id].isChecked()
+        )
+
+    def _update_bulk_button(self, *_):
+        selected = self._selected_camera_services()
+        self.bulk_btn.setText(f"Изменить выбранным ({len(selected)})")
+        self.bulk_btn.setEnabled(
+            bool(selected) and bool(self.gateway.can_change_tariffs) and not self._busy
+        )
+
+    def _request_bulk_catalog(self):
+        selected = self._selected_camera_services()
+        if not selected or self._busy or self.client is None:
+            return
+        self._request_id += 1
+        request_id = self._request_id
+        client = self.client
+        self._set_busy(True)
+        self.task.busy_inline(
+            "Выбор тарифа", f"Получаю тарифы для {len(selected)} камер…"
+        )
+        def work():
+            try:
+                catalog = self.gateway.reference_catalog(client)
+                self.operationReady.emit(
+                    request_id, "bulk_catalog", (selected, catalog), None
+                )
+            except Exception as exc:
+                self.operationReady.emit(request_id, "bulk_catalog", None, exc)
+        threading.Thread(
+            target=work, name="billing-multi-camera-catalog", daemon=True
+        ).start()
 
     def _request_catalog(self):
         if (
@@ -1192,6 +1298,38 @@ class TariffsPage(QWidget):
                     self.task.warning("Проверьте тариф", str(exc))
                     return
                 self._apply_service_tariff(service, change, dialog._visible_tariffs)
+        elif operation == "bulk_catalog":
+            if self.client is None:
+                return
+            selected, snapshot = result
+            if not all(s in self.client.services for s in selected):
+                return
+            self.task.hide()
+            dialog = TariffCatalogDialog(
+                snapshot, self.client.legal_type, self,
+                service=selected[0], selected_count=len(selected)
+            )
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                try:
+                    change = dialog.selection_change(self.client)
+                except BillingValidationError as exc:
+                    self.task.warning("Проверьте тариф", str(exc))
+                    return
+                self._apply_bulk_tariff(selected, change, dialog._visible_tariffs)
+        elif operation == "bulk_change":
+            outcomes, refreshed = result
+            if self.client is not None and refreshed is not None and refreshed.id == self.client.id:
+                self.client = refreshed
+                self._render_client(refreshed)
+            good = sum(1 for _, status, _ in outcomes if status == "ok")
+            summary = "; ".join(f"{camera}: {message}" for camera, _, message in outcomes)
+            if good == len(outcomes):
+                self.task.done("Тарифы назначены", f"Подтверждено камер: {good}. {summary[:900]}")
+            else:
+                self.task.warning(
+                    "Частичный результат",
+                    f"Успешно: {good}/{len(outcomes)}. {summary[:900]}"
+                )
         elif operation == "options":
             service, choices = result
             self.task.hide()
@@ -1211,6 +1349,85 @@ class TariffsPage(QWidget):
             if result.remain_pay:
                 detail += f" · Доплата по ответу CRM: {result.remain_pay}"
             self.task.done("Изменение тарифа подтверждено", detail)
+
+    def _apply_bulk_tariff(self, services, example: TariffChange, visible_tariffs):
+        client = self.client
+        if not client or self._busy or not self.gateway.can_change_tariffs:
+            return
+        selected = tuple(dict((service.id, service) for service in services).values())
+        if not selected or not all(service in client.services for service in selected):
+            self.task.warning("Выбор изменился", "Повторите выбор камер.")
+            return
+        tariff = next((t for t in visible_tariffs
+                       if t.id == example.tariff_id and t.country == client.country), None)
+        if tariff is None:
+            self.task.warning("Неверный тариф", "Тариф другой страны.")
+            return
+        changes = tuple(
+            validate_tariff_change(
+                client, service, TariffOption(tariff.id, tariff.name),
+                example.effective_date, ""
+            )
+            for service in selected
+        )
+        if any((client.id, c.service_id, c.tariff_id, c.effective_date)
+               in self._uncertain_tariff_changes for c in changes):
+            self.task.warning(
+                "Проверьте биллинг",
+                "Некоторые выбранные камеры имеют неподтверждённую предыдущую запись."
+            )
+            return
+        names = ", ".join(s.camera_name or s.id for s in selected[:8])
+        if len(selected) > 8:
+            names += f" и ещё {len(selected) - 8}"
+        dialog = ConfirmDialog(
+            "Массовая смена тарифа",
+            f"Клиент: {client.login} ({client.country})\n"
+            f"Камер: {len(selected)} — {names}\n"
+            f"Тариф: {tariff.name}\n"
+            f"Дата: {example.effective_date:%d.%m.%Y}\n\n"
+            "Биллинг не предоставляет подтверждённого пакетного API. "
+            "Программа отправит отдельный PUT для каждой камеры. "
+            "Уже успешные операции не откатываются при ошибке следующей.",
+            "Применить к выбранным", False, self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._request_id += 1
+        request_id = self._request_id
+        self._set_busy(True)
+        self.task.busy_inline("Массовая смена", f"Обработка {len(changes)} камер…")
+
+        def work():
+            outcomes = []
+            for service, change in zip(selected, changes):
+                fingerprint = (client.id, change.service_id, change.tariff_id, change.effective_date)
+                try:
+                    result = self.gateway.change_tariff(change, client=client)
+                    outcomes.append((service.camera_name, "ok", result.message))
+                except BillingWriteOutcomeUnknown:
+                    self._uncertain_tariff_changes.add(fingerprint)
+                    outcomes.append((
+                        service.camera_name, "unknown",
+                        "Исход запроса неизвестен; дальнейшие изменения остановлены"
+                    ))
+                    break
+                except Exception:
+                    outcomes.append((
+                        service.camera_name, "error",
+                        "Биллинг отклонил запрос или не удалось подтвердить его результат"
+                    ))
+                    break
+            try:
+                refreshed = self.gateway.find_client_by_id(client)  # optional
+            except Exception:
+                refreshed = None
+            self.operationReady.emit(
+                request_id, "bulk_change", (tuple(outcomes), refreshed), None
+            )
+        threading.Thread(
+            target=work, name="billing-multi-camera-put", daemon=True
+        ).start()
 
     def _apply_service_tariff(self, service: BillingService, change: TariffChange,
                               visible_tariffs):
