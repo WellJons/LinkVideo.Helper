@@ -25,6 +25,16 @@ def _soft(hex_color: str, fallback: str) -> str:
     return fallback
 
 
+def _accent_text(hex_color: str) -> str:
+    """Choose readable text for bright and dark accents across every theme."""
+    rgb = [int(hex_color[index:index + 2], 16) / 255.0 for index in (1, 3, 5)]
+    linear = [x / 12.92 if x <= 0.04045 else ((x + 0.055) / 1.055) ** 2.4 for x in rgb]
+    luminance = sum(v * w for v, w in zip(linear, (0.2126, 0.7152, 0.0722)))
+    # Dark text is superior when the accent's luminance is high. This avoids
+    # white-on-bright-cyan/yellow in non-LinkVideo themes.
+    return "#17212B" if luminance > 0.179 else "#FFFFFF"
+
+
 def _to_dict(key: str, row: tuple[str, ...]) -> dict:
     name, bg, panel, panel2, panel3, border, text, muted, accent, accent_hover, danger = row
     light = key in {"rose_milk", "linkvideo_2026", "lavender_mist"}
@@ -39,6 +49,7 @@ def _to_dict(key: str, row: tuple[str, ...]) -> dict:
         "text": text,
         "muted": muted,
         "accent": accent,
+        "accent_text": _accent_text(accent),
         "accent_hover": accent_hover,
         "accent_soft": {
             "rose_milk": "#FFE8F2",
@@ -245,7 +256,7 @@ def get_theme_style(key: str = "rose_milk") -> str:
     QPushButton:hover {{ background: {c['panel2']}; border-color: {c['border2']}; }}
     QPushButton:pressed {{ background: {c['accent_soft']}; }}
     QPushButton:disabled {{ color: {c['muted']}; background: {c['panel2']}; border-color: {c['border']}; }}
-    QPushButton[role="primary"] {{ background: {c['accent']}; color: white; border-color: {c['accent']}; }}
+    QPushButton[role="primary"] {{ background: {c['accent']}; color: {c['accent_text']}; border-color: {c['accent']}; }}
     QPushButton[role="primary"]:hover {{ background: {c['accent_hover']}; border-color: {c['accent_hover']}; }}
     QPushButton[role="primary"]:pressed {{ background: {c['accent_hover']}; border-color: {c['accent_hover']}; }}
     QPushButton[role="danger"] {{ background: {c['danger']}; color: white; border-color: {c['danger']}; }}
@@ -370,7 +381,7 @@ def get_theme_style(key: str = "rose_milk") -> str:
         background: #303B46; color: #FFFFFF; border-color: transparent;
     }}
     QFrame#Sidebar QPushButton[nav="true"][active="true"] {{
-        color: #FFFFFF; background: {c['accent']};
+        color: {c['accent_text']}; background: {c['accent']};
         border: 1px solid {c['accent']}; font-weight: 730;
     }}
     QFrame#Sidebar QPushButton[role="icon"] {{
@@ -415,7 +426,7 @@ def get_theme_style(key: str = "rose_milk") -> str:
         border-radius: 16px;
     }}
     QLabel#StepNumber {{
-        background: {c['accent']}; color: #FFFFFF; border-radius: 13px;
+        background: {c['accent']}; color: {c['accent_text']}; border-radius: 13px;
         font-size: 13px; font-weight: 780;
     }}
     QFrame#CreateResultEmpty {{
@@ -430,14 +441,14 @@ def get_theme_style(key: str = "rose_milk") -> str:
         color: #FFFFFF; font-size: 15px; font-weight: 750;
     }}
     QFrame#ThemePreviewSidebar QLabel#PreviewActive {{
-        background: {c['accent']}; color: #FFFFFF; font-weight: 720;
+        background: {c['accent']}; color: {c['accent_text']}; font-weight: 720;
         border-radius: 8px; padding: 0 10px;
     }}
     QFrame#ThemePreviewSidebar QLabel#PreviewInactive {{
         color: #D8E0E8; padding: 0 10px;
     }}
     QLabel#PreviewButton {{
-        color: #FFFFFF; background: {c['accent']};
+        color: {c['accent_text']}; background: {c['accent']};
         border-radius: 10px; font-weight: 700;
     }}
     """
