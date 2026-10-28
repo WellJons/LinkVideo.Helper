@@ -122,7 +122,7 @@ with tempfile.TemporaryDirectory() as folder:
     assert page.metric_values["services"].text() == "1/1"
 
     catalog = page.gateway.all_tariffs()
-    page.all_tariffs_page._on_result(0, catalog, None)
+    page.all_tariffs_page._on_result(page.all_tariffs_page._query, catalog, None)
     assert page.all_tariffs_page.table.rowCount() == 1
     assert page.all_tariffs_page.table.item(0, 4).text() == "500 тг."
 
