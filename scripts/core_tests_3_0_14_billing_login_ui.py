@@ -54,6 +54,10 @@ with tempfile.TemporaryDirectory() as temp:
     assert store.load().password == ""
     assert store.helper_credentials().username == "fake.helper.user"
     assert store.helper_credentials().password == "fake.helper.secret"
+    assert store.b2o_login_name() == ""
+    settings.setValue("b2o/login", "corporate.employee")
+    assert store.b2o_login_name() == "corporate.employee"
+    assert not settings.contains("b2o/password")  # B2O never saves a password
     assert not settings.contains("billing/crm/password_dpapi")
     store.save("fake.crm.user", "fictional-crm-secret", remember=True)
     assert store.load().username == "fake.crm.user"
