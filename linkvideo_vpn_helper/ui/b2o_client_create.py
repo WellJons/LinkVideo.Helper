@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""B2O operator client form. Writes restricted to the captured RU payload."""
+"""B2O operator client form. Writes restricted to captured RU/KZ variants."""
 
 import re
 import secrets
@@ -17,7 +17,8 @@ from PySide6.QtWidgets import (
 from linkvideo_vpn_helper.services.archive_service_core import B2OService
 from linkvideo_vpn_helper.services.b2o_client_admin import (
     B2OClientDraft, B2OCreationOutcomeUnknown, B2OCreationRejected,
-    B2OOperatorClientManager, operator_admin_url, operator_for_country,
+    B2OOperatorClientManager, VERIFIED_CREATE_CROSS_SHARING,
+    operator_admin_url, operator_for_country,
 )
 from linkvideo_vpn_helper.ui.components import Card, StatusPill
 
@@ -208,8 +209,8 @@ class B2OClientCreationWidget(QWidget):
         root.addWidget(card)
         root.addStretch(1)
         self.country.currentIndexChanged.connect(self._refresh_create_enabled)
-        self.in_billing.toggled.connect(self._refresh_create_enabled)
-        self.cross_share.toggled.connect(self._refresh_create_enabled)
+        self.in_billing.toggled.connect(self._account_type_changed)
+        self.cross_share.toggled.connect(self._account_type_changed)
         self.account_type.currentIndexChanged.connect(self._account_type_changed)
         for field in (self.name, self.login, self.password, self.phone):
             field.textChanged.connect(self._refresh_create_enabled)
@@ -219,30 +220,44 @@ class B2OClientCreationWidget(QWidget):
     def _country_changed(self, *_):
         self._attempt += 1
         self.access_status.set_status("Доступ не проверен", "neutral")
+        if hasattr(self, "cross_share"):
+            # Set the observed sharing flag for the newly selected operator.
+            # This does not create anything; the operator can see the flag
+            # and may change it, but unsupported combinations block POST.
+            self.cross_share.setChecked(self.country.currentText() == "Казахстан")
         if hasattr(self, "message"):
             self._account_type_changed()
 
     def _account_type_changed(self, *_):
-        if self.country.currentText() != "Россия":
-            operator_id = self.country.currentData()
+        country = self.country.currentText()
+        if country not in VERIFIED_CREATE_CROSS_SHARING:
             self.message.setText(
-                f"{self.country.currentText()} — оператор B2O {operator_id}. "
-                "GET настроек поддерживается, но запрос POST создания клиента "
-                "для этого оператора ещё не подтверждён. "
-                "Откройте админку B2O, создайте тестового клиента и пришлите "
-                "Network → POST clients → Headers (URL и метод), Payload "
-                "и ответ без паролей/токенов. Пока отправка отключена."
+                "Беларусь (оператор 1741): нужен успешный POST с Payload "
+                "и Response для создания клиента. GET настроек не подтверждает "
+                "возможность создания. Пока отправка отключена."
             )
         elif self.account_type.currentData() == "business-unverified":
             self.message.setText(
                 "Для «Бизнеса» пока не подтверждён код account_type. "
-                "Нужен Payload успешного создания такого клиента в B2O. "
-                "До этого отправка отключена, чтобы не создать неправильный тип."
+                "Нужен Payload успешного создания такого клиента в B2O."
+            )
+        elif not self.in_billing.isChecked():
+            self.message.setText(
+                "Создание без «Завести в биллинг» пока не подтверждено."
+            )
+        elif int(self.cross_share.isChecked()) != VERIFIED_CREATE_CROSS_SHARING[country]:
+            flag = "включён" if country == "Казахстан" else "выключен"
+            self.message.setText(
+                f"Для {country} подтверждён POST только когда общий доступ {flag}. "
+                "Другие сочетания не отправляются без проверенного Payload."
             )
         else:
+            operator_id = self.country.currentData()
+            flag = "включён" if country == "Казахстан" else "выключен"
             self.message.setText(
-                "Россия: выбран «Обычный» (код 1, ранее получен успешный ответ B2O). "
-                "Если сервер вернёт HTTP 400, смотрите подсказку о проверке полей."
+                f"{country} · оператор {operator_id}: обычный аккаунт, "
+                f"с заведением в биллинг; общий доступ {flag}. "
+                "Параметры подтверждены успешным POST в B2O."
             )
         self._refresh_create_enabled()
 
@@ -257,7 +272,7 @@ class B2OClientCreationWidget(QWidget):
         if not hasattr(self, "create_button"):
             return
         country = self.country.currentText()
-        unverified_country = country != "Россия"
+        unverified_country = country not in VERIFIED_CREATE_CROSS_SHARING
         if not self._creating and not self._created:
             self.create_button.setText(
                 "Создание недоступно — нет POST API"
@@ -266,7 +281,7 @@ class B2OClientCreationWidget(QWidget):
         self.create_button.setToolTip(
             "Для этого оператора пока получены только GET. "
             "Нужны URL, Payload и Response запроса POST при создании клиента."
-            if unverified_country else "Создать клиента в B2O (подтверждённый вариант России)"
+            if unverified_country else f"Создать клиента в B2O (подтверждённый вариант: {country})"
         )
         allowed = not (self._creating or self._created or self._outcome_unknown)
         if allowed:
@@ -301,7 +316,9 @@ class B2OClientCreationWidget(QWidget):
             return
         confirmation = QMessageBox.question(
             self, "Создание клиента B2O",
-            f"Создать клиента {draft.login} в B2O и включить создание в биллинге? "
+            f"Создать клиента {draft.login} у оператора {draft.country} "
+            f"и включить создание в биллинге? "
+            f"Общий доступ к камерам: {'включён' if draft.cross_sharing else 'выключен'}. "
             "Операция будет отправлена один раз.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
