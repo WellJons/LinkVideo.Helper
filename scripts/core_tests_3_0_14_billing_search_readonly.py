@@ -123,6 +123,21 @@ calls.clear()
 assert gateway.find_client("00000000000") is None
 assert calls == ["/api/accounts/search/00000000000"]
 
+# Query is a single path segment; plus / at-sign can be login characters,
+# never part of a second route or query string.
+encoded_query = "user+test@example.invalid"
+responses["/api/accounts/search/user%2Btest%40example.invalid"] = {
+    "success": True, "response": []
+}
+calls.clear()
+assert gateway.find_client(encoded_query) is None
+assert calls == ["/api/accounts/search/user%2Btest%40example.invalid"]
+try:
+    gateway.find_client("../accounts/725")
+    raise AssertionError("Path traversal was accepted in login input")
+except BillingValidationError:
+    pass
+
 # Detail login must match the selected search record before cameras are read.
 bad_detail = deepcopy(detail)
 bad_detail["response"][0]["login"] = "lkz_different_account"
