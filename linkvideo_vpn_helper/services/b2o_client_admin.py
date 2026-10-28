@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-"""B2O operator clients: explicit opt-in creation via the verified RU payload.
+"""B2O operator clients: creation only with independently observed POST variants.
 
-Other operators, account type IDs and option combinations remain read-only.
-Network errors after sending a POST can leave an unknown creation outcome.
+Russia/operator 241: ordinary type 1, billing 1, cross-sharing 0.
+Kazakhstan/operator 1721: ordinary type 1, billing 1, cross-sharing 1.
+Belarus/operator 1741 and other option combinations remain read-only.
+A network error after a POST may mean the client was created.
 """
 
 import json
@@ -20,6 +22,14 @@ from linkvideo_vpn_helper.services.archive_service_core import B2OService
 BASE_URL = "https://api.b2o.goodline.info/ords/mobile/vc2"
 ADMIN_URL = "https://operator.b2o.goodline.info"
 OPERATOR_BY_COUNTRY = {"Россия": 241, "Казахстан": 1721, "Беларусь": 1741}
+
+# These are the two EXACT successful browser submissions seen in DevTools.
+# In particular, Kazakhstan's cross_sharing_enabled=1 is supported,
+# but =0 has not been observed. No inferred write policy for Belarus.
+VERIFIED_CREATE_CROSS_SHARING = {
+    "Россия": 0,
+    "Казахстан": 1,
+}
 
 
 def operator_for_country(country: str) -> int:
@@ -92,20 +102,28 @@ class B2OClientDraft:
         # Check validates basic input. Only verified_payload authorises writes.
 
     def verified_payload(self) -> dict[str, str | int]:
-        """Precisely match the single captured 2026-10-28 RU POST variant."""
+        """Return one of the captured RU/KZ POST variants, never a guessed one."""
         self.check()
-        if self.country != "Россия":
-            raise ValueError("Создание через API пока подтверждено только для России")
+        required_sharing = VERIFIED_CREATE_CROSS_SHARING.get(self.country)
+        if required_sharing is None:
+            raise ValueError(
+                "Для этого оператора пока не подтверждён POST создания клиента"
+            )
         if self.account_type != "1":
-            raise ValueError("Для создания подтверждён только тип аккаунта 1")
+            raise ValueError("Для создания подтверждён только тип аккаунта 1 (Обычный)")
         if not self.create_in_billing:
-            raise ValueError("Пока подтверждено создание только с опцией «Завести в биллинг»")
-        if self.cross_sharing:
-            raise ValueError("Создание с общим доступом к камерам пока не подтверждено")
+            raise ValueError(
+                "Создание без опции «Завести в биллинг» пока не подтверждено"
+            )
+        if int(self.cross_sharing) != required_sharing:
+            sharing = "включён" if required_sharing else "выключен"
+            raise ValueError(
+                f"Для {self.country} подтверждён только общий доступ: {sharing}"
+            )
         return {
             "account_type": "1",
             "client_name": self.name.strip(),
-            "cross_sharing_enabled": 0,
+            "cross_sharing_enabled": required_sharing,
             "login": self.login.strip(),
             "password": self.password,
             "phone": self.phone.strip(),
