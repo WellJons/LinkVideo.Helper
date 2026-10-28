@@ -19,7 +19,9 @@ from linkvideo_vpn_helper.services.b2o_client_admin import (
     B2OOperatorClientManager, B2OCreationOutcomeUnknown, B2OCreatedClient,
     operator_for_country, settings_path, creation_path, created_account_id,
 )
-from linkvideo_vpn_helper.ui.b2o_client_create import B2OClientCreationWidget
+from linkvideo_vpn_helper.ui.b2o_client_create import (
+    B2OClientCreationWidget, client_credentials_message,
+)
 
 
 assert operator_for_country("Россия") == 241
@@ -224,7 +226,15 @@ with tempfile.TemporaryDirectory() as temp:
     widget.name.setText("Пример")
     widget.login.setText("demo_operator_01")
     widget.generate_password.click()
+    first_password = widget.password.text()
+    assert len(first_password) == 18
+    widget.generate_password.click()
     assert len(widget.password.text()) == 18
+    assert widget.password.text() != first_password, "Password generator must generate a new value"
+    widget.show_password.setChecked(True)
+    assert widget.password.echoMode() == widget.password.EchoMode.Normal
+    widget.show_password.setChecked(False)
+    assert widget.password.echoMode() == widget.password.EchoMode.Password
     widget.account_type.setCurrentIndex(1)
     assert widget.draft().country == "Казахстан"
     widget.draft().check()
@@ -238,12 +248,37 @@ with tempfile.TemporaryDirectory() as temp:
     assert not widget.create_button.isEnabled(), "Unverified sharing flag must block"
     widget.cross_share.setChecked(False)
     assert widget.create_button.isEnabled()
+    copied_before = "unchanged-clipboard-until-manual-copy"
+    QApplication.clipboard().setText(copied_before)
+    submitted = widget.draft()
+    widget._pending_draft = submitted
     widget._on_created(B2OCreatedClient(12345, True), None)
+    expected_message = client_credentials_message(submitted.login, submitted.password)
+    assert expected_message == (
+        f"Создали вам аккаунт:\nЛогин: {submitted.login}\n"
+        f"Пароль: {submitted.password}\n\n"
+        "Данные можете поменять после того, как авторизуетесь в личном кабинете."
+    )
+    assert not widget.result_card.isHidden()
+    assert widget.result_text.toPlainText() == expected_message
+    assert QApplication.clipboard().text() == copied_before, "Do not copy passwords automatically"
+    assert widget.copy_credentials.isEnabled()
+    widget.copy_credentials.click()
+    assert QApplication.clipboard().text() == expected_message
+    assert "Скопировано" in widget.copy_credentials.text()
     assert not widget.create_button.isEnabled(), "Prevent duplicate creation"
     widget.login.setText("another-client")
     assert widget.create_button.isEnabled(), "A different login is a new operation"
+    widget.login.setText(submitted.login)
+    assert not widget.create_button.isEnabled(), "Returning to successful login must stay blocked"
+    widget.login.setText("another-client")
+    widget._pending_draft = widget.draft()
     widget._on_created(None, "unknown")
     assert not widget.create_button.isEnabled(), "Unknown outcome must stop resubmission"
+    widget.login.setText("unique-client")
+    assert widget.create_button.isEnabled()
+    widget.login.setText("another-client")
+    assert not widget.create_button.isEnabled(), "Returning to unknown-outcome login must stay blocked"
     widget.close()
 app.processEvents()
 
