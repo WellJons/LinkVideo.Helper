@@ -9,7 +9,7 @@ from PySide6.QtCore import QSettings, QEasingCurve, QPointF, QPropertyAnimation,
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
     QBoxLayout, QDialog, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QListWidgetItem, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from linkvideo_vpn_helper.services.errors import classify_exception
@@ -377,16 +377,17 @@ class SearchManagePage(QWidget):
         self.client_task.hide()
         detail_outer.addWidget(self.client_task)
 
-        self.detail_scroll = QScrollArea()
-        self.detail_scroll.setWidgetResizable(True)
-        self.detail_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.detail_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # Only the whole page scrolls. A nested details scroll area trapped
+        # the mouse wheel over the customer panel instead of scrolling the
+        # rest of the workspace.
         self.detail_host = QWidget()
+        self.detail_host.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
+        )
         self.detail_l = QVBoxLayout(self.detail_host)
         self.detail_l.setContentsMargins(2, 2, 2, 2)
         self.detail_l.setSpacing(10)
-        self.detail_scroll.setWidget(self.detail_host)
-        detail_outer.addWidget(self.detail_scroll, 1)
+        detail_outer.addWidget(self.detail_host)
         self.detail_panel.hide()
         workspace_l.addWidget(self.detail_panel, 8)
 
@@ -404,7 +405,7 @@ class SearchManagePage(QWidget):
         self.results_title.setText("Найденные клиенты")
         self._animate_search_panel(compact=True)
         self._render_client()
-        QTimer.singleShot(0, lambda: self.detail_scroll.verticalScrollBar().setValue(0))
+        QTimer.singleShot(0, lambda: self.page_scroll.verticalScrollBar().setValue(0))
 
     def _close_client_view(self, checked=False, immediate: bool = False):
         if immediate:
@@ -768,7 +769,7 @@ class SearchManagePage(QWidget):
         self.results_title.setText("Найденные клиенты")
         self._animate_search_panel(compact=True)
         self._render_deleted_client()
-        QTimer.singleShot(0, lambda: self.detail_scroll.verticalScrollBar().setValue(0))
+        QTimer.singleShot(0, lambda: self.page_scroll.verticalScrollBar().setValue(0))
 
     def _render_deleted_client(self):
         record = self._deleted_current
