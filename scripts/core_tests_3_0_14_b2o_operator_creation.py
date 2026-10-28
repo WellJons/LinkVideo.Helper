@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Operator B2O verified POST contract using fake transport only."""
 
+import io
 import json
 import os
 import tempfile
@@ -17,7 +18,7 @@ from PySide6.QtWidgets import QApplication, QLineEdit
 from linkvideo_vpn_helper.services.b2o_client_admin import (
     ADMIN_URL, BASE_URL, B2OClientDraft, B2OOperatorReadOnly,
     B2OOperatorClientManager, B2OCreationOutcomeUnknown, B2OCreationRejected,
-    B2OCreatedClient,
+    B2OCreatedClient, safe_b2o_validation_hint,
     operator_for_country, settings_path, creation_path, created_account_id,
 )
 from linkvideo_vpn_helper.ui.b2o_client_create import (
@@ -230,6 +231,15 @@ for status in (400, 401, 403, 409, 422):
         else:
             raise AssertionError(f"Expected a safe rejection for HTTP {status}")
         assert urlopen.call_count == 1
+# HTTP 400 error bodies may echo secrets; only predefined classifications pass.
+assert safe_b2o_validation_hint(
+    b'{"error":"Login already exists","password":"a-private-password"}'
+) == "возможно, логин или клиент уже существует в B2O/биллинге"
+assert safe_b2o_validation_hint(
+    b'{"message":"invalid account_type and phone","name":"a-private-name"}'
+) == "в ответе упомянуты поля: тип аккаунта, телефон"
+assert safe_b2o_validation_hint(b'{"error":"An unknown error"}') == ""
+assert safe_b2o_validation_hint(b'ORA-06502: invalid input') == "код серверной проверки ORA-06502"
 assert safe_b2o_error_code(RuntimeError("B2O: HTTP 403 при запросе данных")) == "HTTP 403"
 assert safe_b2o_error_code(ValueError("failure")) == "ValueError"
 
@@ -269,9 +279,11 @@ with tempfile.TemporaryDirectory() as temp:
     assert widget.password.echoMode() == QLineEdit.EchoMode.Normal
     widget.show_password.setChecked(False)
     assert widget.password.echoMode() == QLineEdit.EchoMode.Password
-    assert widget.account_type.count() == 1
+    assert widget.account_type.count() == 2
+    assert widget.account_type.itemText(0) == "Обычный"
+    assert widget.account_type.itemText(1) == "Бизнес"
     assert widget.account_type.currentData() == "1"
-    assert not widget.account_type.isEnabled()
+    assert widget.account_type.isEnabled()
     assert widget.draft().country == "Казахстан"
     widget.draft().check()
     assert not widget.create_button.isEnabled(), "Non-RU POST must remain disabled"
@@ -280,6 +292,12 @@ with tempfile.TemporaryDirectory() as temp:
     widget.country.setCurrentIndex(0)
     assert widget.in_billing.isChecked(), "The only verified billing combination should be default"
     assert widget.create_button.isEnabled(), "Verified RU POST form should be enabled"
+    widget.account_type.setCurrentIndex(1)
+    assert widget.draft().account_type == "business-unverified"
+    assert not widget.create_button.isEnabled(), "Unknown business code must not send a POST"
+    assert "Для «Бизнеса»" in widget.message.text()
+    widget.account_type.setCurrentIndex(0)
+    assert widget.create_button.isEnabled()
     widget.cross_share.setChecked(True)
     assert not widget.create_button.isEnabled(), "Unverified sharing flag must block"
     widget.cross_share.setChecked(False)
@@ -324,7 +342,7 @@ with tempfile.TemporaryDirectory() as temp:
     widget._on_created(None, "preflight:HTTP 401")
     assert "POST не отправлялся" in widget.message.text()
     assert "HTTP 401" in widget.message.text()
-    assert not widget.account_type.isEnabled()
+    assert widget.account_type.isEnabled()
     widget.close()
 app.processEvents()
 
