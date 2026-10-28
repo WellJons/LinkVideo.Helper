@@ -287,7 +287,17 @@ with tempfile.TemporaryDirectory() as temp:
     assert widget.draft().country == "Казахстан"
     widget.draft().check()
     assert not widget.create_button.isEnabled(), "Non-RU POST must remain disabled"
+    assert "1721" in widget.message.text()
+    assert "POST" in widget.message.text()
+    assert "нет POST API" in widget.create_button.text()
     widget._on_access(widget._attempt, "Казахстан", True, None)
+    assert "1721" in widget.message.text(), "GET access must not imply write support"
+    assert not widget.create_button.isEnabled()
+    widget.country.setCurrentIndex(2)
+    assert "1741" in widget.message.text()
+    assert not widget.create_button.isEnabled()
+    widget._on_access(widget._attempt, "Беларусь", True, None)
+    assert "1741" in widget.message.text()
     assert not widget.create_button.isEnabled()
     widget.country.setCurrentIndex(0)
     assert widget.in_billing.isChecked(), "The only verified billing combination should be default"
