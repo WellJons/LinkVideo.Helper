@@ -762,7 +762,7 @@ class TariffsPage(QWidget):
             action.setEnabled(can_preview or bool(self.gateway.can_change_tariffs))
             action.setToolTip(
                 "Подобрать тариф по стране и глубине архива для этой камеры"
-                if can_preview else "Нет подтверждённого справочника тарифов"
+                if can_preview else "Нет подтверждённого API справочника тарифов"
             )
             action.clicked.connect(
                 lambda _checked=False, srv=service: self._request_service_catalog(srv)
