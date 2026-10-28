@@ -39,7 +39,7 @@ assert 1.05 / (luminance(accent) + 0.05) >= 4.5, "Orange primary needs readable 
 assert 1.05 / (luminance(hover) + 0.05) >= 4.5, "Orange hover needs readable white text"
 
 assert 'self._shake_on_invalid_password()' in login
-assert 'credential_rejected = message.startswith("Логин или пароль")' in login
+assert "if isinstance(failure, LoginRejected):" in login
 assert 'ui/animations_enabled' in login and 'ui/animations_enabled' in settings and 'ui/animations_enabled' in stack
 assert "QCheckBox(\"Плавные анимации интерфейса\")" in settings
 assert "QPropertyAnimation(self, b\"pos\", self)" in login
