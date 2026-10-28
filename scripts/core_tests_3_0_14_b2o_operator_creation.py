@@ -12,7 +12,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QSettings
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLineEdit
 
 from linkvideo_vpn_helper.services.b2o_client_admin import (
     ADMIN_URL, BASE_URL, B2OClientDraft, B2OOperatorReadOnly,
@@ -232,9 +232,9 @@ with tempfile.TemporaryDirectory() as temp:
     assert len(widget.password.text()) == 18
     assert widget.password.text() != first_password, "Password generator must generate a new value"
     widget.show_password.setChecked(True)
-    assert widget.password.echoMode() == widget.password.EchoMode.Normal
+    assert widget.password.echoMode() == QLineEdit.EchoMode.Normal
     widget.show_password.setChecked(False)
-    assert widget.password.echoMode() == widget.password.EchoMode.Password
+    assert widget.password.echoMode() == QLineEdit.EchoMode.Password
     widget.account_type.setCurrentIndex(1)
     assert widget.draft().country == "Казахстан"
     widget.draft().check()
