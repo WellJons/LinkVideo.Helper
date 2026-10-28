@@ -47,6 +47,8 @@ class BillingClient:
     login: str
     country: str
     status: str
+    # Human-facing billing account name. Distinct from the login.
+    display_name: str = ""
     legal_type: str = ""
     contract_number: str = ""
     balance_text: str = ""
@@ -56,6 +58,9 @@ class BillingClient:
     address: str = ""
     registered_at: str = ""
     services: tuple[BillingService, ...] = ()
+    # GET /api/accounts/{id} has no camera list. Do not display 0 services
+    # until GET /api/accounts/{id}/cameras has actually been parsed.
+    services_loaded: bool = False
 
 
 @dataclass(frozen=True)
