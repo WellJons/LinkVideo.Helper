@@ -10,7 +10,7 @@ from PySide6.QtCore import QSettings, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
-    QMessageBox, QPushButton, QVBoxLayout, QWidget,
+    QMessageBox, QPushButton, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from linkvideo_vpn_helper.services.archive_service_core import B2OService
@@ -19,6 +19,16 @@ from linkvideo_vpn_helper.services.b2o_client_admin import (
     operator_admin_url, operator_for_country,
 )
 from linkvideo_vpn_helper.ui.components import Card, StatusPill
+
+
+def client_credentials_message(login: str, password: str) -> str:
+    """Plain-text message for the customer; shown only after confirmed POST."""
+    return (
+        "Создали вам аккаунт:\n"
+        f"Логин: {login}\n"
+        f"Пароль: {password}\n\n"
+        "Данные можете поменять после того, как авторизуетесь в личном кабинете."
+    )
 
 
 class B2OClientCreationWidget(QWidget):
@@ -34,6 +44,9 @@ class B2OClientCreationWidget(QWidget):
         self._creating = False
         self._created = False
         self._outcome_unknown = False
+        self._processed_logins: set[str] = set()
+        self._pending_draft: B2OClientDraft | None = None
+        self._result_message = ""
         self.accessReady.connect(self._on_access)
         self.createReady.connect(self._on_created)
         self._build()
@@ -109,6 +122,10 @@ class B2OClientCreationWidget(QWidget):
         self.generate_password.setObjectName("B2OGeneratePassword")
         self.generate_password.clicked.connect(self._generate_password)
         password_row.addWidget(self.generate_password)
+        self.show_password = QCheckBox("Показать")
+        self.show_password.setObjectName("B2OShowGeneratedPassword")
+        self.show_password.toggled.connect(self._toggle_password_visibility)
+        password_row.addWidget(self.show_password)
         self.phone = QLineEdit()
         self.phone.setObjectName("B2ONewClientPhone")
         self.phone.setPlaceholderText("Необязательно")
@@ -149,6 +166,27 @@ class B2OClientCreationWidget(QWidget):
         actions.addWidget(self.open_admin)
         form.addLayout(actions)
         root.addWidget(card)
+
+        self.result_card = Card(subtle=True)
+        self.result_card.setObjectName("B2OCreatedClientResult")
+        result_layout = QVBoxLayout(self.result_card)
+        result_layout.setContentsMargins(16, 14, 16, 16)
+        result_layout.setSpacing(10)
+        result_title = QLabel("Данные для отправки клиенту")
+        result_title.setObjectName("CardTitle")
+        result_layout.addWidget(result_title)
+        self.result_text = QTextEdit()
+        self.result_text.setObjectName("B2OCreatedClientCopyText")
+        self.result_text.setReadOnly(True)
+        self.result_text.setMinimumHeight(128)
+        self.result_text.setMaximumHeight(180)
+        result_layout.addWidget(self.result_text)
+        self.copy_credentials = QPushButton("Скопировать данные")
+        self.copy_credentials.setObjectName("B2OCopyCreatedClient")
+        self.copy_credentials.clicked.connect(self._copy_created_credentials)
+        result_layout.addWidget(self.copy_credentials)
+        self.result_card.hide()
+        root.addWidget(self.result_card)
         root.addStretch(1)
         self.country.currentIndexChanged.connect(self._refresh_create_enabled)
         self.in_billing.toggled.connect(self._refresh_create_enabled)
@@ -175,7 +213,9 @@ class B2OClientCreationWidget(QWidget):
         allowed = not (self._creating or self._created or self._outcome_unknown)
         if allowed:
             try:
-                self.draft().verified_payload()
+                draft = self.draft()
+                draft.verified_payload()
+                allowed = draft.login.casefold() not in self._processed_logins
             except ValueError:
                 allowed = False
         self.create_button.setEnabled(allowed)
@@ -186,6 +226,8 @@ class B2OClientCreationWidget(QWidget):
         try:
             draft = self.draft()
             draft.verified_payload()
+            if draft.login.casefold() in self._processed_logins:
+                raise ValueError("Для этого логина уже была отправка. Проверьте его в B2O.")
         except ValueError as exc:
             self.message.setText(str(exc))
             self._refresh_create_enabled()
@@ -204,6 +246,11 @@ class B2OClientCreationWidget(QWidget):
         if confirmation != QMessageBox.StandardButton.Yes:
             return
         self._creating = True
+        self._pending_draft = draft
+        self._result_message = ""
+        self.result_text.clear()
+        self.result_card.hide()
+        self._set_form_busy(True)
         self._refresh_create_enabled()
         self.message.setText("Создание клиента в B2O…")
 
@@ -222,9 +269,20 @@ class B2OClientCreationWidget(QWidget):
         threading.Thread(target=work, name="b2o-client-create", daemon=True).start()
 
     def _on_created(self, result: object, error: object):
+        submitted = self._pending_draft
+        self._pending_draft = None
         self._creating = False
+        self._set_form_busy(False)
         if result is not None:
             self._created = True
+            if submitted is not None:
+                self._processed_logins.add(submitted.login.casefold())
+                self._result_message = client_credentials_message(
+                    submitted.login, submitted.password
+                )
+                self.result_text.setPlainText(self._result_message)
+                self.copy_credentials.setText("Скопировать данные")
+                self.result_card.show()
             if result.read_back_verified:
                 self.message.setText(
                     f"Клиент создан в B2O: ID {result.id_account}. "
@@ -239,6 +297,8 @@ class B2OClientCreationWidget(QWidget):
             self.access_status.set_status("Создан", "success")
         elif error == "unknown":
             self._outcome_unknown = True
+            if submitted is not None:
+                self._processed_logins.add(submitted.login.casefold())
             self.message.setText(
                 "Результат POST неизвестен. Клиент мог быть создан. "
                 "Проверьте логин в админке B2O перед любой повторной отправкой."
@@ -251,6 +311,24 @@ class B2OClientCreationWidget(QWidget):
             )
             self.access_status.set_status("Не создан", "warning")
         self._refresh_create_enabled()
+
+    def _set_form_busy(self, busy: bool):
+        for field in (
+            self.country, self.in_billing, self.cross_share, self.name,
+            self.login, self.password, self.phone, self.account_type,
+            self.generate_password, self.show_password, self.check_access,
+        ):
+            field.setEnabled(not busy)
+
+    def _toggle_password_visibility(self, visible: bool):
+        mode = QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
+        self.password.setEchoMode(mode)
+
+    def _copy_created_credentials(self):
+        if not self._result_message or not self._created:
+            return
+        QApplication.clipboard().setText(self._result_message)
+        self.copy_credentials.setText("✓ Скопировано")
 
     def _generate_password(self):
         alphabet = string.ascii_letters + string.digits + "@#_-"
