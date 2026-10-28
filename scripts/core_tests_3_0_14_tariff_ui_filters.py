@@ -50,7 +50,8 @@ assert archive_days_from_name("тест 30 дней") == 30
 assert archive_days_from_name("Без архива") is None
 assert country_tariff_visible(rows[0], "Беларусь")
 assert not country_tariff_visible(rows[2], "Беларусь")
-assert not country_tariff_visible(rows[-1], "Беларусь")
+assert not country_tariff_visible(rows[-2], "Беларусь")  # KZT/Kazakhstan
+assert country_tariff_visible(rows[-1], "Беларусь")  # authentic ЮЛ name without ISO
 assert [r.id for r in select_tariffs(rows, country="Беларусь")] == [
     "10", "plain", "30", "90", "x"
 ]
