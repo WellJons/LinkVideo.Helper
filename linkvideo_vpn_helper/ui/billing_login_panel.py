@@ -20,6 +20,7 @@ class _LoginEvents(QObject):
 
 
 class BillingLoginPanel(Card):
+    sessionChanged = Signal(bool)
     def __init__(self, settings: QSettings | None = None, parent=None, *,
                  login_checker=None, credential_store: BillingCredentialStore | None = None):
         super().__init__(kind="hero", parent=parent)
@@ -29,9 +30,14 @@ class BillingLoginPanel(Card):
         self.checker = login_checker or check_billing_login
         self._attempt = 0
         self._busy = False
+        self._token = ""
         self._events = _LoginEvents(self)
         self._events.done.connect(self._on_login_done)
         self._build()
+
+    @property
+    def login_verified(self) -> bool:
+        return bool(self._token)
 
     def _build(self):
         root = QVBoxLayout(self)
@@ -94,8 +100,8 @@ class BillingLoginPanel(Card):
 
         footer = QHBoxLayout()
         self.message = QLabel(
-            "Сведения о токене или cookie пока не подтверждены: "
-            "проверка входа не означает подключения API для просмотра тарифов."
+            "Укажите корпоративный логин и пароль. После входа токен "
+            "будет храниться только в памяти до выхода или закрытия Helper."
         )
         self.message.setObjectName("TinyMuted")
         self.message.setWordWrap(True)
@@ -103,11 +109,16 @@ class BillingLoginPanel(Card):
         self.clear_btn = QPushButton("Очистить данные")
         self.clear_btn.setProperty("role", "soft")
         self.clear_btn.clicked.connect(self._clear_credentials)
-        self.submit = QPushButton("Проверить вход")
+        self.logout_btn = QPushButton("Выйти")
+        self.logout_btn.setObjectName("BillingLogoutButton")
+        self.logout_btn.setEnabled(False)
+        self.logout_btn.clicked.connect(self._logout)
+        self.submit = QPushButton("Войти")
         self.submit.setObjectName("BillingLoginSubmit")
         self.submit.setProperty("role", "primary")
         self.submit.clicked.connect(self._login)
         footer.addWidget(self.clear_btn)
+        footer.addWidget(self.logout_btn)
         footer.addWidget(self.submit)
         root.addLayout(footer)
 
@@ -122,15 +133,16 @@ class BillingLoginPanel(Card):
         self.password.setText(old.password)
         self.message.setText(
             "Данные подставлены из Helper. Для CRM они ещё не проверены. "
-            "Нажмите «Проверить вход»."
+            "Нажмите «Войти»."
         )
 
     def _set_busy(self, busy: bool):
         self._busy = busy
         for widget in (self.username, self.password, self.remember,
-                       self.submit, self.clear_btn, self.use_saved):
+                       self.submit, self.clear_btn, self.use_saved, self.logout_btn):
             widget.setEnabled(not busy)
-        self.submit.setText("Проверяю…" if busy else "Проверить вход")
+        self.submit.setText("Выполняется вход…" if busy else "Войти")
+        self.logout_btn.setEnabled(not busy and bool(self._token))
 
     def _login(self):
         if self._busy:
@@ -143,6 +155,7 @@ class BillingLoginPanel(Card):
             return
         self._attempt += 1
         attempt = self._attempt
+        self._drop_session()
         self._set_busy(True)
         self.status.set_status("Проверка…", "info")
 
@@ -164,26 +177,56 @@ class BillingLoginPanel(Card):
             self.status.set_status("Вход не подтверждён", "danger")
             self.message.setText(error)
             return
+        token = getattr(outcome, "token", "")
+        if not isinstance(token, str) or not token.strip():
+            self.status.set_status("Вход не выполнен", "danger")
+            self.message.setText("Сервер не выдал токен. Проверьте данные для входа.")
+            return
+        self._token = token
+        self.logout_btn.setEnabled(True)
+        self.sessionChanged.emit(True)
         try:
-            self.store.save(self.username.text(), self.password.text(), remember=self.remember.isChecked())
+            self.store.save(
+                self.username.text(), self.password.text(),
+                remember=self.remember.isChecked(),
+            )
         except Exception:
-            self.status.set_status("Не сохранён", "warning")
+            self.status.set_status("Вход без сохранения", "warning")
             self.message.setText(
-                "Сервер ответил на проверку, но DPAPI-сохранение не выполнено. "
-                "Уточните настройки Windows."
+                "Пароль подтверждён, но Windows DPAPI не сохранил данные. "
+                "Токен действует только в текущем окне."
             )
             return
-        self.status.set_status("Ответ получен", "info")
-        fields = ", ".join(outcome.response_keys) if outcome else "—"
+        self.status.set_status("Вход выполнен", "success")
         self.message.setText(
-            "CRM ответила на запрос входа. Формат сессии ещё не установлен; "
-            f"имена полей ответа: {fields}. Доступ к API пока не активирован."
+            "CRM выдала токен входа. Он хранится только в памяти. "
+            "Для загрузки клиентов и тарифов осталось подтвердить "
+            "заголовок авторизации последующих запросов."
+        )
+
+    def _drop_session(self):
+        was_verified = bool(self._token)
+        self._token = ""
+        if was_verified:
+            self.sessionChanged.emit(False)
+        self.logout_btn.setEnabled(False)
+
+    def _logout(self):
+        if self._busy:
+            return
+        self._attempt += 1
+        self._drop_session()
+        self.status.set_status("Не подключён", "neutral")
+        self.message.setText(
+            "Вы вышли из CRM в Helper. Сохранённые данные остались "
+            "на этом компьютере, если было выбрано «Запомнить»."
         )
 
     def _clear_credentials(self):
         if self._busy:
             return
         self._attempt += 1
+        self._drop_session()
         self.store.clear()
         self.username.clear()
         self.password.clear()
