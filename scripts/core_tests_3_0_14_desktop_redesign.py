@@ -30,14 +30,15 @@ main = sources["linkvideo_vpn_helper/ui/main_window.py"]
 assert "class LoginIllustration(QWidget)" in login
 assert 'form.setObjectName("LoginForm")' in login
 assert 'self.error_banner.setObjectName("LoginError")' in login
-assert "self.validationFinished.connect(self._on_validation_finished)" in login
-assert "verify_credentials(user, password, hosts)" in login
+assert "self._verification_signals.finished.connect(self._on_verified)" in login
+assert "verify_routeros_user(user, password, hosts)" in login
 assert 'self._shake_on_invalid_password()' in login
 
 assert 'self.settings_tabs = QTabWidget()' in settings
 for name in ("Внешний вид", "Архив", "VPN-серверы", "О программе"):
     assert f'"{name}"' in settings, name
 assert "self.settings_tabs.addTab(" in settings
+assert '"Облачный сервер"' in settings
 assert "self._render_servers()" in settings
 assert "self.server_rows = QVBoxLayout()" in settings
 assert "self.animations_enabled" in settings
@@ -95,7 +96,7 @@ with tempfile.TemporaryDirectory() as temp:
 
     settings_page = SettingsPage(cfg, registry, service, creds)
     assert isinstance(settings_page.settings_tabs, QTabWidget)
-    assert settings_page.settings_tabs.count() == 4
+    assert settings_page.settings_tabs.count() == 5
     assert settings_page.appearance_card is not None
     assert settings_page.servers_card is not None
 
