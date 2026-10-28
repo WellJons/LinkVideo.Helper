@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-"""HTTPS-only CRM read-only transport with same-origin token header negotiation.
+"""Same-origin CRM transport with verified GETs and a single confirmed tariff PUT.
 
-CRM login yields a token. Try the explicitly permitted token/Authorization
-header variants *only after user login* on safe GET endpoints; retry solely
-on 401, never on 403 or writes. Retain the successful mode for this session.
+Only GET may probe header formats. PUT uses the header mode already proven
+by a successful authenticated GET, never retries and never redirects.
 """
 
 import re
@@ -33,6 +32,18 @@ _ALLOWED_ROUTES = (
 
 class BillingTransportError(RuntimeError):
     pass
+
+
+class BillingWriteOutcomeUnknown(BillingTransportError):
+    """The tariff PUT may have reached billing; check before attempting again."""
+
+
+class BillingWriteRejected(BillingTransportError):
+    """The server explicitly rejected the PUT."""
+
+    def __init__(self, code: int):
+        self.status_code = int(code)
+        super().__init__(f"Биллинг отклонил изменение тарифа: HTTP {code}.")
 
 
 @dataclass(repr=False)
@@ -128,6 +139,63 @@ class BillingTokenTransport:
         if not isinstance(data, dict):
             raise BillingTransportError("CRM вернула неожиданную структуру ответа.")
         return data
+
+    def put_tariff(self, camera_id: str, tariff_id: str, effective_date) -> dict:
+        """Observed PUT /api/cameras/{id_camera}/tariff/{id_tariff}.
+
+        Date is serialized DD-MM-YYYY exactly as shown in DevTools.
+        A successful preceding GET must have resolved the CRM token header.
+        Never repeat a write on timeout, 5xx or ambiguous response.
+        """
+        from datetime import date
+        if not isinstance(effective_date, date) or effective_date < date.today():
+            raise BillingValidationError("Укажите сегодняшнюю или будущую дату тарифа.")
+        for ident in (camera_id, tariff_id):
+            if not isinstance(ident, str) or not re.fullmatch(r"[1-9][0-9]{0,17}", ident):
+                raise BillingValidationError("Некорректный ID камеры или тарифа.")
+        path = f"/api/cameras/{camera_id}/tariff/{tariff_id}"
+        with self._lock:
+            if not self.token or self._session is None:
+                raise BillingPermissionDenied("Нужен повторный вход в биллинг.")
+            # GET determines this. Never try alternative tokens on a write.
+            if self.header_mode not in ("token", "authorization_bearer", "authorization_raw"):
+                raise BillingNotConfigured(
+                    "Сначала загрузите клиента для проверки CRM-авторизации."
+                )
+            try:
+                response = self._session.put(
+                    BILLING_API_ORIGIN + path,
+                    json={"date": effective_date.strftime("%d-%m-%Y")},
+                    headers=self._headers(self.header_mode),
+                    timeout=self.timeout,
+                    allow_redirects=False,
+                )
+            except requests.RequestException:
+                raise BillingWriteOutcomeUnknown(
+                    "Связь потеряна при изменении тарифа. Проверьте биллинг перед повтором."
+                ) from None
+            status = response.status_code
+            if status in (401, 403):
+                raise BillingPermissionDenied(f"Нет прав на изменение тарифа (HTTP {status}).")
+            if status in (408, 425, 429) or status >= 500:
+                raise BillingWriteOutcomeUnknown(
+                    f"Биллинг вернул HTTP {status}; результат смены тарифа неизвестен. "
+                    "Проверьте биллинг перед повтором."
+                )
+            if not 200 <= status < 300:
+                raise BillingWriteRejected(status)
+            try:
+                parsed = response.json()
+            except ValueError:
+                raise BillingWriteOutcomeUnknown(
+                    "Биллинг не вернул понятное подтверждение PUT. "
+                    "Проверьте услугу перед повтором."
+                ) from None
+            if not isinstance(parsed, dict):
+                raise BillingWriteOutcomeUnknown(
+                    "Биллинг вернул неизвестную структуру ответа. Проверьте услугу."
+                )
+            return parsed
 
     def close(self):
         with self._lock:
