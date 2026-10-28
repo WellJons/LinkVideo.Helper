@@ -73,6 +73,8 @@ class BillingLoginPanel(Card):
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
         self.password.setMinimumHeight(42)
         self.password.returnPressed.connect(self._login)
+        self.username.textEdited.connect(self._credentials_edited)
+        self.password.textEdited.connect(self._credentials_edited)
         fields.addWidget(self.username, 1)
         fields.addWidget(self.password, 1)
         root.addLayout(fields)
@@ -122,6 +124,12 @@ class BillingLoginPanel(Card):
         footer.addWidget(self.submit)
         root.addLayout(footer)
 
+    def _credentials_edited(self, *_):
+        if self._token:
+            self._drop_session()
+            self.status.set_status("Не подключён", "neutral")
+            self.message.setText("Данные изменены. Войдите заново для новой сессии.")
+
     def _reuse_saved_credentials(self):
         if self._busy:
             return
@@ -129,6 +137,7 @@ class BillingLoginPanel(Card):
         if not old.username or not old.password:
             self.message.setText("В Helper нет сохранённых данных для переноса.")
             return
+        self._drop_session()
         self.username.setText(old.username)
         self.password.setText(old.password)
         self.message.setText(
