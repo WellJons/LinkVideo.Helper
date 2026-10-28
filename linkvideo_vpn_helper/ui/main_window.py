@@ -218,7 +218,6 @@ class MainWindow(QMainWindow):
         elif key == "tariffs":
             from linkvideo_vpn_helper.ui.pages.tariffs_page import TariffsPage
             page = TariffsPage(self, settings=self.settings)
-            page.openVpnCreate.connect(self._open_regional_vpn_creator)
         elif key == "settings":
             from linkvideo_vpn_helper.ui.pages.settings_page import SettingsPage
             page = SettingsPage(self.settings, self.registry, self.service, self.credentials, self)
@@ -249,13 +248,6 @@ class MainWindow(QMainWindow):
             pass
         if queue:
             QTimer.singleShot(80, self._preload_next_page)
-
-    def _open_regional_vpn_creator(self, country: str) -> None:
-        """Route billing users to the already verified VPN client creator."""
-        page = self._ensure_page("create")
-        if hasattr(page, "set_country"):
-            page.set_country(country)
-        self._go("create")
 
     def _go(self, key: str):
         if key == self._current_key:
