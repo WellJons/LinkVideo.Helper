@@ -42,6 +42,9 @@ assert client.registered_at == "13.10.2026"
 assert client.address == ""
 assert not client.services and not client.services_loaded
 assert parse_account_detail(
+    envelope, account_id=287, country="Беларусь", expected_login="lkz_demo_001",
+).country == "Беларусь"  # country comes from the trusted source, not login prefix
+assert parse_account_detail(
     {"success": True, "response": []},
     account_id=286, country="Казахстан",
 ) is None
