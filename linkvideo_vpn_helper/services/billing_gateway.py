@@ -39,6 +39,9 @@ class BillingService:
     discount_text: str
     total_text: str
     status: str
+    # Secondary ID included in the CRM response. Keep it separate from the
+    # camera/service ID until the tariff-change API documents its meaning.
+    camera_vc_id: str = ""
 
 
 @dataclass(frozen=True)
