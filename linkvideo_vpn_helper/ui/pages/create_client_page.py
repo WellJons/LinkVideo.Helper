@@ -347,12 +347,12 @@ class CreateClientPage(QWidget):
         ports = self.ports.value()
         accounts = self.accounts.value()
         selected = self.server_picker.host()
+        region = self.country_picker.currentData()
 
         def worker():
             try:
                 chosen = selected
                 if auto_pick:
-                    region = self.country_picker.currentData()
                     regional_hosts = self._country_hosts(region)
                     if not regional_hosts:
                         raise RuntimeError(f"Нет активных VPN-серверов страны {region}")
@@ -364,7 +364,6 @@ class CreateClientPage(QWidget):
                     chosen = self.service.pick_best_server_parallel(regional_hosts, self.credentials, cancel_event=cancel_event)
                 if not chosen:
                     raise RuntimeError("VPN-сервер не выбран")
-                region = self.country_picker.currentData()
                 if self.registry.get(chosen).country != region:
                     raise RuntimeError(
                         "Выбранный VPN-сервер не соответствует стране. "
