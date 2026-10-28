@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QTabWidget, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
+from linkvideo_vpn_helper.services.billing_catalog import TariffReferenceCatalog
 from linkvideo_vpn_helper.services.billing_gateway import (
     BillingClient, BillingGateway, BillingNotConfigured, BillingPermissionDenied,
     BillingService, BillingValidationError, TariffChange, TariffOption,
@@ -96,6 +97,123 @@ class ChangeTariffDialog(QDialog):
         option = TariffOption(str(self.tariff.currentData()), self.tariff.currentText())
         day = self.effective_date.date().toPython()
         return option, day, self.comment.toPlainText().strip()
+
+
+class TariffCatalogDialog(QDialog):
+    """A read-only CRM catalog, never a list of approved service mutations."""
+
+    def __init__(self, snapshot: TariffReferenceCatalog, account_type: str, parent=None):
+        super().__init__(parent)
+        self.setObjectName("TariffCatalogDialog")
+        self.setWindowTitle("Справочник тарифов")
+        self.resize(920, 600)
+        self.setMinimumSize(670, 440)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(22, 19, 22, 19)
+        root.setSpacing(11)
+
+        title = QLabel("Каталог тарифов")
+        title.setObjectName("SectionTitle")
+        root.addWidget(title)
+        note = QLabel(
+            f"{snapshot.country.name} · {account_type} · "
+            f"{len(snapshot.tariffs)} записей. Каталог не означает, "
+            "что тариф разрешён для конкретной услуги."
+        )
+        note.setObjectName("Muted")
+        note.setWordWrap(True)
+        root.addWidget(note)
+
+        tabs = QTabWidget()
+        tabs.setObjectName("SettingsTabs")
+        tabs.setDocumentMode(True)
+        main = QWidget()
+        main_l = QVBoxLayout(main)
+        main_l.setContentsMargins(8, 13, 8, 10)
+        main_l.setSpacing(10)
+        self.filter = QLineEdit()
+        self.filter.setObjectName("TariffCatalogFilter")
+        self.filter.setPlaceholderText("Поиск по названию, описанию или ID тарифа")
+        main_l.addWidget(self.filter)
+
+        self.table = QTableWidget(0, 5)
+        self.table.setObjectName("TariffCatalogTable")
+        self.table.setHorizontalHeaderLabels(
+            ["Тариф", "Стоимость", "Категория", "Тест, дней", "ID"]
+        )
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.verticalHeader().hide()
+        self.table.setWordWrap(True)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for column in range(1, 5):
+            self.table.horizontalHeader().setSectionResizeMode(
+                column, QHeaderView.ResizeMode.ResizeToContents
+            )
+        self._tariffs = snapshot.tariffs
+        self._currency = snapshot.country.currency_code
+        self._fill_rows(self._tariffs)
+        self.filter.textChanged.connect(self._filter_rows)
+        main_l.addWidget(self.table)
+        tabs.addTab(main, "Тарифы")
+
+        archive = QWidget()
+        archive_l = QVBoxLayout(archive)
+        archive_l.setContentsMargins(8, 13, 8, 10)
+        archive_note = QLabel(
+            "Справочные периоды архива. Их допустимость для отдельного тарифа "
+            "в ответе API не указана."
+        )
+        archive_note.setObjectName("TinyMuted")
+        archive_note.setWordWrap(True)
+        archive_l.addWidget(archive_note)
+        self.period_table = QTableWidget(0, 3)
+        self.period_table.setObjectName("BillingArchivePeriodsTable")
+        self.period_table.setHorizontalHeaderLabels(["Название", "Дней", "ID"])
+        self.period_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.period_table.verticalHeader().hide()
+        self.period_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for column in (1, 2):
+            self.period_table.horizontalHeader().setSectionResizeMode(
+                column, QHeaderView.ResizeMode.ResizeToContents
+            )
+        for period in sorted(snapshot.archive_periods, key=lambda item: item.days, reverse=True):
+            row = self.period_table.rowCount()
+            self.period_table.insertRow(row)
+            for column, value in enumerate((period.name, str(period.days), period.id)):
+                self.period_table.setItem(row, column, QTableWidgetItem(value))
+        archive_l.addWidget(self.period_table)
+        tabs.addTab(archive, "Глубина архива")
+
+        root.addWidget(tabs, 1)
+        close = QPushButton("Закрыть")
+        close.setObjectName("TariffCatalogClose")
+        close.clicked.connect(self.accept)
+        root.addWidget(close, 0, Qt.AlignmentFlag.AlignRight)
+
+    def _fill_rows(self, tariffs):
+        self.table.setRowCount(len(tariffs))
+        for row, tariff in enumerate(tariffs):
+            fields = (
+                tariff.name,
+                f"{tariff.price} {self._currency}",
+                "Monitor" if tariff.is_monitor else "Видеонаблюдение",
+                str(tariff.test_days) if tariff.test_days is not None else "—",
+                tariff.id,
+            )
+            for column, value in enumerate(fields):
+                item = QTableWidgetItem(value)
+                item.setToolTip(tariff.description or tariff.name)
+                self.table.setItem(row, column, item)
+            self.table.setRowHeight(row, 42)
+
+    def _filter_rows(self, query: str):
+        needle = query.strip().casefold()
+        for row, tariff in enumerate(self._tariffs):
+            matches = not needle or needle in (
+                tariff.name + " " + tariff.description + " " + tariff.id
+            ).casefold()
+            self.table.setRowHidden(row, not matches)
 
 
 class TariffsPage(QWidget):
@@ -277,9 +395,21 @@ class TariffsPage(QWidget):
         root = QVBoxLayout(container)
         root.setContentsMargins(17, 16, 17, 16)
         root.setSpacing(11)
+        header_row = QHBoxLayout()
         h = QLabel("Услуги видеонаблюдения")
         h.setObjectName("SectionTitle")
-        root.addWidget(h)
+        header_row.addWidget(h)
+        header_row.addStretch(1)
+        self.catalog_btn = QPushButton("Каталог тарифов")
+        self.catalog_btn.setObjectName("TariffCatalogButton")
+        self.catalog_btn.setProperty("role", "soft")
+        self.catalog_btn.setEnabled(False)
+        self.catalog_btn.setToolTip(
+            "Справочник тарифов выбранной страны и типа клиента без изменения услуг"
+        )
+        self.catalog_btn.clicked.connect(self._request_catalog)
+        header_row.addWidget(self.catalog_btn)
+        root.addLayout(header_row)
         self.services_table = QTableWidget(0, 7)
         self.services_table.setObjectName("TariffServicesTable")
         self.services_table.setHorizontalHeaderLabels(
@@ -323,6 +453,10 @@ class TariffsPage(QWidget):
         self.login.setEnabled(not busy)
         self.search_btn.setEnabled(not busy)
         self.services_table.setEnabled(not busy)
+        self.catalog_btn.setEnabled(
+            not busy and self.client is not None and self.gateway.configured
+            and callable(getattr(self.gateway, "reference_catalog", None))
+        )
 
     def _find_client(self):
         if self._busy:
@@ -399,6 +533,11 @@ class TariffsPage(QWidget):
         }
         for key, value in fields.items():
             self.info_values[key].setText(_value(value))
+        self.catalog_btn.setEnabled(
+            self.gateway.configured and
+            callable(getattr(self.gateway, "reference_catalog", None))
+            and not self._busy
+        )
         self.services_table.setRowCount(len(client.services))
         self.services_hint.setText(
             "Список камер ещё не загружен из CRM."
@@ -448,6 +587,27 @@ class TariffsPage(QWidget):
             self.services_table.setRowHeight(row, 58)
         self.tabs.setCurrentIndex(1)
 
+    def _request_catalog(self):
+        if (
+            self._busy or self.client is None or not self.gateway.configured
+            or not callable(getattr(self.gateway, "reference_catalog", None))
+        ):
+            return
+        self._request_id += 1
+        request_id = self._request_id
+        client = self.client
+        self._set_busy(True)
+        self.task.busy_inline("Справочник тарифов", "Загружаю данные CRM без изменения услуг…")
+
+        def work():
+            try:
+                snapshot = self.gateway.reference_catalog(client)
+                self.operationReady.emit(request_id, "catalog", snapshot, None)
+            except Exception as exc:
+                self.operationReady.emit(request_id, "catalog", None, exc)
+
+        threading.Thread(target=work, name="billing-tariff-catalog", daemon=True).start()
+
     def _request_options(self, service: BillingService):
         if self._busy or self.client is None or not self.gateway.can_change_tariffs:
             return
@@ -472,7 +632,13 @@ class TariffsPage(QWidget):
         if error is not None:
             self.task.error("Операция биллинга не выполнена", self._safe_error(error))
             return
-        if operation == "options":
+        if operation == "catalog":
+            if self.client is None:
+                return
+            self.task.hide()
+            dialog = TariffCatalogDialog(result, self.client.legal_type, self)
+            dialog.exec()
+        elif operation == "options":
             service, choices = result
             self.task.hide()
             self._show_change_dialog(service, tuple(choices))
