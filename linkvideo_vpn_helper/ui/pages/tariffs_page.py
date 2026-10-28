@@ -9,7 +9,7 @@ default adapter is fail-closed; no guesswork around CRM endpoints or cookies.
 import threading
 from datetime import date
 
-from PySide6.QtCore import QDate, Qt, QUrl, Signal
+from PySide6.QtCore import QDate, QSettings, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QDateEdit, QDialog, QFormLayout, QMenu,
@@ -28,6 +28,8 @@ from linkvideo_vpn_helper.ui.components import (
     Card, PageHeader, StatusPill, TaskStatus, build_page_scaffold,
 )
 from linkvideo_vpn_helper.ui.dialogs import ConfirmDialog
+from linkvideo_vpn_helper.ui.billing_login_panel import BillingLoginPanel
+from linkvideo_vpn_helper.ui.billing_all_tariffs import BillingAllTariffsWidget
 
 
 BILLING_LOGIN_URL = "https://crm.linkvideo.ru/login"
@@ -220,9 +222,11 @@ class TariffsPage(QWidget):
     searchReady = Signal(int, object, object)
     operationReady = Signal(int, str, object, object)
 
-    def __init__(self, parent=None, *, gateway: BillingGateway | None = None):
+    def __init__(self, parent=None, *, gateway: BillingGateway | None = None,
+                 settings: QSettings | None = None):
         super().__init__(parent)
         self.setObjectName("TariffsPage")
+        self.settings = settings if settings is not None else QSettings("LinkVideo", "LinkVideo.Helper")
         self.gateway = gateway if gateway is not None else UnconfiguredBillingGateway()
         self._request_id = 0
         self._busy = False
@@ -240,6 +244,21 @@ class TariffsPage(QWidget):
             "Тарифы",
             "Поиск клиентов Беларуси и Казахстана, просмотр услуг и управление тарифами.",
         ))
+        self.billing_login = BillingLoginPanel(self.settings, self)
+        root.addWidget(self.billing_login)
+
+        self.workspace_tabs = QTabWidget()
+        self.workspace_tabs.setObjectName("SettingsTabs")
+        self.workspace_tabs.setDocumentMode(True)
+        self.clients_tab = QWidget()
+        clients_layout = QVBoxLayout(self.clients_tab)
+        clients_layout.setContentsMargins(12, 12, 12, 12)
+        clients_layout.setSpacing(12)
+        self.workspace_tabs.addTab(self.clients_tab, "Поиск клиента")
+        self.all_tariffs_page = BillingAllTariffsWidget(self.gateway, self)
+        self.workspace_tabs.addTab(self.all_tariffs_page, "Все тарифы")
+        root.addWidget(self.workspace_tabs, 1)
+        root = clients_layout
 
         self.search_card = Card(kind="hero")
         search = QVBoxLayout(self.search_card)
