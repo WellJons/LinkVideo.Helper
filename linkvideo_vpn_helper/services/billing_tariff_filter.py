@@ -18,6 +18,16 @@ _ARCHIVE_RE = re.compile(
     re.IGNORECASE,
 )
 _ISO_CURRENCY_RE = re.compile(r"(?<![A-Za-z])(?:BYN|KZT|RUB|RUR)(?![A-Za-z])", re.I)
+_BITRATE_RE = re.compile(r"(?<![0-9])([0-9]+(?:[.,][0-9]+)?)\s*мбит(?:\s*/\s*с|/c)?", re.I)
+
+
+def bitrate_mbps_from_name(name: str) -> float | None:
+    """One explicit Mbps speed in a tariff name; don't infer if ambiguous."""
+    matches = _BITRATE_RE.findall(name or "")
+    if len(matches) != 1:
+        return None
+    value = float(matches[0].replace(",", "."))
+    return value if 0 < value < 10000 else None
 
 
 def archive_days_from_name(name: str) -> int | None:
@@ -54,6 +64,7 @@ def select_tariffs(
     account_type: str = "",
     days: int = 0,
     search: str = "",
+    bitrate_mbps: float = 0,
 ) -> tuple[T, ...]:
     """Sort by archive days ascending; unknown durations appear last.
 
@@ -71,6 +82,8 @@ def select_tariffs(
             continue
         depth = archive_days_from_name(entry.name)
         if days and depth != days:
+            continue
+        if bitrate_mbps and bitrate_mbps_from_name(entry.name) != bitrate_mbps:
             continue
         if term and term not in (entry.name + " " + entry.description + " " + entry.id).casefold():
             continue
