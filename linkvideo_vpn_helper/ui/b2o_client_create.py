@@ -219,9 +219,21 @@ class B2OClientCreationWidget(QWidget):
     def _country_changed(self, *_):
         self._attempt += 1
         self.access_status.set_status("Доступ не проверен", "neutral")
+        if hasattr(self, "message"):
+            self._account_type_changed()
 
     def _account_type_changed(self, *_):
-        if self.account_type.currentData() == "business-unverified":
+        if self.country.currentText() != "Россия":
+            operator_id = self.country.currentData()
+            self.message.setText(
+                f"{self.country.currentText()} — оператор B2O {operator_id}. "
+                "GET настроек поддерживается, но запрос POST создания клиента "
+                "для этого оператора ещё не подтверждён. "
+                "Откройте админку B2O, создайте тестового клиента и пришлите "
+                "Network → POST clients → Headers (URL и метод), Payload "
+                "и ответ без паролей/токенов. Пока отправка отключена."
+            )
+        elif self.account_type.currentData() == "business-unverified":
             self.message.setText(
                 "Для «Бизнеса» пока не подтверждён код account_type. "
                 "Нужен Payload успешного создания такого клиента в B2O. "
@@ -229,7 +241,7 @@ class B2OClientCreationWidget(QWidget):
             )
         else:
             self.message.setText(
-                "Выбран «Обычный» (код 1, ранее получен успешный ответ B2O). "
+                "Россия: выбран «Обычный» (код 1, ранее получен успешный ответ B2O). "
                 "Если сервер вернёт HTTP 400, смотрите подсказку о проверке полей."
             )
         self._refresh_create_enabled()
@@ -244,6 +256,18 @@ class B2OClientCreationWidget(QWidget):
     def _refresh_create_enabled(self, *_):
         if not hasattr(self, "create_button"):
             return
+        country = self.country.currentText()
+        unverified_country = country != "Россия"
+        if not self._creating and not self._created:
+            self.create_button.setText(
+                "Создание недоступно — нет POST API"
+                if unverified_country else "Создать клиента у оператора"
+            )
+        self.create_button.setToolTip(
+            "Для этого оператора пока получены только GET. "
+            "Нужны URL, Payload и Response запроса POST при создании клиента."
+            if unverified_country else "Создать клиента в B2O (подтверждённый вариант России)"
+        )
         allowed = not (self._creating or self._created or self._outcome_unknown)
         if allowed:
             try:
@@ -451,10 +475,13 @@ class B2OClientCreationWidget(QWidget):
         self.check_access.setEnabled(True)
         if ok:
             self.access_status.set_status("B2O доступен", "success")
-            self.message.setText(
-                "Доступ к настройкам оператора подтверждён. "
-                "Право на создание клиентов этим GET-запросом не проверяется."
-            )
+            if country == "Россия":
+                self.message.setText(
+                    "Доступ к настройкам оператора подтверждён. "
+                    "Право на создание клиентов этим GET-запросом не проверяется."
+                )
+            else:
+                self._account_type_changed()
         else:
             self.access_status.set_status("Нет подтверждения", "warning")
             self.message.setText(
