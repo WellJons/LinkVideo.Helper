@@ -446,7 +446,7 @@ class SearchManagePage(QWidget):
         QTimer.singleShot(0, lambda: self.page_scroll.verticalScrollBar().setValue(0))
 
     def _close_client_view(self, checked=False, immediate: bool = False):
-        if not immediate and not self.detail_panel.isVisible():
+        if not immediate and self.detail_panel.isHidden():
             return
         if immediate:
             self._deleted_current = None
