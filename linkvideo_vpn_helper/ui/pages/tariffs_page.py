@@ -12,7 +12,7 @@ from datetime import date
 from PySide6.QtCore import QDate, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QDateEdit, QDialog, QFormLayout,
+    QAbstractItemView, QComboBox, QDateEdit, QDialog, QFormLayout, QMenu,
     QGridLayout, QHeaderView, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QTabWidget, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
@@ -240,7 +240,7 @@ class TariffsPage(QWidget):
         root.addWidget(self.result_host)
         root.addStretch(1)
         self.api_status.set_status(
-            "Подключён" if self.gateway.configured else "API не подключён",
+            "API настроен" if self.gateway.configured else "API не подключён",
             "success" if self.gateway.configured else "warning",
         )
 
@@ -359,7 +359,7 @@ class TariffsPage(QWidget):
             return
         self._set_busy(False)
         if error is not None:
-            self.task.error("Не удалось получить клиента", str(error))
+            self.task.error("Не удалось получить клиента", self._safe_error(error))
             return
         if client is None:
             self.task.warning("Клиент не найден", "Проверьте логин и наличие клиента в новом биллинге.")
@@ -404,17 +404,35 @@ class TariffsPage(QWidget):
                 item = QTableWidgetItem(_value(value))
                 item.setToolTip(_value(value))
                 self.services_table.setItem(row, col, item)
-            action = QPushButton("Сменить тариф")
+            actions = QWidget()
+            actions_row = QHBoxLayout(actions)
+            actions_row.setContentsMargins(3, 3, 3, 3)
+            actions_row.setSpacing(5)
+            action = QPushButton("Тариф")
             action.setProperty("role", "soft")
             action.setObjectName("TariffChangeButton")
-            action.setEnabled(self.gateway.can_change_tariffs)
+            action.setEnabled(bool(self.gateway.can_change_tariffs))
             action.setToolTip(
-                "Выбрать тариф, дату и комментарий"
+                "Сменить тариф у этой камеры"
                 if self.gateway.can_change_tariffs
-                else "Операция будет доступна после подключения API и проверки прав"
+                else "Нужен подтверждённый API и право на изменение тарифов"
             )
             action.clicked.connect(lambda _checked=False, srv=service: self._request_options(srv))
-            self.services_table.setCellWidget(row, 6, action)
+            secondary = QPushButton("⋯")
+            secondary.setObjectName("TariffOtherActionsButton")
+            secondary.setProperty("role", "soft")
+            secondary.setToolTip("Другие действия с услугой")
+            menu = QMenu(secondary)
+            # Operations pictured in the billing UI are not enabled until
+            # their endpoints, server-side policies and audit are confirmed.
+            for name in ("Скидка", "Включить / отключить", "Перенести", "История изменений"):
+                item = menu.addAction(name)
+                item.setEnabled(False)
+                item.setToolTip("Метод API пока не подтверждён")
+            secondary.setMenu(menu)
+            actions_row.addWidget(action)
+            actions_row.addWidget(secondary)
+            self.services_table.setCellWidget(row, 6, actions)
             self.services_table.setRowHeight(row, 58)
         self.tabs.setCurrentIndex(1)
 
@@ -440,7 +458,7 @@ class TariffsPage(QWidget):
             return
         self._set_busy(False)
         if error is not None:
-            self.task.error("Операция биллинга не выполнена", str(error))
+            self.task.error("Операция биллинга не выполнена", self._safe_error(error))
             return
         if operation == "options":
             service, choices = result
@@ -494,6 +512,14 @@ class TariffsPage(QWidget):
                 self.operationReady.emit(request_id, "change", None, exc)
 
         threading.Thread(target=work, name="billing-tariff-change", daemon=True).start()
+
+    @staticmethod
+    def _safe_error(error: Exception) -> str:
+        # Do not display raw network exceptions: some libraries include
+        # full URLs with tokens or HTTP authorization information in errors.
+        if isinstance(error, (BillingNotConfigured, BillingPermissionDenied, BillingValidationError)):
+            return str(error)
+        return "Нет ответа от сервера или произошла ошибка API. Проверьте соединение и повторите запрос."
 
     def _open_billing(self):
         # The OS browser owns the corporate session. Helper never reuses
