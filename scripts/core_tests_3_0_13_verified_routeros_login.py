@@ -141,7 +141,7 @@ def main() -> None:
 
     must_reject(
         {"vpn01": (TimeoutError("offline"), []), "vpn02": (OSError("offline"), [])},
-        LoginUnavailable, "связаться"
+        LoginUnavailable, "проверку входа"
     )
     must_reject({"vpn01": (None, full)}, LoginRejected, "введите", password="")
 
