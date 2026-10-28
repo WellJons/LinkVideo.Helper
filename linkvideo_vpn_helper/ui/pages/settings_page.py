@@ -72,6 +72,13 @@ class SettingsPage(QWidget):
         self.archive_layout.setContentsMargins(0, 14, 0, 0)
         self.archive_layout.setSpacing(12)
 
+        # The active VPNSync integration injects its functional backend form
+        # into this tab. Preserve test/save signals and Windows DPAPI storage.
+        self.cloud_tab = QWidget()
+        self.cloud_layout = QVBoxLayout(self.cloud_tab)
+        self.cloud_layout.setContentsMargins(0, 14, 0, 0)
+        self.cloud_layout.setSpacing(12)
+
         self.servers_tab = QWidget()
         self.servers_layout = QVBoxLayout(self.servers_tab)
         self.servers_layout.setContentsMargins(0, 14, 0, 0)
@@ -83,6 +90,7 @@ class SettingsPage(QWidget):
         self.about_layout.setSpacing(12)
 
         self.settings_tabs.addTab(self.appearance_tab, "Внешний вид")
+        self.settings_tabs.addTab(self.cloud_tab, "Облачный сервер")
         self.settings_tabs.addTab(self.archive_tab, "Архив")
         self.settings_tabs.addTab(self.servers_tab, "VPN-серверы")
         self.settings_tabs.addTab(self.about_tab, "О программе")
