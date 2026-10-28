@@ -1438,10 +1438,8 @@ class TariffsPage(QWidget):
         query.returnPressed.connect(do_search)
         dialog.exec()
         self._recipient_request += 1
-        try:
-            self.recipientSearchReady.disconnect(on_results)
-        except (RuntimeError, TypeError):
-            pass
+        # This connection was created above and is always ours to remove.
+        self.recipientSearchReady.disconnect(on_results)
 
     def _selected_camera_services(self):
         if self.client is None:
