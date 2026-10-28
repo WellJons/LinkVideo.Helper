@@ -23,7 +23,7 @@ from linkvideo_vpn_helper.services.billing_search_parser import (
     parse_search_response, select_exact_search_hit,
 )
 from linkvideo_vpn_helper.services.billing_catalog import (
-    TariffReferenceCatalog, build_tariff_reference,
+    AllTariffsSnapshot, TariffReferenceCatalog, build_tariff_reference, parse_all_tariffs_snapshot,
 )
 
 
@@ -84,6 +84,13 @@ class BillingReadOnlyGateway:
         countries_payload = self._get_json("/api/countries/1")
         return build_tariff_reference(
             client, tariffs_payload, archive_payload, countries_payload
+        )
+
+    def all_tariffs(self) -> AllTariffsSnapshot:
+        """Global read-only list from the /list/0 endpoint seen in CRM."""
+        return parse_all_tariffs_snapshot(
+            self._get_json("/api/tariffs/list/0"),
+            self._get_json("/api/countries/1"),
         )
 
     def tariff_options(self, client_id: str, service_id: str) -> tuple[TariffOption, ...]:
