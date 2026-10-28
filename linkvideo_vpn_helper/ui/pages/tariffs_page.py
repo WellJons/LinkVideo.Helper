@@ -219,13 +219,23 @@ class TariffCatalogDialog(QDialog):
         self.tariff_cards.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.tariff_cards.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.tariff_cards.verticalScrollBar().setSingleStep(26)
+        dark = self.palette().color(self.backgroundRole()).lightness() < 128
+        regular = "#332e35" if dark else "#ffffff"
+        hover = "#473730" if dark else "#fff1e7"
+        selected_bg = "#63412f" if dark else "#ffe4d2"
+        foreground = "#f7f4f2" if dark else "#243042"
+        border = "#635a60" if dark else "#d9e0e9"
         self.tariff_cards.setStyleSheet(
-            "QListWidget#TariffPickerResults { background: transparent; border: none; }"
-            "QListWidget#TariffPickerResults::item { margin: 3px; padding: 11px 14px;"
-            " border-radius: 10px; border: 1px solid palette(mid); }"
-            "QListWidget#TariffPickerResults::item:selected {"
-            " border: 2px solid palette(highlight);"
-            " background: palette(alternate-base); color: palette(text); }"
+            "QListWidget#TariffPickerResults { background: transparent; border: none;"
+            " outline: none; }"
+            f"QListWidget#TariffPickerResults::item {{ background: {regular};"
+            f" color: {foreground}; border: 1px solid {border};"
+            " border-radius: 10px; margin: 4px 2px; padding: 12px 15px; }"
+            f"QListWidget#TariffPickerResults::item:hover {{ background: {hover};"
+            " border: 1px solid #dd6b22; }"
+            f"QListWidget#TariffPickerResults::item:selected {{ background: {selected_bg};"
+            " border: 2px solid #d65a10; }"
+            f"QListWidget#TariffPickerResults::item:selected:hover {{ background: {selected_bg}; }}"
         )
         self.tariff_cards.currentRowChanged.connect(self._on_tariff_picked)
         self.tariff_cards.setVisible(bool(service))
@@ -308,7 +318,8 @@ class TariffCatalogDialog(QDialog):
     def _fill_rows(self, tariffs):
         selected = select_tariffs(
             tariffs, country=self._country,
-            account_type=self._account_type,
+            # CRM itself lists ЮЛ, Monitor and start plans on a physical
+            # account; don't silently exclude them by account_type_name.
             days=self.archive_days.value(),
             search=self.filter.text(),
             bitrate_mbps=float(self.bitrate_filter.currentData() or 0),
@@ -339,8 +350,9 @@ class TariffCatalogDialog(QDialog):
             )
             speed = f"{bit:g} Мбит/с" if bit else "Скорость не указана"
             option = QListWidgetItem(
-                f"{label}   •   {speed}   •   {tariff.price} {self._currency}\n"
-                f"{tariff.name}"
+                f"{tariff.name}\n"
+                f"{label}  •  {speed}  •  {tariff.price} {self._currency}"
+                f"  •  {tariff.account_type}"
             )
             option.setToolTip(tariff.description or tariff.name)
             self.tariff_cards.addItem(option)
@@ -1211,8 +1223,8 @@ class TariffsPage(QWidget):
             self.task.warning("Камера изменилась", "Повторно откройте клиента.")
             return
         choice = next((t for t in visible_tariffs if t.id == change.tariff_id), None)
-        if choice is None or choice.country != client.country or choice.account_type != client.legal_type:
-            self.task.warning("Неверный тариф", "Выберите тариф страны и типа клиента.")
+        if choice is None or choice.country != client.country:
+            self.task.warning("Неверный тариф", "Тариф должен принадлежать стране клиента.")
             return
         fingerprint = (client.id, service.id, change.tariff_id, change.effective_date)
         if fingerprint in self._uncertain_tariff_changes:
@@ -1229,8 +1241,10 @@ class TariffsPage(QWidget):
             f"Было: {service.tariff_name}\n"
             f"Будет: {choice.name}\n"
             f"Стоимость в каталоге: {choice.price}\n"
+            f"Тип тарифа по CRM: {choice.account_type}\n"
             f"Дата применения: {change.effective_date:%d.%m.%Y}\n\n"
-            "Изменение будет отправлено в настоящий биллинг.",
+            "Биллинг покажет итоговое решение о допустимости тарифа. "
+            "Изменение будет отправлено после подтверждения.",
             "Применить тариф",
             False,
             self,
