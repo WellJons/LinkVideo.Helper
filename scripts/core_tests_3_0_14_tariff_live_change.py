@@ -148,7 +148,10 @@ for invalid in ({}, {"success": True, "response": {}}, {"success": False}):
 
 app = QApplication.instance() or QApplication([])
 dialog = TariffCatalogDialog(catalog, client.legal_type, service=service)
-assert dialog.tariff_cards.count() == 3
+assert dialog.tariff_cards.count() == 3  # Includes ЮЛ for physical account
+assert "ЮЛ 7 дней, 1 Мбит/с" in dialog.tariff_cards.item(0).text()
+assert "item:hover" in dialog.tariff_cards.styleSheet()
+assert "item:selected" in dialog.tariff_cards.styleSheet()
 assert not dialog.apply_tariff.isEnabled()
 assert dialog.findChild(QPushButton, "TariffQuickDays7")
 dialog.findChild(QPushButton, "TariffQuickDays7").click()
