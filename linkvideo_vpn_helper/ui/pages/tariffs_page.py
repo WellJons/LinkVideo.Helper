@@ -209,7 +209,6 @@ class TariffCatalogDialog(QDialog):
         self._tariffs = snapshot.tariffs
         self._country = snapshot.country.name
         self._currency = snapshot.country.currency_code
-        self._fill_rows(self._tariffs)
         self.filter.textChanged.connect(self._filter_rows)
         self.archive_days.valueChanged.connect(self._filter_rows)
         main_l.addWidget(self.table)
@@ -230,6 +229,7 @@ class TariffCatalogDialog(QDialog):
         self.tariff_cards.setVisible(bool(service))
         self.table.setVisible(not service)
         main_l.addWidget(self.tariff_cards, 1)
+        self._fill_rows(self._tariffs)
         tabs.addTab(main, "Тарифы")
         if service:
             tabs.tabBar().hide()
