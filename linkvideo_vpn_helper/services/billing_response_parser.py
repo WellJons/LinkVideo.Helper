@@ -7,11 +7,12 @@ These must not be guessed: the gateway supplies a trusted country from its
 configured source, and another endpoint is required for the services.
 """
 
+from dataclasses import replace
 from datetime import datetime
 from typing import Any, Mapping
 
 from linkvideo_vpn_helper.services.billing_gateway import (
-    BillingClient, BillingValidationError, validate_client,
+    BillingClient, BillingService, BillingValidationError, validate_client,
 )
 
 
@@ -81,3 +82,66 @@ def parse_account_detail(
         services_loaded=False,
     )
     return validate_client(client)
+
+
+def parse_cameras_response(payload: Mapping[str, Any]) -> tuple[BillingService, ...]:
+    """Parse observed GET /api/accounts/{id}/cameras response.
+
+    The only verified state mapping is status='1' -> 'Активный'. Never treat
+    an unknown code as 'Выключен' until its semantics are confirmed. The
+    numeric price/discount/costs fields have no currency marker.
+    """
+    if not isinstance(payload, Mapping) or payload.get("success") is not True:
+        raise BillingValidationError("Биллинг не подтвердил получение списка камер.")
+    rows = payload.get("response")
+    if not isinstance(rows, list) or len(rows) > 2000:
+        raise BillingValidationError("Биллинг вернул некорректный список камер.")
+
+    services: list[BillingService] = []
+    seen: set[str] = set()
+    for record in rows:
+        if not isinstance(record, dict):
+            raise BillingValidationError("В списке камер обнаружена некорректная запись.")
+        camera_id = _value(record, "id_camera")
+        if not camera_id.isascii() or not camera_id.isdecimal() or int(camera_id) <= 0:
+            raise BillingValidationError("Камера не имеет корректного ID в биллинге.")
+        if camera_id in seen:
+            raise BillingValidationError("Биллинг вернул повторяющийся ID камеры.")
+        seen.add(camera_id)
+
+        vc_id = _value(record, "id_camera_vc")
+        if vc_id and (not vc_id.isascii() or not vc_id.isdecimal()):
+            raise BillingValidationError("Биллинг вернул некорректный id_camera_vc.")
+        status_code = _value(record, "status")
+        if status_code == "1":
+            status = "Активный"
+        elif status_code:
+            status = f"Код статуса: {status_code}"
+        else:
+            status = "Неизвестно"
+
+        services.append(BillingService(
+            id=camera_id,
+            camera_id=camera_id,
+            camera_vc_id=vc_id,
+            camera_name=_value(record, "short_name"),
+            tariff_name=_value(record, "tariff_name"),
+            price_text=_value(record, "ab_plata"),
+            # No percent/currency suffix: the API did not specify units.
+            discount_text=_value(record, "discount"),
+            total_text=_value(record, "costs"),
+            status=status,
+        ))
+    return tuple(services)
+
+
+def attach_cameras_to_client(client: BillingClient, payload: Mapping[str, Any]) -> BillingClient:
+    """Attach cameras fetched for this same verified account ID.
+
+    The caller must bind GET /api/accounts/{client.id}/cameras to the current
+    account; the response itself contains no account ID.
+    """
+    validate_client(client)
+    return validate_client(replace(
+        client, services=parse_cameras_response(payload), services_loaded=True
+    ))
