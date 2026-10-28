@@ -87,8 +87,8 @@ def parse_account_detail(
 def parse_cameras_response(payload: Mapping[str, Any]) -> tuple[BillingService, ...]:
     """Parse observed GET /api/accounts/{id}/cameras response.
 
-    The only verified state mapping is status='1' -> 'Активный'. Never treat
-    an unknown code as 'Выключен' until its semantics are confirmed. The
+    Observed state mappings: status='1' -> 'Активный',
+    status='0' -> 'Неактивный'. The
     numeric price/discount/costs fields have no currency marker.
     """
     if not isinstance(payload, Mapping) or payload.get("success") is not True:
@@ -115,6 +115,8 @@ def parse_cameras_response(payload: Mapping[str, Any]) -> tuple[BillingService, 
         status_code = _value(record, "status")
         if status_code == "1":
             status = "Активный"
+        elif status_code == "0":
+            status = "Неактивный"
         elif status_code:
             status = f"Код статуса: {status_code}"
         else:
