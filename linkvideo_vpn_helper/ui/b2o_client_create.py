@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-"""Operator B2O client creation form, deliberately not wired to unknown POST.
+"""B2O operator client form: known POST route, unknown request body.
 
-Keep the draft and real B2O access check separate. Never send a create
-request without a reviewed method, body schema and authorization policy.
+No POST until the exact captured payload and option identifiers are verified.
 """
 
 import secrets
@@ -128,8 +127,9 @@ class B2OClientCreationWidget(QWidget):
         form.addLayout(fields)
 
         self.message = QLabel(
-            "Поля соответствуют форме B2O. Для отправки данных нужно подтвердить "
-            "POST-запрос создания клиента и реальные идентификаторы типов аккаунта."
+            "Маршрут POST создания клиента подтверждён. Осталось проверить "
+            "отправляемый Payload и идентификаторы типов аккаунта. "
+            "До этого отправка отключена."
         )
         self.message.setObjectName("Muted")
         self.message.setWordWrap(True)
@@ -140,7 +140,7 @@ class B2OClientCreationWidget(QWidget):
         self.create_button.setObjectName("B2OCreateClientDisabled")
         self.create_button.setEnabled(False)
         self.create_button.setToolTip(
-            "API создания клиента ещё не подтверждён: нет метода POST и схемы запроса"
+            "POST /operators/{id}/clients подтверждён; ожидается точный Payload и значения параметров"
         )
         self.open_admin = QPushButton("Открыть админку B2O")
         self.open_admin.setObjectName("B2OOpenOperatorAdmin")
