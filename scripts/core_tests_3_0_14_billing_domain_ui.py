@@ -85,17 +85,23 @@ class FakeGateway:
 
 app = QApplication.instance() or QApplication([])
 page = TariffsPage(gateway=FakeGateway())
-assert page.api_status.text() == "Подключён"
+assert page.api_status.text() == "API настроен"
 assert page.tabs.count() == 4
 page._on_search(0, client, None)
 assert page.client == client
 assert page.services_table.rowCount() == 1
 assert page.services_table.item(0, 0).text().startswith("Тестовая камера")
 assert page.metric_values["services"].text() == "1"
-action = page.services_table.cellWidget(0, 6)
+actions = page.services_table.cellWidget(0, 6)
+action = actions.findChild(QPushButton, "TariffChangeButton")
+secondary = actions.findChild(QPushButton, "TariffOtherActionsButton")
 assert isinstance(action, QPushButton)
+assert isinstance(secondary, QPushButton)
 assert not action.isEnabled()
 assert "API" in action.toolTip()
+assert secondary.menu() is not None
+assert len(secondary.menu().actions()) == 4
+assert not any(item.isEnabled() for item in secondary.menu().actions())
 assert page.info_values["country"].text() == "Казахстан"
 
 dialog = ChangeTariffDialog(service, (TariffOption("tariff_test_a", service.tariff_name), option))
