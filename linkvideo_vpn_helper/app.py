@@ -155,8 +155,8 @@ def main() -> int:
     install_archive_download_methods()
     from linkvideo_vpn_helper.ui.archive_download_ux import install_archive_download_ux
     install_archive_download_ux()
-    from linkvideo_vpn_helper.ui.silent_update_integration import install_silent_patch_updates
-    install_silent_patch_updates()
+    # Update flow is intentionally visible: check -> download -> full Setup.
+    # Legacy silent patch integration is not installed on new Helper builds.
     from linkvideo_vpn_helper.ui.access_policy_integration import install_access_policy
     install_access_policy()
     from linkvideo_vpn_helper.ui.update_ux_integration import install_update_ux
