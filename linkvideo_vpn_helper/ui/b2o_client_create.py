@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""B2O operator client form. Writes restricted to captured RU/KZ variants."""
+"""B2O operator client form. Writes restricted to captured RU/KZ/BY variants."""
 
 import re
 import secrets
@@ -158,9 +158,9 @@ class B2OClientCreationWidget(QWidget):
         form.addLayout(fields)
 
         self.message = QLabel(
-            "Для «Обычного» клиента применяется подтверждённый код 1. "
-            "Код «Бизнеса» пока не показан в Network; создавать его наугад нельзя. "
-            "При HTTP 400 проверьте также, не остался ли логин в биллинге."
+            "Для обычных клиентов подтверждены операторы России, Казахстана и "
+            "Беларуси. Галочки по умолчанию берутся из успешных запросов B2O. "
+            "Для типа «Бизнес» и других сочетаний нужны отдельные примеры POST."
         )
         self.message.setObjectName("Muted")
         self.message.setWordWrap(True)
@@ -224,7 +224,9 @@ class B2OClientCreationWidget(QWidget):
             # Set the observed sharing flag for the newly selected operator.
             # This does not create anything; the operator can see the flag
             # and may change it, but unsupported combinations block POST.
-            self.cross_share.setChecked(self.country.currentText() == "Казахстан")
+            self.cross_share.setChecked(
+                bool(VERIFIED_CREATE_CROSS_SHARING.get(self.country.currentText(), 0))
+            )
         if hasattr(self, "message"):
             self._account_type_changed()
 
@@ -232,9 +234,8 @@ class B2OClientCreationWidget(QWidget):
         country = self.country.currentText()
         if country not in VERIFIED_CREATE_CROSS_SHARING:
             self.message.setText(
-                "Беларусь (оператор 1741): нужен успешный POST с Payload "
-                "и Response для создания клиента. GET настроек не подтверждает "
-                "возможность создания. Пока отправка отключена."
+                "Для выбранного оператора не подтверждён POST создания. "
+                "GET настроек не подтверждает право создавать клиентов."
             )
         elif self.account_type.currentData() == "business-unverified":
             self.message.setText(
@@ -246,14 +247,18 @@ class B2OClientCreationWidget(QWidget):
                 "Создание без «Завести в биллинг» пока не подтверждено."
             )
         elif int(self.cross_share.isChecked()) != VERIFIED_CREATE_CROSS_SHARING[country]:
-            flag = "включён" if country == "Казахстан" else "выключен"
+            flag = (
+                "включён" if VERIFIED_CREATE_CROSS_SHARING[country] else "выключен"
+            )
             self.message.setText(
                 f"Для {country} подтверждён POST только когда общий доступ {flag}. "
                 "Другие сочетания не отправляются без проверенного Payload."
             )
         else:
             operator_id = self.country.currentData()
-            flag = "включён" if country == "Казахстан" else "выключен"
+            flag = (
+                "включён" if VERIFIED_CREATE_CROSS_SHARING[country] else "выключен"
+            )
             self.message.setText(
                 f"{country} · оператор {operator_id}: обычный аккаунт, "
                 f"с заведением в биллинг; общий доступ {flag}. "
