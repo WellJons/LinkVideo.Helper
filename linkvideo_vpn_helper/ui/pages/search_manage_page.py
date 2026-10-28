@@ -355,6 +355,37 @@ class SearchManagePage(QWidget):
 
         workspace_l.addWidget(self.left_card, 4)
 
+        # When a client is opened, their profile REPLACES the result list on
+        # the left. Port controls are displayed in the right column.
+        self.client_info_card = Card(kind="hero")
+        self.client_info_card.setObjectName("SearchClientInfoCard")
+        self.client_info_card.setMinimumWidth(320)
+        info_l = QVBoxLayout(self.client_info_card)
+        info_l.setContentsMargins(14, 14, 14, 14)
+        info_l.setSpacing(8)
+        info_nav = QHBoxLayout()
+        self.info_back = QPushButton("← К результатам")
+        self.info_back.setObjectName("SearchClientInfoBack")
+        self.info_back.setProperty("role", "ghost")
+        self.info_back.clicked.connect(self._close_client_view)
+        info_nav.addWidget(self.info_back)
+        info_nav.addStretch(1)
+        info_l.addLayout(info_nav)
+        self.info_scroll = QScrollArea()
+        self.info_scroll.setObjectName("SearchClientInfoScroll")
+        self.info_scroll.setWidgetResizable(True)
+        self.info_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.info_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.info_scroll.verticalScrollBar().setSingleStep(28)
+        self.info_host = QWidget()
+        self.info_content = QVBoxLayout(self.info_host)
+        self.info_content.setContentsMargins(0, 0, 0, 0)
+        self.info_content.setSpacing(9)
+        self.info_scroll.setWidget(self.info_host)
+        info_l.addWidget(self.info_scroll, 1)
+        self.client_info_card.hide()
+        workspace_l.addWidget(self.client_info_card, 5)
+
         self.detail_panel = Card()
         self.detail_panel.setObjectName("ClientWorkspaceCard")
         self.detail_panel.setMinimumWidth(590)
@@ -377,21 +408,29 @@ class SearchManagePage(QWidget):
         self.client_task.hide()
         detail_outer.addWidget(self.client_task)
 
-        # Only the whole page scrolls. A nested details scroll area trapped
-        # the mouse wheel over the customer panel instead of scrolling the
-        # rest of the workspace.
+        # Independent compact scrolling inside the ports/actions column
+        # eliminates the former need to scroll the entire page to manage
+        # a customer's account.
+        self.detail_scroll = QScrollArea()
+        self.detail_scroll.setObjectName("SearchClientControlsScroll")
+        self.detail_scroll.setWidgetResizable(True)
+        self.detail_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.detail_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.detail_scroll.verticalScrollBar().setSingleStep(28)
         self.detail_host = QWidget()
-        self.detail_host.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
-        )
         self.detail_l = QVBoxLayout(self.detail_host)
         self.detail_l.setContentsMargins(2, 2, 2, 2)
         self.detail_l.setSpacing(10)
-        detail_outer.addWidget(self.detail_host)
+        self.detail_scroll.setWidget(self.detail_host)
+        detail_outer.addWidget(self.detail_scroll, 1)
         self.detail_panel.hide()
         workspace_l.addWidget(self.detail_panel, 8)
 
-        self.workspace.setMinimumHeight(640)
+        self.workspace.setMinimumHeight(545)
+        self.workspace.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        self.page_scroll.verticalScrollBar().setSingleStep(26)
         self.page_layout.addWidget(self.workspace, 1)
         self._panel_anim = None
 
@@ -400,27 +439,23 @@ class SearchManagePage(QWidget):
             return
         self.detail_route_title.setText(f"Клиент {self.current.login}")
         self.client_task.hide()
+        self.left_card.hide()
+        self.client_info_card.show()
         self.detail_panel.show()
-        self.open_hint.setText("Выберите другую запись")
-        self.results_title.setText("Найденные клиенты")
-        self._animate_search_panel(compact=True)
         self._render_client()
         QTimer.singleShot(0, lambda: self.page_scroll.verticalScrollBar().setValue(0))
 
     def _close_client_view(self, checked=False, immediate: bool = False):
+        if not immediate and not self.detail_panel.isVisible():
+            return
         if immediate:
             self._deleted_current = None
-            self.detail_panel.hide()
-            self.left_card.setMaximumWidth(16777215)
-            self.results_title.setText("Результаты")
-            self.open_hint.setText("Клик — открыть карточку")
-            return
-        if not self.detail_panel.isVisible():
-            return
         self.detail_panel.hide()
+        self.client_info_card.hide()
+        self.left_card.show()
+        self.left_card.setMaximumWidth(16777215)
         self.results_title.setText("Результаты")
         self.open_hint.setText("Клик — открыть карточку")
-        self._animate_search_panel(compact=False)
 
     def _animate_search_panel(self, compact: bool):
         # Мягкое сжатие/раскрытие левой панели — визуально похоже на переход
@@ -764,10 +799,10 @@ class SearchManagePage(QWidget):
             return
         self.detail_route_title.setText(f"Удалённый клиент {record.login}")
         self.client_task.hide()
+        self.client_info_card.hide()
+        self.left_card.show()
         self.detail_panel.show()
-        self.open_hint.setText("Выберите другую запись")
         self.results_title.setText("Найденные клиенты")
-        self._animate_search_panel(compact=True)
         self._render_deleted_client()
         QTimer.singleShot(0, lambda: self.page_scroll.verticalScrollBar().setValue(0))
 
@@ -783,7 +818,7 @@ class SearchManagePage(QWidget):
         header_row.addWidget(title)
         header_row.addStretch(1)
         header_row.addWidget(StatusPill("Удалён", "warning"))
-        self.detail_l.addLayout(header_row)
+        self.info_content.addLayout(header_row)
 
         info = Card(subtle=True)
         grid = QGridLayout(info)
@@ -913,6 +948,13 @@ class SearchManagePage(QWidget):
         )
 
     def _clear_detail(self):
+        # Keep the left profile and right management lifecycle synchronized.
+        while self.info_content.count():
+            item = self.info_content.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+            elif item.layout():
+                self._clear_nested(item.layout())
         while self.detail_l.count():
             item = self.detail_l.takeAt(0)
             w = item.widget()
@@ -941,9 +983,8 @@ class SearchManagePage(QWidget):
             return
         self._clear_detail()
 
-        # Карточка намеренно повторяет компоновку 1.1.2: заголовок, две
-        # информационные карточки в одной строке, отдельный список портов и
-        # плотный блок управления ниже. Визуальный язык остаётся новым.
+        # Client profile occupies the left column, while ports and
+        # management occupy the right. No duplicate result list is shown.
         header_row = QHBoxLayout()
         header = QLabel(f"Клиент {c.login}")
         header.setObjectName("SectionTitle")
@@ -964,10 +1005,10 @@ class SearchManagePage(QWidget):
             copy_new.clicked.connect(lambda _=False, value=ports_text, btn=copy_new: self._copy_new_ports(value, btn))
             bl.addWidget(text, 1)
             bl.addWidget(copy_new)
-            self.detail_l.addWidget(banner)
+            self.info_content.addWidget(banner)
 
-        top = QHBoxLayout()
-        top.setSpacing(10)
+        top = QVBoxLayout()
+        top.setSpacing(9)
 
         data = Card()
         dl = QVBoxLayout(data)
@@ -1041,11 +1082,12 @@ class SearchManagePage(QWidget):
         vl.addWidget(vt)
         vl.addWidget(diag, 1)
 
-        data.setMinimumWidth(340)
-        vpn.setMinimumWidth(250)
-        top.addWidget(data, 4)
-        top.addWidget(vpn, 2)
-        self.detail_l.addLayout(top)
+        data.setMinimumWidth(0)
+        vpn.setMinimumWidth(0)
+        top.addWidget(data)
+        top.addWidget(vpn)
+        self.info_content.addLayout(top)
+        self.info_content.addStretch(1)
 
         if c.port_conflicts:
             conflict_card = Card()
@@ -1205,7 +1247,10 @@ class SearchManagePage(QWidget):
         grid.setColumnStretch(2, 1)
         cl.addLayout(grid)
         self.detail_l.addWidget(control)
+        self.detail_l.addStretch(1)
         self._sync_selected_port_controls()
+        self.info_scroll.verticalScrollBar().setValue(0)
+        self.detail_scroll.verticalScrollBar().setValue(0)
 
     def _plain_data_line(self, name: str, value: str, suffix: str = "") -> QWidget:
         w = QWidget()
