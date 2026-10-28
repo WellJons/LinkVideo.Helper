@@ -340,10 +340,6 @@ class TariffCatalogDialog(QDialog):
                 f"{tariff.name}"
             )
             option.setToolTip(tariff.description or tariff.name)
-            option.setSizeHint(option.sizeHint().expandedTo(
-                self.tariff_cards.sizeHintForIndex(self.tariff_cards.model().index(0, 0))
-                if self.tariff_cards.count() else option.sizeHint()
-            ))
             self.tariff_cards.addItem(option)
         if self.service is not None and hasattr(self, "apply_tariff"):
             self.apply_tariff.setEnabled(False)
@@ -441,6 +437,7 @@ class TariffsPage(QWidget):
         self._owned_transport: BillingTokenTransport | None = None
         self._request_id = 0
         self._busy = False
+        self._uncertain_tariff_changes: set[tuple[str, str, str, date]] = set()
         self.client: BillingClient | None = None
         self._build()
         self.searchReady.connect(self._on_search)
@@ -1056,6 +1053,10 @@ class TariffsPage(QWidget):
         if request_id != self._request_id:
             return
         self._set_busy(False)
+        if operation == "change_unknown":
+            self._uncertain_tariff_changes.add(result)
+            self.task.warning("Проверьте биллинг", self._safe_error(error))
+            return
         if error is not None:
             self.task.error("Операция биллинга не выполнена", self._safe_error(error))
             return
@@ -1075,20 +1076,87 @@ class TariffsPage(QWidget):
             dialog = TariffCatalogDialog(
                 snapshot, self.client.legal_type, self, service=service,
             )
-            dialog.exec()
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                try:
+                    change = dialog.selection_change(self.client)
+                except BillingValidationError as exc:
+                    self.task.warning("Проверьте тариф", str(exc))
+                    return
+                self._apply_service_tariff(service, change, dialog._visible_tariffs)
         elif operation == "options":
             service, choices = result
             self.task.hide()
             self._show_change_dialog(service, tuple(choices))
         elif operation == "change":
-            try:
-                validate_client(result)
-            except Exception as exc:
-                self.task.error("Некорректный ответ биллинга", str(exc))
+            if not isinstance(result, TariffChangeReceipt):
+                self.task.error(
+                    "Некорректный ответ биллинга",
+                    "Проверьте изменение в CRM перед повтором.",
+                )
                 return
-            self.client = result
-            self._render_client(result)
-            self.task.done("Тариф обновлён", "Изменение подтверждено ответом биллинга.")
+            if result.updated_client is not None and self.client is not None:
+                if result.updated_client.id == self.client.id:
+                    self.client = result.updated_client
+                    self._render_client(result.updated_client)
+            detail = result.message
+            if result.remain_pay:
+                detail += f" · Доплата по ответу CRM: {result.remain_pay}"
+            self.task.done("Изменение тарифа подтверждено", detail)
+
+    def _apply_service_tariff(self, service: BillingService, change: TariffChange,
+                              visible_tariffs):
+        """One deliberate PUT per confirmed selection. Never retry uncertain writes."""
+        client = self.client
+        if client is None or not self.gateway.can_change_tariffs or self._busy:
+            self.task.warning("Нет доступа", "Требуется подтверждённая сессия CRM.")
+            return
+        if service not in client.services or change.client_id != client.id or change.service_id != service.id:
+            self.task.warning("Камера изменилась", "Повторно откройте клиента.")
+            return
+        choice = next((t for t in visible_tariffs if t.id == change.tariff_id), None)
+        if choice is None or choice.country != client.country or choice.account_type != client.legal_type:
+            self.task.warning("Неверный тариф", "Выберите тариф страны и типа клиента.")
+            return
+        fingerprint = (client.id, service.id, change.tariff_id, change.effective_date)
+        if fingerprint in self._uncertain_tariff_changes:
+            self.task.warning(
+                "Проверьте биллинг",
+                "Этот запрос уже отправлялся, но результат был неизвестен. "
+                "Проверьте изменение в CRM перед повтором.",
+            )
+            return
+        confirm = ConfirmDialog(
+            "Изменить тариф камеры?",
+            f"Камера: {service.camera_name} (ID {service.id})\n"
+            f"Клиент: {client.login} · {client.country}\n"
+            f"Было: {service.tariff_name}\n"
+            f"Будет: {choice.name}\n"
+            f"Стоимость в каталоге: {choice.price}\n"
+            f"Дата применения: {change.effective_date:%d.%m.%Y}\n\n"
+            "Изменение будет отправлено в настоящий биллинг.",
+            "Применить тариф",
+            False,
+            self,
+        )
+        if confirm.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._request_id += 1
+        request_id = self._request_id
+        self._set_busy(True)
+        self.task.busy_inline("Смена тарифа", "Отправляю подтверждённый PUT в биллинг…")
+
+        def work():
+            try:
+                receipt = self.gateway.change_tariff(change, client=client)
+                self.operationReady.emit(request_id, "change", receipt, None)
+            except BillingWriteOutcomeUnknown as exc:
+                self.operationReady.emit(request_id, "change_unknown", fingerprint, exc)
+            except Exception as exc:
+                self.operationReady.emit(request_id, "change_error", None, exc)
+
+        threading.Thread(
+            target=work, name="billing-confirmed-tariff-put", daemon=True
+        ).start()
 
     def _show_change_dialog(self, service: BillingService, choices: tuple[TariffOption, ...]):
         if not choices or self.client is None:
@@ -1133,7 +1201,10 @@ class TariffsPage(QWidget):
     def _safe_error(error: Exception) -> str:
         # Do not display raw network exceptions: some libraries include
         # full URLs with tokens or HTTP authorization information in errors.
-        if isinstance(error, (BillingNotConfigured, BillingPermissionDenied, BillingValidationError)):
+        if isinstance(error, (
+            BillingNotConfigured, BillingPermissionDenied,
+            BillingValidationError, BillingWriteOutcomeUnknown,
+        )):
             return str(error)
         return "Нет ответа от сервера или произошла ошибка API. Проверьте соединение и повторите запрос."
 
