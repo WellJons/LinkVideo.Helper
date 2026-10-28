@@ -32,7 +32,7 @@ assert "validate_client(result)" in page_source
 assert "gateway.change_tariff(change)" in page_source
 assert "_safe_error(error)" in page_source
 assert "QNetworkAccessManager" not in page_source
-assert '("tariffs", "₽", "Тарифы"' in main_source
+assert '("tariffs", "₽", "Клиенты и тарифы"' in main_source
 assert 'elif key == "tariffs":' in main_source
 assert '"tariffs":' in nav_source
 
