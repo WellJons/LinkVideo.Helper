@@ -225,8 +225,7 @@ class VPNServersPage(QWidget):
             hh.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
         # Серверы прокручиваются внутри фиксированной области. Колесо мыши
         # над таблицей больше не двигает всю страницу VPN-серверов.
-        self.table.setMinimumHeight(300)
-        self.table.setMaximumHeight(440)
+        self.table.setFixedHeight(360)
         self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         tl.addWidget(self.table)
