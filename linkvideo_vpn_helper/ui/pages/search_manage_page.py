@@ -410,7 +410,7 @@ class SearchManagePage(QWidget):
         if immediate:
             self._deleted_current = None
             self.detail_panel.hide()
-                self.left_card.setMaximumWidth(16777215)
+            self.left_card.setMaximumWidth(16777215)
             self.results_title.setText("Результаты")
             self.open_hint.setText("Клик — открыть карточку")
             return
