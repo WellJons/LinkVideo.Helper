@@ -65,7 +65,8 @@ with tempfile.TemporaryDirectory() as temp:
         button = controls.findChild(QPushButton, "TariffChangeButton")
         assert button is not None and button.minimumWidth() >= 100
         assert button.fontMetrics().horizontalAdvance(button.text()) < button.minimumWidth()
-        assert not page.create_crm_btn.isEnabled()
+        assert not page.b2o_creator.create_button.isEnabled()
+        assert page.b2o_creator.country.count() == 3
         page.close()
 
     outer = QScrollArea()
