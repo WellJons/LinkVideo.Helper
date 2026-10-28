@@ -16,7 +16,7 @@ from linkvideo_vpn_helper.services.archive_service import (
     ArchiveDiscovery, ArchiveDownloadResult, ArchiveService,
 )
 from linkvideo_vpn_helper.ui.components import (
-    Card, DateTimePickerButton, MetricCard, PageHeader, SegmentedControl, StatusPill, TaskStatus, button_feedback, build_page_scaffold,
+    Card, DateTimePickerButton, MetricCard, PageHeader, SegmentedControl, StatusPill, TaskStatus, WorkflowStep, button_feedback, build_page_scaffold,
 )
 from linkvideo_vpn_helper.ui.dialogs import B2OLoginDialog
 
@@ -46,14 +46,10 @@ class ArchiveDownloadPage(QWidget):
         self.page_layout = outer
 
 
-        header = Card()
-        hl = QHBoxLayout(header)
-        hl.setContentsMargins(18, 12, 18, 12)
-        title = QLabel("Скачивание архива")
-        title.setObjectName("SectionTitle")
-        hl.addWidget(title)
-        hl.addStretch(1)
-        outer.addWidget(header)
+        outer.addWidget(PageHeader(
+            "Скачать архив",
+            "Выберите камеру и период, проверьте найденную запись и сохраните MP4."
+        ))
 
         self.work = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         self.work.setSpacing(12)
@@ -62,9 +58,9 @@ class ArchiveDownloadPage(QWidget):
         params = QVBoxLayout(params_card)
         params.setContentsMargins(18, 16, 18, 16)
         params.setSpacing(12)
-        period_title = QLabel("Период")
-        period_title.setObjectName("SectionTitle")
-        params.addWidget(period_title)
+        params.addWidget(WorkflowStep(
+            1, "Поиск архива", "Страна, камера и точный период записи"
+        ))
 
         self.period_row = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         self.period_row.setSpacing(8)
@@ -78,12 +74,12 @@ class ArchiveDownloadPage(QWidget):
         self.period_row.addWidget(self.end, 1)
         params.addLayout(self.period_row)
 
-        params_title = QLabel("Параметры")
-        params_title.setObjectName("SectionTitle")
+        params_title = QLabel("ID камеры")
+        params_title.setObjectName("TinyMuted")
         params.addWidget(params_title)
         camera_row = QHBoxLayout()
         camera_row.setSpacing(10)
-        camera_label = QLabel("ID камеры")
+        camera_label = QLabel("Камера")
         camera_label.setMinimumWidth(110)
         self.camera = QLineEdit()
         self.camera.setPlaceholderText("Например: 207728 или linkvideo_207728")
@@ -140,9 +136,9 @@ class ArchiveDownloadPage(QWidget):
         save = QVBoxLayout(save_card)
         save.setContentsMargins(18, 16, 18, 16)
         save.setSpacing(10)
-        save_title = QLabel("Сохранение")
-        save_title.setObjectName("SectionTitle")
-        save.addWidget(save_title)
+        save.addWidget(WorkflowStep(
+            2, "Сохранение", "Готовый архив будет сохранён в выбранную папку"
+        ))
 
         default = str(Path.home() / "Videos" / "LinkVideo_Archive")
         self.folder = QLineEdit(str(self.settings.value("archive/folder_v2", default, str) or default))
@@ -181,7 +177,7 @@ class ArchiveDownloadPage(QWidget):
         sl.setContentsMargins(18, 16, 18, 16)
         sl.setSpacing(10)
         top = QHBoxLayout()
-        st = QLabel("Скачивание")
+        st = QLabel("Результат поиска")
         st.setObjectName("SectionTitle")
         self.coverage = StatusPill("Ожидание", "neutral")
         top.addWidget(st)
@@ -199,7 +195,9 @@ class ArchiveDownloadPage(QWidget):
             self.metrics_row.addWidget(m, 1)
         sl.addLayout(self.metrics_row)
 
-        self.summary_text = QLabel("Введите ID камеры и период, затем нажмите «Найти архив».")
+        self.summary_text = QLabel(
+            "Пока ничего не найдено. Заполните параметры выше и нажмите «Найти архив»."
+        )
         self.summary_text.setObjectName("Muted")
         self.summary_text.setWordWrap(True)
         sl.addWidget(self.summary_text)
@@ -220,7 +218,7 @@ class ArchiveDownloadPage(QWidget):
 
         bottom = QHBoxLayout()
         bottom.addStretch(1)
-        self.btn_download = QPushButton("Скачать архив")
+        self.btn_download = QPushButton("Скачать найденный архив")
         self.btn_download.setProperty("role", "primary")
         self.btn_download.setEnabled(False)
         self.btn_download.clicked.connect(self._download)
