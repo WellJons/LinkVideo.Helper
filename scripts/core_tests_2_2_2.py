@@ -10,7 +10,10 @@ version = (root / "linkvideo_vpn_helper/version.py").read_text(encoding="utf-8")
 
 assert re.search(r'^APP_VERSION\s*=\s*"\d+\.\d+\.\d+"\s*$', version, re.MULTILINE)
 assert 'self.detail_panel = Card()' in search
-assert 'self._animate_search_panel(compact=True)' in search
+assert 'self.client_info_card = Card(kind="hero")' in search
+assert 'self.left_card.hide()' in search
+assert 'self.client_info_card.show()' in search
+assert 'self.detail_scroll = QScrollArea()' in search
 assert 'self.client_dialog.show()' not in search
 assert 'self.selected_port_pill = StatusPill' in search
 assert 'self.port_action_label' not in search
