@@ -21,7 +21,7 @@ from linkvideo_vpn_helper.services.vpn_service import (
     SessionCredentials, VPNService, VPN_L2TP_HARD_LIMIT, VPN_L2TP_SOFT_LIMIT,
     VPN_L2TP_WARNING_LIMIT,
 )
-from linkvideo_vpn_helper.ui.components import Card, StatusPill, TaskStatus, MetricCard, EmptyState, build_page_scaffold
+from linkvideo_vpn_helper.ui.components import Card, StatusPill, TaskStatus, MetricCard, EmptyState, PageHeader, build_page_scaffold
 from linkvideo_vpn_helper.ui.dialogs import ConfirmDialog
 
 
@@ -75,27 +75,31 @@ class VPNServersPage(QWidget):
         )
         self.page_layout = root
 
-        header = Card(kind="hero")
+        root.addWidget(PageHeader(
+            "VPN-серверы",
+            "Нагрузка, резервные копии и управление LV-автоматикой на VPN-серверах."
+        ))
+        header = Card(subtle=True)
         hl = QHBoxLayout(header)
-        hl.setContentsMargins(18, 16, 18, 16)
-        hl.setSpacing(16)
+        hl.setContentsMargins(17, 13, 17, 13)
+        hl.setSpacing(14)
         text = QVBoxLayout()
-        text.setSpacing(4)
-        title = QLabel("VPN-серверы")
-        title.setObjectName("SectionTitle")
+        text.setSpacing(3)
+        action_title = QLabel("Текущее состояние инфраструктуры")
+        action_title.setObjectName("CardTitle")
         hint = QLabel(
-            "Состояние vpn*.linkvideo.ru, резервные копии и управление автономной LV-автоматикой. "
-            f"Новые клиенты автоматически не назначаются на серверы с {VPN_L2TP_SOFT_LIMIT}+ активными L2TP."
+            f"Новые клиенты не назначаются автоматически при {VPN_L2TP_SOFT_LIMIT}+ активных L2TP."
         )
-        hint.setObjectName("Muted")
+        hint.setObjectName("TinyMuted")
         hint.setWordWrap(True)
-        text.addWidget(title)
+        text.addWidget(action_title)
         text.addWidget(hint)
         self.refresh_btn = QPushButton("Обновить данные")
         self.refresh_btn.setProperty("role", "primary")
+        self.refresh_btn.setMinimumHeight(42)
         self.refresh_btn.clicked.connect(self.refresh)
         hl.addLayout(text, 1)
-        hl.addWidget(self.refresh_btn, 0, Qt.AlignmentFlag.AlignTop)
+        hl.addWidget(self.refresh_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         root.addWidget(header)
 
         self.task = TaskStatus()
@@ -174,6 +178,21 @@ class VPNServersPage(QWidget):
         for c in range(3):
             grid.setColumnStretch(c, 1)
         ll.addLayout(grid)
+        self.legend_card = legend
+        legend.setVisible(False)
+        self.legend_toggle = QPushButton("Показать памятку состояний")
+        self.legend_toggle.setProperty("role", "soft")
+        self.legend_toggle.setCheckable(True)
+        self.legend_toggle.setChecked(False)
+        self.legend_toggle.toggled.connect(
+            lambda checked: (
+                legend.setVisible(checked),
+                self.legend_toggle.setText(
+                    "Скрыть памятку состояний" if checked else "Показать памятку состояний"
+                )
+            )
+        )
+        root.addWidget(self.legend_toggle, 0, Qt.AlignmentFlag.AlignLeft)
         root.addWidget(legend)
 
         table_card = Card()

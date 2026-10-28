@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 from linkvideo_vpn_helper.services.errors import classify_exception
 from linkvideo_vpn_helper.services.server_registry import ServerRegistry
 from linkvideo_vpn_helper.services.vpn_service import InactiveClientRecord, SessionCredentials, VPNService
-from linkvideo_vpn_helper.ui.components import Card, EmptyState, SegmentedControl, StatusPill, TaskStatus, build_page_scaffold
+from linkvideo_vpn_helper.ui.components import Card, EmptyState, PageHeader, SegmentedControl, StatusPill, TaskStatus, build_page_scaffold
 from linkvideo_vpn_helper.ui.dialogs import ConfirmDialog
 
 
@@ -76,31 +76,29 @@ class InactiveClientsPage(QWidget):
         self.page_layout = root
 
 
-        # Шапка страницы — одна спокойная рабочая карточка вместо нескольких полос.
-        header = Card()
+        root.addWidget(PageHeader(
+            "VPN-клиенты",
+            "Состояния учётных записей, периоды отсутствия связи и ручное управление."
+        ))
+        header = Card(subtle=True)
         hl = QHBoxLayout(header)
-        hl.setContentsMargins(18, 16, 18, 16)
-        hl.setSpacing(16)
+        hl.setContentsMargins(17, 13, 17, 13)
+        hl.setSpacing(14)
         left = QVBoxLayout()
-        left.setSpacing(4)
-        title = QLabel("VPN-клиенты")
-        title.setObjectName("SectionTitle")
-        hint = QLabel(
-            "Состояния VPN-учёток: активные, спящие 30+ дней, автоматический карантин 90+, "
-            "кандидаты в архив 365+, ручные отключения и записи с неизвестной последней активностью."
-        )
-        hint.setObjectName("Muted")
-        hint.setWordWrap(True)
+        left.setSpacing(3)
+        caption = QLabel("Проверка VPN-серверов")
+        caption.setObjectName("CardTitle")
         self.scan_summary = QLabel("Проверка ещё не запускалась")
         self.scan_summary.setObjectName("TinyMuted")
-        left.addWidget(title)
-        left.addWidget(hint)
+        self.scan_summary.setWordWrap(True)
+        left.addWidget(caption)
         left.addWidget(self.scan_summary)
         self.refresh_btn = QPushButton("Проверить серверы")
         self.refresh_btn.setProperty("role", "primary")
+        self.refresh_btn.setMinimumHeight(42)
         self.refresh_btn.clicked.connect(self._scan)
         hl.addLayout(left, 1)
-        hl.addWidget(self.refresh_btn, 0, Qt.AlignmentFlag.AlignTop)
+        hl.addWidget(self.refresh_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         root.addWidget(header)
 
         # TaskStatus показывается только во время работы или при проблеме.
@@ -114,7 +112,8 @@ class InactiveClientsPage(QWidget):
         tl.setContentsMargins(14, 12, 14, 12)
         tl.setSpacing(10)
 
-        row = QHBoxLayout()
+        row = QBoxLayout(QBoxLayout.Direction.LeftToRight)
+        self.sort_row = row
         row.setSpacing(10)
         sort_label = QLabel("Сортировка")
         sort_label.setObjectName("Muted")
@@ -216,6 +215,7 @@ class InactiveClientsPage(QWidget):
         compact = self.width() < 1120
         self.body.setDirection(QBoxLayout.Direction.TopToBottom if compact else QBoxLayout.Direction.LeftToRight)
         self.list.setMaximumHeight(460 if compact else 680)
+        self.sort_row.setDirection(QBoxLayout.Direction.TopToBottom if self.width() < 1030 else QBoxLayout.Direction.LeftToRight)
 
     def refresh_servers(self):
         pass

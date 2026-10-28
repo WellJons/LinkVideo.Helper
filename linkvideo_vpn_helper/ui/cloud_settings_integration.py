@@ -140,8 +140,14 @@ def install_cloud_settings_ui() -> None:
         self.cloud_save_button.clicked.connect(lambda: _cloud_save(self, show_status=True))
 
         self.cloud_card = card
-        # Header=0, appearance/archive layout=1, cloud=2, VPN servers follows.
-        self.page_layout.insertWidget(2, card)
+        # New desktop settings use a dedicated tab. Keep the original code
+        # path for older layouts if this integration is ever loaded standalone.
+        cloud_layout = getattr(self, "cloud_layout", None)
+        if cloud_layout is not None:
+            cloud_layout.addWidget(card)
+            cloud_layout.addStretch(1)
+        else:
+            self.page_layout.insertWidget(2, card)
 
     def _config(self) -> CloudServerConfig:
         return CloudServerConfig(

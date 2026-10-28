@@ -5,7 +5,7 @@ import sys
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSettings, Qt, Signal, QTimer
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSettings, QSize, Qt, Signal, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton,
@@ -17,10 +17,11 @@ from linkvideo_vpn_helper.services.search_service import FastSearchService
 from linkvideo_vpn_helper.services.server_registry import ServerRegistry
 from linkvideo_vpn_helper.services.update_service import UpdateService
 from linkvideo_vpn_helper.services.vpn_service import SessionCredentials, VPNService
-from linkvideo_vpn_helper.theme import get_theme_style
+from linkvideo_vpn_helper.theme import colors, get_theme_style
 from linkvideo_vpn_helper.ui.components import Card
 from linkvideo_vpn_helper.ui.components_compat import AnimatedStack, Toast
 from linkvideo_vpn_helper.ui.dialogs import ConfirmDialog
+from linkvideo_vpn_helper.ui.nav_icons import navigation_icon
 from linkvideo_vpn_helper.version import APP_VERSION
 
 
@@ -92,7 +93,7 @@ class MainWindow(QMainWindow):
 
         self.sidebar = QFrame()
         self.sidebar.setObjectName("Sidebar")
-        self.sidebar.setFixedWidth(244)
+        self.sidebar.setFixedWidth(254)
         sl = QVBoxLayout(self.sidebar)
         sl.setContentsMargins(14, 18, 14, 14)
         sl.setSpacing(5)
@@ -122,6 +123,7 @@ class MainWindow(QMainWindow):
 
         user_card = Card(subtle=True)
         self.user_card = user_card
+        user_card.setObjectName("SidebarUserCard")
         ul = QHBoxLayout(user_card)
         ul.setContentsMargins(11, 9, 9, 9)
         ul.setSpacing(8)
@@ -132,6 +134,7 @@ class MainWindow(QMainWindow):
         user_text = QVBoxLayout()
         user_text.setSpacing(0)
         self.user = QLabel(self.credentials.username)
+        self.user.setToolTip(self.credentials.username)
         self.user.setObjectName("Value")
         role = QLabel("MikroTik")
         role.setObjectName("TinyMuted")
@@ -158,17 +161,18 @@ class MainWindow(QMainWindow):
                 infra.setObjectName("NavSection")
                 sl.addSpacing(6)
                 sl.addWidget(infra)
-            button = QPushButton(f"{icon_text}    {text}")
+            button = QPushButton(text)
+            button.setIconSize(QSize(20, 20))
             button.setProperty("nav", "true")
             button.clicked.connect(lambda checked=False, k=key: self._go(k))
             self.nav[key] = (button, icon_text, text, hint)
             sl.addWidget(button)
 
         sl.addStretch(1)
-        self.settings_btn = QPushButton("⚙    Настройки")
+        self.settings_btn = QPushButton("Настройки")
+        self.settings_btn.setIconSize(QSize(20, 20))
         self.settings_btn.setProperty("nav", "true")
         self.settings_btn.setProperty("footerNav", "true")
-        self.settings_btn.setStyleSheet("QPushButton { text-align:center; padding-left:0px; }")
         self.settings_btn.clicked.connect(lambda: self._go("settings"))
         sl.addWidget(self.settings_btn)
 
@@ -274,9 +278,25 @@ class MainWindow(QMainWindow):
         self.settings_btn.setProperty("active", "true" if key == "settings" else "false")
         self.settings_btn.style().unpolish(self.settings_btn)
         self.settings_btn.style().polish(self.settings_btn)
+        self._refresh_nav_icons()
+
+    def _refresh_nav_icons(self):
+        # Icon colors match selected states in every theme, while the rail
+        # itself stays graphite as in the approved UI reference.
+        theme_key = str(self.settings.value("ui/theme_v2", "linkvideo_2026", str) or "linkvideo_2026")
+        accent_foreground = colors(theme_key)["accent_text"]
+        for nav_key, (button, _, _, _) in self.nav.items():
+            active = nav_key == self._current_key
+            button.setIcon(navigation_icon(
+                nav_key, color=accent_foreground if active else "#D8E0E8"
+            ))
+        self.settings_btn.setIcon(navigation_icon(
+            "settings", color=accent_foreground if self._current_key == "settings" else "#D8E0E8"
+        ))
 
     def _theme_changed(self):
         self._apply_theme()
+        self._refresh_nav_icons()
         self._position_toast()
 
     def _servers_changed(self):
@@ -334,7 +354,7 @@ class MainWindow(QMainWindow):
 
     def _sync_sidebar(self):
         collapsed = self._collapsed
-        self.sidebar.setFixedWidth(76 if collapsed else 244)
+        self.sidebar.setFixedWidth(76 if collapsed else 254)
         self.logo.setVisible(not collapsed)
         self.logo_sub.setVisible(not collapsed)
         self.user_card.setVisible(not collapsed)
@@ -342,10 +362,10 @@ class MainWindow(QMainWindow):
         self.version.setVisible(not collapsed)
         self.brand_mark.setVisible(True)
         for button, icon_text, text, hint in self.nav.values():
-            button.setText(icon_text if collapsed else f"{icon_text}    {text}")
+            button.setText("" if collapsed else text)
             button.setToolTip(text if collapsed else "")
             button.setStyleSheet("QPushButton { text-align:center; padding-left:0px; }" if collapsed else "")
-        self.settings_btn.setText("⚙" if collapsed else "⚙    Настройки")
+        self.settings_btn.setText("" if collapsed else "Настройки")
         self.settings_btn.setToolTip("Настройки" if collapsed else "")
         self.settings_btn.setStyleSheet("QPushButton { text-align:center; padding-left:0px; }")
 

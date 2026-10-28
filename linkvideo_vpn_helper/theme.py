@@ -10,7 +10,7 @@ _RAW_THEMES = {
     # геометрия/компоненты и семантика статусов. Акцент, поверхности,
     # hover/selection и характер каждой палитры принадлежат самой теме.
     "rose_milk": ("Розовое молочко", "#FFF7FA", "#FFFBFD", "#FFFFFF", "#FFF0F6", "#F1D4E1", "#2B1821", "#806674", "#E83F8C", "#D92F7D", "#EF5B70"),
-    "linkvideo_2026": ("Светлая LinkVideo", "#F4F7FB", "#F9FBFE", "#FFFFFF", "#EAF2FF", "#D8E2F0", "#18202A", "#66758A", "#3478F6", "#2367DC", "#E85767"),
+    "linkvideo_2026": ("LinkVideo · оранжевая", "#F3F4F6", "#F8F9FA", "#FFFFFF", "#ECEFF2", "#DCE1E6", "#20252C", "#626F7D", "#C94E08", "#B74405", "#DC4F56"),
     "lavender_mist": ("Лавандовая", "#F8F5FF", "#FCFAFF", "#FFFFFF", "#F0E9FF", "#DFD3F4", "#241B33", "#786A8A", "#8B5CF6", "#7745E5", "#E85D75"),
     "ocean_blue": ("Тёмно-синяя", "#06141F", "#0A1D2B", "#0E2738", "#123447", "#21485D", "#ECF8FF", "#8FB4C8", "#18A9E6", "#0D91C9", "#FF5B6E"),
     "midnight_purple": ("Полуночная", "#100B18", "#181022", "#21172E", "#2B1D3D", "#49345F", "#FBF6FF", "#B4A2C8", "#A855F7", "#9333EA", "#FF5F7A"),
@@ -25,6 +25,16 @@ def _soft(hex_color: str, fallback: str) -> str:
     return fallback
 
 
+def _accent_text(hex_color: str) -> str:
+    """Choose readable text for bright and dark accents across every theme."""
+    rgb = [int(hex_color[index:index + 2], 16) / 255.0 for index in (1, 3, 5)]
+    linear = [x / 12.92 if x <= 0.04045 else ((x + 0.055) / 1.055) ** 2.4 for x in rgb]
+    luminance = sum(v * w for v, w in zip(linear, (0.2126, 0.7152, 0.0722)))
+    # Dark text is superior when the accent's luminance is high. This avoids
+    # white-on-bright-cyan/yellow in non-LinkVideo themes.
+    return "#17212B" if luminance > 0.179 else "#FFFFFF"
+
+
 def _to_dict(key: str, row: tuple[str, ...]) -> dict:
     name, bg, panel, panel2, panel3, border, text, muted, accent, accent_hover, danger = row
     light = key in {"rose_milk", "linkvideo_2026", "lavender_mist"}
@@ -35,14 +45,15 @@ def _to_dict(key: str, row: tuple[str, ...]) -> dict:
         "panel": panel2,
         "panel2": panel3,
         "border": border,
-        "border2": accent if light else border,
+        "border2": "#B9C4CE" if key == "linkvideo_2026" else (accent if light else border),
         "text": text,
         "muted": muted,
         "accent": accent,
+        "accent_text": _accent_text(accent),
         "accent_hover": accent_hover,
         "accent_soft": {
             "rose_milk": "#FFE8F2",
-            "linkvideo_2026": "#E7F0FF",
+            "linkvideo_2026": "#FFF0E4",
             "lavender_mist": "#EEE5FF",
             "ocean_blue": "#0B3448",
             "midnight_purple": "#321A46",
@@ -55,10 +66,10 @@ def _to_dict(key: str, row: tuple[str, ...]) -> dict:
         "warning_soft": "#FFF5DF" if light else panel3,
         "danger": danger,
         "danger_soft": "#FFF0F2" if light else panel3,
-        "info": accent,
+        "info": "#54697E" if key == "linkvideo_2026" else accent,
         "info_soft": {
             "rose_milk": "#FFF0F6",
-            "linkvideo_2026": "#EAF2FF",
+            "linkvideo_2026": "#FFF3E9",
             "lavender_mist": "#F0E9FF",
             "ocean_blue": "#0B3448",
             "midnight_purple": "#321A46",
@@ -68,7 +79,7 @@ def _to_dict(key: str, row: tuple[str, ...]) -> dict:
         "input": panel if not light else panel2,
         "graph_rx": {
             "rose_milk": "#7C6CF2",
-            "linkvideo_2026": "#14A3C7",
+            "linkvideo_2026": "#10A1B5",
             "lavender_mist": "#D14FA3",
             "ocean_blue": "#61D7FF",
             "midnight_purple": "#D06BFF",
@@ -245,8 +256,9 @@ def get_theme_style(key: str = "rose_milk") -> str:
     QPushButton:hover {{ background: {c['panel2']}; border-color: {c['border2']}; }}
     QPushButton:pressed {{ background: {c['accent_soft']}; }}
     QPushButton:disabled {{ color: {c['muted']}; background: {c['panel2']}; border-color: {c['border']}; }}
-    QPushButton[role="primary"] {{ background: {c['accent']}; color: white; border-color: {c['accent']}; }}
+    QPushButton[role="primary"] {{ background: {c['accent']}; color: {c['accent_text']}; border-color: {c['accent']}; }}
     QPushButton[role="primary"]:hover {{ background: {c['accent_hover']}; border-color: {c['accent_hover']}; }}
+    QPushButton[role="primary"]:pressed {{ background: {c['accent_hover']}; border-color: {c['accent_hover']}; }}
     QPushButton[role="danger"] {{ background: {c['danger']}; color: white; border-color: {c['danger']}; }}
     QPushButton[role="ghost"] {{ background: transparent; border-color: transparent; color: {c['muted']}; }}
     QPushButton[role="ghost"]:hover {{ background: {c['panel2']}; color: {c['text']}; }}
@@ -343,4 +355,100 @@ def get_theme_style(key: str = "rose_milk") -> str:
     QMenu::item {{ padding: 9px 26px 9px 12px; border-radius: 8px; }}
     QMenu::item:selected {{ background: {c['accent_soft']}; color: {c['text']}; }}
     QMenu::separator {{ height: 1px; background: {c['border']}; margin: 5px 8px; }}
+
+    /* Unified desktop design for every palette: a quiet dark navigation rail,
+       clean work surfaces and a single accessible accent colour. */
+    QFrame#Sidebar {{
+        background: #1F262E; border: none; border-right: 1px solid #303B46;
+    }}
+    QFrame#Sidebar QLabel#AppLogo, QFrame#Sidebar QLabel#Value {{
+        color: #FFFFFF;
+    }}
+    QFrame#Sidebar QLabel#TinyMuted, QFrame#Sidebar QLabel#NavSection {{
+        color: #AFBBC7;
+    }}
+    QFrame#Sidebar QFrame#SidebarUserCard {{
+        background: #2B343E; border: 1px solid #3A4855; border-radius: 13px;
+    }}
+    QFrame#Sidebar QLabel#Avatar {{
+        background: {c['accent_soft']}; color: {c['accent']};
+    }}
+    QFrame#Sidebar QPushButton[nav="true"] {{
+        color: #D8E0E8; font-weight: 620; border: 1px solid transparent;
+        min-height: 40px;
+    }}
+    QFrame#Sidebar QPushButton[nav="true"]:hover {{
+        background: #303B46; color: #FFFFFF; border-color: transparent;
+    }}
+    QFrame#Sidebar QPushButton[nav="true"][active="true"] {{
+        color: {c['accent_text']}; background: {c['accent']};
+        border: 1px solid {c['accent']}; font-weight: 730;
+    }}
+    QFrame#Sidebar QPushButton[role="icon"] {{
+        background: #36414E; color: #F8FAFC; border-color: #4A5765;
+    }}
+    QFrame#Sidebar QPushButton[role="icon"]:hover {{
+        background: #475665; border-color: #718091;
+    }}
+
+    /* Login: a dedicated desktop screen, not a browser view. */
+    QFrame#LoginForm {{
+        background: {c['panel']}; border: 1px solid {c['border']};
+        border-radius: 20px;
+    }}
+    QWidget#LoginStage {{ background: transparent; }}
+    QLabel#LoginTitle {{ font-size: 25px; font-weight: 780; }}
+    QLabel#LoginBrandTitle {{ font-size: 29px; font-weight: 800; }}
+    QLabel#LoginBrandSubtitle {{ font-size: 15px; color: {c['muted']}; }}
+    QLabel#LoginVersion {{ font-size: 12px; color: {c['muted']}; }}
+    QFrame#LoginError {{
+        background: {c['danger_soft']}; border: 1px solid {c['danger']};
+        border-radius: 11px;
+    }}
+    QFrame#LoginError QLabel {{ color: {c['danger']}; font-weight: 650; }}
+    QLineEdit#LoginField {{ min-height: 31px; padding: 9px 13px; }}
+    QFrame#LoginForm QPushButton[role="primary"] {{ min-height: 47px; }}
+    QFrame#LoginForm QLabel#CardTitle {{ font-size: 13px; font-weight: 620; }}
+
+    /* Compact settings: top tabs and theme swatches. */
+    QTabWidget#SettingsTabs::pane {{ border: none; background: transparent; }}
+    QTabWidget#SettingsTabs QTabBar::tab {{
+        background: transparent; border: none; padding: 12px 19px;
+        margin-right: 5px; color: {c['muted']}; font-weight: 680;
+        border-bottom: 2px solid transparent;
+    }}
+    QTabWidget#SettingsTabs QTabBar::tab:hover {{ color: {c['text']}; }}
+    QTabWidget#SettingsTabs QTabBar::tab:selected {{
+        color: {c['accent']}; border-bottom: 2px solid {c['accent']};
+    }}
+    QFrame#SettingsTabCard {{
+        background: {c['panel']}; border: 1px solid {c['border']};
+        border-radius: 16px;
+    }}
+    QLabel#StepNumber {{
+        background: {c['accent']}; color: {c['accent_text']}; border-radius: 13px;
+        font-size: 13px; font-weight: 780;
+    }}
+    QFrame#CreateResultEmpty {{
+        background: {c['panel2']}; border: 1px dashed {c['border2']};
+        border-radius: 14px;
+    }}
+    QLabel#CreateEmptySymbol {{ color: {c['muted']}; font-size: 30px; }}
+    QFrame#ThemePreviewSidebar {{
+        background: #1F262E; border: 1px solid #303B46; border-radius: 13px;
+    }}
+    QFrame#ThemePreviewSidebar QLabel#PreviewBrand {{
+        color: #FFFFFF; font-size: 15px; font-weight: 750;
+    }}
+    QFrame#ThemePreviewSidebar QLabel#PreviewActive {{
+        background: {c['accent']}; color: {c['accent_text']}; font-weight: 720;
+        border-radius: 8px; padding: 0 10px;
+    }}
+    QFrame#ThemePreviewSidebar QLabel#PreviewInactive {{
+        color: #D8E0E8; padding: 0 10px;
+    }}
+    QLabel#PreviewButton {{
+        color: {c['accent_text']}; background: {c['accent']};
+        border-radius: 10px; font-weight: 700;
+    }}
     """

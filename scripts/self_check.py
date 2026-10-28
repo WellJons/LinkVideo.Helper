@@ -249,8 +249,13 @@ if 'self.settings_btn.setStyleSheet("QPushButton { text-align:center; padding-le
     fail("Settings button must be centered in sidebar")
 if "def archive_servers(self, operator_id" not in archive_service_text or "archive/custom_servers/" not in archive_service_text:
     fail("regional archive server registry must be extensible")
-if "camera_section = QLabel(\"Камера\")" not in diag_ui or "period_section = QLabel(\"Период проверки\")" not in diag_ui:
-    fail("diagnostics form must have clear Camera and Period sections")
+# Modern Qt workflow headings replace the older plain QLabel section titles.
+if (
+    "WorkflowStep(" not in diag_ui
+    or '1, "Камеры"' not in diag_ui
+    or '2, "Период проверки"' not in diag_ui
+):
+    fail("diagnostics form must keep visible Camera and Period workflow sections")
 if 'operator_label = QLabel("Страна")' not in diag_ui:
     fail("diagnostics must show country instead of internal operator ID")
 
