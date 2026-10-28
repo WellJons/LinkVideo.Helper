@@ -97,6 +97,7 @@ from linkvideo_vpn_helper.ui.nav_icons import navigation_icon
 from linkvideo_vpn_helper.ui.pages.create_client_page import CreateClientPage
 from linkvideo_vpn_helper.ui.pages.search_manage_page import SearchManagePage
 from linkvideo_vpn_helper.ui.pages.settings_page import SettingsPage
+from linkvideo_vpn_helper.ui.cloud_settings_integration import install_cloud_settings_ui
 from linkvideo_vpn_helper.ui.pages.archive_download_page import ArchiveDownloadPage
 from linkvideo_vpn_helper.ui.pages.archive_diagnostics_page import ArchiveDiagnosticsPage
 from linkvideo_vpn_helper.ui.pages.inactive_clients_page import InactiveClientsPage
@@ -120,11 +121,16 @@ with tempfile.TemporaryDirectory() as temp:
     login_window._status("")
     assert login_window.error_banner.isHidden()
 
+    install_cloud_settings_ui()
     settings_page = SettingsPage(cfg, registry, service, creds)
     assert isinstance(settings_page.settings_tabs, QTabWidget)
     assert settings_page.settings_tabs.count() == 5
     assert settings_page.appearance_card is not None
     assert settings_page.servers_card is not None
+    assert settings_page.cloud_card is not None
+    assert settings_page.cloud_layout.indexOf(settings_page.cloud_card) >= 0
+    assert settings_page.cloud_save_button is not None
+    assert settings_page.cloud_test_button is not None
 
     create_page = CreateClientPage(service, search_service, creds, registry)
     assert create_page.empty_result is not None
