@@ -230,7 +230,7 @@ class BillingLoginPanel(Card):
                 "Токен действует только в текущем окне."
             )
             return
-        self.status.set_status("Bиллинг подключён", "success")
+        self.status.set_status("Биллинг подключён", "success")
         self.message.setText("Вход выполнен.")
         self.connected_account.setText(self.username.text().strip())
         self.login_form.hide()
