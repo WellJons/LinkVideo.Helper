@@ -15,8 +15,8 @@ from PySide6.QtWidgets import (
 
 from linkvideo_vpn_helper.services.archive_service_core import B2OService
 from linkvideo_vpn_helper.services.b2o_client_admin import (
-    B2OClientDraft, B2OCreationOutcomeUnknown, B2OOperatorClientManager,
-    operator_admin_url, operator_for_country,
+    B2OClientDraft, B2OCreationOutcomeUnknown, B2OCreationRejected,
+    B2OOperatorClientManager, operator_admin_url, operator_for_country,
 )
 from linkvideo_vpn_helper.ui.components import Card, StatusPill
 
@@ -96,6 +96,7 @@ class B2OClientCreationWidget(QWidget):
         switches = QHBoxLayout()
         self.in_billing = QCheckBox("Завести в биллинг")
         self.in_billing.setObjectName("B2OCreateInBilling")
+        self.in_billing.setChecked(True)
         self.cross_share = QCheckBox("Разрешить общий доступ к камерам операторов")
         self.cross_share.setObjectName("B2OCreateCrossShare")
         switches.addWidget(self.in_billing)
@@ -118,7 +119,7 @@ class B2OClientCreationWidget(QWidget):
         password_row = QHBoxLayout()
         password_row.setSpacing(8)
         password_row.addWidget(self.password, 1)
-        self.generate_password = QPushButton("Создать пароль")
+        self.generate_password = QPushButton("Создать пароль (9 символов)")
         self.generate_password.setObjectName("B2OGeneratePassword")
         self.generate_password.clicked.connect(self._generate_password)
         password_row.addWidget(self.generate_password)
@@ -131,22 +132,27 @@ class B2OClientCreationWidget(QWidget):
         self.phone.setPlaceholderText("Необязательно")
         self.account_type = QComboBox()
         self.account_type.setObjectName("B2OCreateAccountType")
-        # Only type "1" was observed in a successful B2O POST.
-        self.account_type.addItem("Выберите тип аккаунта", "")
-        self.account_type.addItem("Тип аккаунта 1 (подтверждён)", "1")
+        # The captured successful request contained "account_type": "1".
+        # The human name of this enum is unknown: do not invent "individual/legal".
+        self.account_type.addItem("Как при создании в B2O (код 1)", "1")
         self.account_type.setCurrentIndex(0)
+        self.account_type.setEnabled(False)
+        self.account_type.setToolTip(
+            "Код 1 подтверждён запросом из админки. "
+            "Как он называется в списке типов B2O, пока не установлено."
+        )
         for label, field in (
             ("Имя *", self.name), ("Логин *", self.login),
             ("Пароль *", None), ("Номер телефона", self.phone),
-            ("Тип аккаунта *", self.account_type),
+            ("Тип аккаунта", self.account_type),
         ):
             fields.addRow(label, password_row if field is None else field)
         form.addLayout(fields)
 
         self.message = QLabel(
-            "Создание через API подтверждено для России, типа 1, "
-            "с включённым «Завести в биллинг» и выключенным общим доступом. "
-            "Другие сочетания пока недоступны."
+            "Новый биллинг и B2O используют разные сессии. "
+            "Для создания нужен вход в B2O. Тип аккаунта (код 1) "
+            "и флаги автоматически выставлены по успешному примеру."
         )
         self.message.setObjectName("Muted")
         self.message.setWordWrap(True)
@@ -234,7 +240,12 @@ class B2OClientCreationWidget(QWidget):
             return
         token = self.b2o.token()
         if not token:
-            self.message.setText("Для создания клиента сначала войдите в B2O.")
+            self.access_status.set_status("Нужен вход B2O", "warning")
+            self.message.setText(
+                "Нет активной сессии B2O. Статус «Биллинг подключён» "
+                "не означает вход в B2O. Авторизуйтесь в B2O "
+                "через раздел архива и повторите создание."
+            )
             return
         confirmation = QMessageBox.question(
             self, "Создание клиента B2O",
@@ -252,18 +263,29 @@ class B2OClientCreationWidget(QWidget):
         self.result_card.hide()
         self._set_form_busy(True)
         self._refresh_create_enabled()
-        self.message.setText("Создание клиента в B2O…")
+        self.message.setText("Проверяю отдельную авторизацию B2O перед созданием…")
 
         def work():
+            try:
+                # GET does not grant write permission, but detects expired B2O
+                # sessions before a non-idempotent POST is sent.
+                self.api.check_access(draft.country, token=token)
+            except Exception:
+                self.createReady.emit(None, "preflight")
+                return
             try:
                 result = self.api.create_client(draft, token=token)
                 self.createReady.emit(result, None)
             except B2OCreationOutcomeUnknown:
                 self.createReady.emit(None, "unknown")
-            except (PermissionError, RuntimeError, ValueError):
-                self.createReady.emit(None, "rejected")
+            except B2OCreationRejected as exc:
+                self.createReady.emit(None, str(exc))
+            except PermissionError:
+                self.createReady.emit(None, "auth")
+            except ValueError:
+                self.createReady.emit(None, "invalid")
             except Exception:
-                # Never leak request body, password, token or server response.
+                # Unexpected errors after the POST might hide a real creation.
                 self.createReady.emit(None, "unknown")
 
         threading.Thread(target=work, name="b2o-client-create", daemon=True).start()
@@ -304,10 +326,24 @@ class B2OClientCreationWidget(QWidget):
                 "Проверьте логин в админке B2O перед любой повторной отправкой."
             )
             self.access_status.set_status("Проверьте B2O", "warning")
-        else:
+        elif error == "preflight":
             self.message.setText(
-                "B2O отклонил создание клиента. Проверьте права, сессию "
-                "и введённые данные. Повторной отправки не было."
+                "Не удалось проверить отдельную сессию B2O до отправки POST. "
+                "Войдите в B2O через раздел архива и нажмите «Проверить B2O». "
+                "Статус нового биллинга к этому входу не относится. Клиент не отправлялся."
+            )
+            self.access_status.set_status("Нет доступа B2O", "warning")
+        else:
+            if isinstance(error, str) and error.startswith("HTTP "):
+                message = error
+            elif error == "auth":
+                message = "Требуется отдельная авторизация B2O"
+            else:
+                message = "Локальная проверка данных не пройдена"
+            self.message.setText(
+                f"Создать клиента не удалось: {message}. "
+                "Проверьте настройки B2O и существование логина. "
+                "Автоматического повтора POST нет."
             )
             self.access_status.set_status("Не создан", "warning")
         self._refresh_create_enabled()
@@ -331,9 +367,16 @@ class B2OClientCreationWidget(QWidget):
         self.copy_credentials.setText("✓ Скопировано")
 
     def _generate_password(self):
-        alphabet = string.ascii_letters + string.digits + "@#_-"
-        # Cryptographic randomness; no logging, clipboard or network side effect.
-        self.password.setText("".join(secrets.choice(alphabet) for _ in range(18)))
+        # Nine alphanumeric characters: easier to type, still generated with
+        # cryptographic randomness and a letter/number mix.
+        alphabet = string.ascii_letters + string.digits
+        while True:
+            value = "".join(secrets.choice(alphabet) for _ in range(9))
+            if (any(ch.islower() for ch in value)
+                    and any(ch.isupper() for ch in value)
+                    and any(ch.isdigit() for ch in value)):
+                break
+        self.password.setText(value)
 
     def draft(self) -> B2OClientDraft:
         return B2OClientDraft(
