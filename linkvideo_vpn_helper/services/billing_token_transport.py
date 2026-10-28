@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-"""Fail-closed CRM GET transport waiting for a verified request-header format.
+"""HTTPS-only CRM read-only transport with same-origin token header negotiation.
 
-Login returns {"token": "..."}, but the protected GET request header has
-not yet been observed. No default header format is guessed or tried.
-Instantiate only after IT confirms the browser's actual request header.
+CRM login yields a token. Try the explicitly permitted token/Authorization
+header variants *only after user login* on safe GET endpoints; retry solely
+on 401, never on 403 or writes. Retain the successful mode for this session.
 """
 
 import re
+from threading import RLock
 from urllib.parse import quote, unquote
 from dataclasses import dataclass, field
 from typing import Literal
@@ -20,7 +21,7 @@ from linkvideo_vpn_helper.services.billing_gateway import (
 )
 
 
-HeaderMode = Literal["token", "authorization_bearer", "authorization_raw"]
+HeaderMode = Literal["auto", "token", "authorization_bearer", "authorization_raw"]
 _ALLOWED_ROUTES = (
     re.compile(r"^/api/accounts/search/[A-Za-z0-9_.%+@-]{3,300}$"),
     re.compile(r"^/api/accounts/[0-9]+(?:/cameras)?$"),
@@ -44,6 +45,7 @@ class BillingTokenTransport:
 
     token: str = field(repr=False)
     header_mode: HeaderMode | None = None
+    _lock: RLock = field(default_factory=RLock, repr=False, compare=False)
     timeout: float = 8.0
     _session: requests.Session | None = field(default=None, repr=False)
 
@@ -52,7 +54,7 @@ class BillingTokenTransport:
             raise BillingValidationError("В CRM нет действующего токена входа.")
         if any(char in self.token for char in ("\r", "\n")):
             raise BillingValidationError("Некорректный токен CRM.")
-        if self.header_mode not in (None, "token", "authorization_bearer", "authorization_raw"):
+        if self.header_mode not in (None, "auto", "token", "authorization_bearer", "authorization_raw"):
             raise BillingValidationError("Неизвестный режим заголовка CRM.")
         self.timeout = max(2.0, min(float(self.timeout), 30.0))
         if self._session is None:
@@ -60,16 +62,14 @@ class BillingTokenTransport:
 
     @property
     def ready(self) -> bool:
-        return bool(self.token and self.header_mode)
+        return bool(self.token and self.header_mode and self._session is not None)
 
-    def _headers(self):
-        if self.header_mode not in ("token", "authorization_bearer", "authorization_raw"):
-            raise BillingNotConfigured(
-                "Для запросов клиентов ещё не подтверждён заголовок CRM token/Authorization."
-            )
-        if self.header_mode == "token":
+    def _headers(self, mode: str):
+        if mode not in ("token", "authorization_bearer", "authorization_raw"):
+            raise BillingNotConfigured("Формат авторизации API не поддерживается.")
+        if mode == "token":
             return {"Accept": "application/json", "token": self.token}
-        if self.header_mode == "authorization_raw":
+        if mode == "authorization_raw":
             return {"Accept": "application/json", "Authorization": self.token}
         return {"Accept": "application/json", "Authorization": f"Bearer {self.token}"}
 
@@ -84,23 +84,43 @@ class BillingTokenTransport:
             validate_login(decoded_login)
             if quote(decoded_login, safe="") != encoded_login:
                 raise BillingValidationError("Некорректное кодирование логина CRM.")
-        headers = self._headers()
-        try:
-            response = self._session.get(
-                BILLING_API_ORIGIN + path,
-                headers=headers,
-                timeout=self.timeout,
-                allow_redirects=False,
-            )
-        except requests.RequestException as exc:
-            raise BillingTransportError("Нет соединения с сервером CRM.") from exc
+        with self._lock:
+            if self._session is None or not self.token:
+                raise BillingPermissionDenied("Требуется повторный вход в CRM.")
+            if not self.header_mode:
+                raise BillingNotConfigured("Сначала выполните вход в CRM.")
 
-        if response.status_code in (401, 403):
-            raise BillingPermissionDenied(
-                "Сессия CRM истекла или недостаточно прав. Повторите вход."
+            modes = (
+                ("token", "authorization_bearer", "authorization_raw")
+                if self.header_mode == "auto" else (self.header_mode,)
             )
-        if not (200 <= response.status_code < 300):
-            raise BillingTransportError("Сервер CRM вернул ошибку при запросе данных.")
+            response = None
+            for mode in modes:
+                try:
+                    response = self._session.get(
+                        BILLING_API_ORIGIN + path,
+                        headers=self._headers(mode),
+                        timeout=self.timeout,
+                        allow_redirects=False,
+                    )
+                except requests.RequestException as exc:
+                    raise BillingTransportError(
+                        "Нет соединения с сервером CRM."
+                    ) from exc
+                # 401 means this header format was rejected. 403 means
+                # permissions are insufficient: never guess other headers.
+                if response.status_code != 401:
+                    if self.header_mode == "auto" and 200 <= response.status_code < 300:
+                        self.header_mode = mode
+                    break
+            if response.status_code in (401, 403):
+                raise BillingPermissionDenied(
+                    "Сессия CRM истекла или недостаточно прав. Повторите вход."
+                )
+            if not (200 <= response.status_code < 300):
+                raise BillingTransportError(
+                    "Сервер CRM вернул ошибку при запросе данных."
+                )
         try:
             data = response.json()
         except ValueError as exc:
@@ -110,7 +130,9 @@ class BillingTokenTransport:
         return data
 
     def close(self):
-        self.token = ""
-        if self._session is not None:
-            self._session.close()
-            self._session = None
+        with self._lock:
+            self.token = ""
+            self.header_mode = None
+            if self._session is not None:
+                self._session.close()
+                self._session = None
