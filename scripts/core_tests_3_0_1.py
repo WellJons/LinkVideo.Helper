@@ -4,7 +4,7 @@ ROOT=Path(__file__).resolve().parents[1]
 ver=(ROOT/'linkvideo_vpn_helper/version.py').read_text(encoding='utf-8')
 assert re.search(r'^APP_VERSION\s*=\s*"\d+\.\d+\.\d+"\s*$', ver, re.MULTILINE)
 theme=(ROOT/'linkvideo_vpn_helper/theme.py').read_text(encoding='utf-8')
-for token in ['Розовое молочко','linkvideo_2026','Светлая LinkVideo','QCalendarWidget#CompactCalendar','QListWidget#SearchResultsList']:
+for token in ['Розовое молочко','linkvideo_2026','LinkVideo · оранжевая','QCalendarWidget#CompactCalendar','QListWidget#SearchResultsList']:
     assert token in theme, token
 search=(ROOT/'linkvideo_vpn_helper/ui/pages/search_manage_page.py').read_text(encoding='utf-8')
 assert 'item.setSizeHint(QSize(0, 70))' in search
