@@ -118,10 +118,7 @@ class B2OOperatorReadOnly:
         self.b2o = b2o
 
     def read_client(self, country: str, account_id: int, token: str | None = None) -> dict[str, Any]:
-        """Confirmed GET performed by B2O after client creation.
-
-        Intentionally no POST here: request payload is still required.
-        """
+        """Confirmed GET performed by B2O after client creation."""
         operator_for_country(country)
         if isinstance(account_id, bool) or not isinstance(account_id, int) or not 0 < account_id < 10**18:
             raise ValueError("Некорректный ID клиента")
