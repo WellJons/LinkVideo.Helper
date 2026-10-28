@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-"""B2O operator admin client creation: known read-only contract.
+"""B2O operator client creation: confirmed endpoint, pending payload schema.
 
-The GET route and three operator ids are confirmed by the B2O UI.
-The creation POST method, request body and privileges are NOT confirmed.
-Do not add a write helper before reviewing the actual browser request.
+POST /operators/{id}/clients returned 200 with JSON {"id_account": N}.
+The *request body* and permissions remain unknown; no write may occur
+until the captured request payload is reviewed and mapped explicitly.
 """
 
 import re
@@ -32,6 +32,28 @@ def operator_for_country(country: str) -> int:
 
 def settings_path(country: str) -> str:
     return f"/operators/{operator_for_country(country)}/settings"
+
+
+def creation_path(country: str) -> str:
+    """Verified POST path for creation, not permission to submit it."""
+    return f"/operators/{operator_for_country(country)}/clients"
+
+
+def created_account_id(response: dict[str, Any]) -> int:
+    """Parse the observed POST success response without guessing success.
+
+    Never log the response; validate its shape and require a positive ID.
+    A 200 response with no valid id_account is NOT confirmed creation.
+    """
+    if not isinstance(response, dict):
+        raise ValueError("Сервер B2O вернул неожиданный результат создания")
+    raw = response.get("id_account")
+    if isinstance(raw, bool) or not isinstance(raw, (int, str)):
+        raise ValueError("B2O не подтвердил ID созданного клиента")
+    string_id = str(raw)
+    if not re.fullmatch(r"[1-9][0-9]{0,17}", string_id):
+        raise ValueError("B2O вернул некорректный ID созданного клиента")
+    return int(string_id)
 
 
 def operator_admin_url() -> str:
@@ -72,6 +94,23 @@ class B2OClientDraft:
 class B2OOperatorReadOnly:
     def __init__(self, b2o: B2OService):
         self.b2o = b2o
+
+    def read_client(self, country: str, account_id: int, token: str | None = None) -> dict[str, Any]:
+        """Confirmed GET performed by B2O after client creation.
+
+        Intentionally no POST here: request payload is still required.
+        """
+        operator_for_country(country)
+        if isinstance(account_id, bool) or not isinstance(account_id, int) or not 0 < account_id < 10**18:
+            raise ValueError("Некорректный ID клиента")
+        provided = token if token is not None else self.b2o.token()
+        if not provided:
+            raise PermissionError("Сначала войдите в B2O.")
+        url = BASE_URL + creation_path(country) + f"/{account_id}"
+        result = self.b2o.request_json(url, provided)
+        if not isinstance(result, dict) or str(result.get("id_account", "")) != str(account_id):
+            raise ValueError("Сервер вернул данные другого клиента")
+        return result
 
     def check_access(self, country: str, token: str | None = None) -> dict[str, Any]:
         operator = operator_for_country(country)
