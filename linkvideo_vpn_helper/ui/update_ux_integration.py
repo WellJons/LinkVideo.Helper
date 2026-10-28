@@ -4,7 +4,6 @@ import threading
 
 from PySide6.QtCore import QObject, Signal
 
-from linkvideo_vpn_helper.services.silent_update_service import can_use_silent_patches
 from linkvideo_vpn_helper.ui.components import BusyDialog
 from linkvideo_vpn_helper.ui.dialogs import ConfirmDialog
 
@@ -22,7 +21,7 @@ def install_update_ux() -> None:
 
     Startup checks stay quiet. A user-initiated check owns a centered spinner from
     the first network request until a final result. Downloads expose real byte
-    progress from UpdateService, including silent differential patches. The
+    progress from UpdateService for a verified full installer. The
     indicator itself is deliberately non-modal: checking/downloading may never
     trap the operator in Helper while a remote channel is slow.
     """
@@ -33,7 +32,6 @@ def install_update_ux() -> None:
     from linkvideo_vpn_helper.ui.main_window import MainWindow
 
     original_init = MainWindow.__init__
-    silent_ready = MainWindow._on_update_ready
 
     def patched_init(self, *args, **kwargs):
         original_init(self, *args, **kwargs)
@@ -87,7 +85,6 @@ def install_update_ux() -> None:
         if (
             getattr(self, "_update_check_busy", False)
             or getattr(self, "_lv_update_download_busy", False)
-            or getattr(self, "_silent_patch_download_busy", False)
         ):
             return
         self._update_check_busy = True
@@ -121,20 +118,6 @@ def install_update_ux() -> None:
             )
             return
 
-        # The inner handler is the silent-patch integration installed just before
-        # this layer. Let it own exact-version patches, but keep our visible
-        # progress surface for a manual check.
-        if getattr(info, "is_patch", False) and can_use_silent_patches():
-            if not startup:
-                self._lv_update_manual_active = True
-                _show_busy(
-                    self,
-                    "Скачиваю патч",
-                    f"Версия {info.latest_version} · проверяю целостность после загрузки…",
-                    0,
-                )
-            return silent_ready(self, info, None, startup)
-
         # A full installer remains an explicit user action. Close the checking
         # overlay before showing the confirmation dialog, then reopen it for the
         # actual download so there is never an ambiguous dead period.
@@ -145,7 +128,7 @@ def install_update_ux() -> None:
         confirm = ConfirmDialog(
             f"Доступна версия {info.latest_version}",
             (info.notes or "Доступно обновление LinkVideo.Helper.")
-            + "\n\nДля этой версии нужен полный установщик. Скачать и запустить обновление?",
+            + "\n\nСкачать и установить обновление?",
             "Скачать обновление",
             False,
             self,
@@ -170,7 +153,7 @@ def install_update_ux() -> None:
                     progress_callback=progress,
                     expected_sha256=getattr(info, "sha256", ""),
                     expected_version=info.latest_version,
-                    artifact_kind=getattr(info, "artifact_kind", "setup"),
+                    artifact_kind="setup",
                 )
                 self.updateDownloaded.emit(path, None)
             except Exception as exc:
@@ -192,36 +175,8 @@ def install_update_ux() -> None:
         except Exception as exc:
             _finish(self, "error", "Не удалось запустить установщик", str(exc), False)
 
-    # These two hooks are intentionally thread-safe: silent_update_integration
-    # invokes them from its download worker, and they only emit Qt signals.
-    def silent_patch_progress(self, value: int, latest_version: str, startup: bool):
-        if startup:
-            return
-        bridge = getattr(self, "_lv_update_bridge", None)
-        if bridge is not None:
-            bridge.progress.emit(
-                int(value),
-                f"Патч {latest_version}: загружено {int(value)}% · проверяю SHA-256",
-            )
-
-    def silent_patch_finished(self, latest_version: str, error, startup: bool):
-        bridge = getattr(self, "_lv_update_bridge", None)
-        if bridge is None or startup:
-            return
-        if error:
-            bridge.finished.emit("error", "Патч не подготовлен", str(error), False)
-        else:
-            bridge.finished.emit(
-                "success",
-                "Обновление готово",
-                f"Патч {latest_version} скачан и проверен. Он применится автоматически после закрытия Helper.",
-                False,
-            )
-
     MainWindow.__init__ = patched_init
     MainWindow._check_updates = patched_check
     MainWindow._on_update_ready = patched_ready
     MainWindow._on_update_downloaded = patched_downloaded
-    MainWindow._lv_silent_patch_progress = silent_patch_progress
-    MainWindow._lv_silent_patch_finished = silent_patch_finished
     _INSTALLED = True
