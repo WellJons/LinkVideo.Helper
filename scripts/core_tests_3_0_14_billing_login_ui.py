@@ -165,9 +165,17 @@ with tempfile.TemporaryDirectory() as temp:
     panel.close()
 
     page = TariffsPage(settings=settings)
-    assert page.workspace_tabs.count() == 2
+    assert page.workspace_tabs.count() == 3
     assert page.workspace_tabs.tabText(0) == "Поиск клиента"
-    assert page.workspace_tabs.tabText(1) == "Все тарифы"
+    assert page.workspace_tabs.tabText(1) == "Создать клиента"
+    assert page.workspace_tabs.tabText(2) == "Все тарифы"
+    assert page.create_country.count() == 3
+    assert not page.create_crm_btn.isEnabled()
+    requested = []
+    page.openVpnCreate.connect(requested.append)
+    page.create_country.setCurrentIndex(1)
+    page.create_vpn_btn.click()
+    assert requested == ["Казахстан"]
     assert isinstance(page.all_tariffs_page, BillingAllTariffsWidget)
     assert page.billing_login is not None
     assert not page.all_tariffs_page.refresh.isEnabled()
