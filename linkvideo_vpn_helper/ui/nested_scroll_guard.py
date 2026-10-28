@@ -4,9 +4,8 @@ from __future__ import annotations
 
 Qt can propagate an unhandled wheel event from a list/table/text editor to the
 page QScrollArea, especially at the edge of the inner scrollbar. For Helper this
-feels like the whole page jumps while the pointer is still over a field. The
-application filter below always consumes the event in the nearest
-QAbstractScrollArea, including at its top/bottom edge.
+feels like the whole page jumps while the pointer is still over a field. At a nested list's top/bottom edge the wheel continues scrolling the
+nearest parent page. The event is consumed only after reaching that boundary.
 """
 
 from PySide6.QtCore import QEvent, QObject, Qt
@@ -54,7 +53,25 @@ class _NestedScrollFilter(QObject):
             event.accept()
             return True
 
-        bar.setValue(bar.value() - amount)
+        # Use the nearest *scrollable* area that can actually move. If a
+        # table/list has reached an edge, continue with its parent page.
+        # The previous filter swallowed the wheel at the inner boundary,
+        # leaving the rest of the customer workspace apparently unscrollable.
+        candidate = area
+        while candidate is not None:
+            scrollbar = candidate.horizontalScrollBar() if use_horizontal else candidate.verticalScrollBar()
+            new_position = max(scrollbar.minimum(), min(scrollbar.maximum(), scrollbar.value() - amount))
+            if new_position != scrollbar.value():
+                scrollbar.setValue(new_position)
+                event.accept()
+                return True
+            ancestor = candidate.parentWidget()
+            candidate = None
+            while ancestor is not None:
+                if isinstance(ancestor, QAbstractScrollArea) and ancestor.isEnabled():
+                    candidate = ancestor
+                    break
+                ancestor = ancestor.parentWidget()
         event.accept()
         return True
 
