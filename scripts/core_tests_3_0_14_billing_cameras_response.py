@@ -71,6 +71,10 @@ assert not client.services_loaded and not client.services
 
 empty = attach_cameras_to_client(client, {"success": True, "response": []})
 assert empty.services_loaded and len(empty.services) == 0
+assert parse_cameras_response({"success": True, "response": []}) == ()
+# The shape is an array, not a single record, and account/camera IDs are not
+# interchangeable. Fail closed on malicious or malformed camera identifiers.
+assert first.id != first.camera_vc_id
 
 for bad in (
     {"success": False, "response": []},
