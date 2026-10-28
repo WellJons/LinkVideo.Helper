@@ -24,6 +24,7 @@ HeaderMode = Literal["auto", "token", "authorization_bearer", "authorization_raw
 _ALLOWED_ROUTES = (
     re.compile(r"^/api/accounts/search/[A-Za-z0-9_.%+@-]{3,300}$"),
     re.compile(r"^/api/accounts/[0-9]+(?:/cameras)?$"),
+    re.compile(r"^/api/cameras/[1-9][0-9]{0,17}/history$"),
     re.compile(r"^/api/tariffs/list/[01]$"),
     re.compile(r"^/api/cameras/archive-depth/1$"),
     re.compile(r"^/api/countries/1$"),
@@ -139,6 +140,61 @@ class BillingTokenTransport:
         if not isinstance(data, dict):
             raise BillingTransportError("CRM вернула неожиданную структуру ответа.")
         return data
+
+    def put_camera_status(self, camera_id: str, status: int, effective_date) -> dict:
+        """Observed PUT /api/cameras/{id}/status, once, no automatic retry."""
+        from datetime import date
+        if not isinstance(camera_id, str) or not re.fullmatch(
+            r"[1-9][0-9]{0,17}", camera_id
+        ):
+            raise BillingValidationError("Некорректный ID камеры.")
+        if type(status) is not int or status not in (0, 1):
+            raise BillingValidationError("Статус камеры должен быть 0 или 1.")
+        if not isinstance(effective_date, date) or effective_date < date.today():
+            raise BillingValidationError("Выберите текущую или будущую дату.")
+        path = f"/api/cameras/{camera_id}/status"
+        with self._lock:
+            if not self.token or self._session is None:
+                raise BillingPermissionDenied("Требуется повторный вход в биллинг.")
+            if self.header_mode not in (
+                "token", "authorization_bearer", "authorization_raw"
+            ):
+                raise BillingNotConfigured("Сначала загрузите камеры из CRM.")
+            try:
+                response = self._session.put(
+                    BILLING_API_ORIGIN + path,
+                    json={"status": status, "date": effective_date.strftime("%d-%m-%Y")},
+                    headers=self._headers(self.header_mode),
+                    timeout=self.timeout,
+                    allow_redirects=False,
+                )
+            except requests.RequestException:
+                raise BillingWriteOutcomeUnknown(
+                    "Ответ смены статуса неизвестен. Проверьте биллинг перед повтором."
+                ) from None
+            code = response.status_code
+            if code in (401, 403):
+                raise BillingPermissionDenied(
+                    f"Недостаточно прав для смены статуса (HTTP {code})."
+                )
+            if code in (408, 425, 429) or code >= 500:
+                raise BillingWriteOutcomeUnknown(
+                    f"HTTP {code}: неизвестен результат изменения статуса. "
+                    "Проверьте биллинг перед повтором."
+                )
+            if not 200 <= code < 300:
+                raise BillingWriteRejected(code)
+            try:
+                data = response.json()
+            except ValueError:
+                raise BillingWriteOutcomeUnknown(
+                    "Биллинг не вернул подтверждение изменения статуса."
+                ) from None
+            if not isinstance(data, dict):
+                raise BillingWriteOutcomeUnknown(
+                    "Некорректный ответ изменения статуса."
+                )
+            return data
 
     def put_tariff(self, camera_id: str, tariff_id: str, effective_date) -> dict:
         """Observed PUT /api/cameras/{id_camera}/tariff/{id_tariff}.
