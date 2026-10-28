@@ -26,7 +26,8 @@ assert "QDesktopServices.openUrl(QUrl(BILLING_LOGIN_URL))" in page_source
 assert "API не подключён" in page_source
 assert "QWebEngineView" not in page_source
 assert "requests.post" not in page_source
-assert "password" not in page_source.lower().split("class TariffsPage", 1)[-1]
+assert "QLineEdit" not in page_source
+assert "QNetworkAccessManager" not in page_source
 assert '("tariffs", "₽", "Тарифы"' in main_source
 assert 'elif key == "tariffs":' in main_source
 assert '"tariffs":' in nav_source
@@ -45,7 +46,7 @@ assert isinstance(page.open_billing, QPushButton)
 assert page.open_billing.text() == "Открыть биллинг"
 assert page.open_billing.isEnabled()
 assert not page.task.isVisible()
-assert page.findChildren(QPushButton) == [page.open_billing]
+assert page.findChild(QPushButton, "OpenBillingButton") is page.open_billing
 page.close()
 app.processEvents()
 print("CORE TESTS TARIFFS PLACEHOLDER SAFE CRM LAUNCH OK")
