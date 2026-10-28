@@ -64,6 +64,8 @@ class BillingClient:
     # GET /api/accounts/{id} has no camera list. Do not display 0 services
     # until GET /api/accounts/{id}/cameras has actually been parsed.
     services_loaded: bool = False
+    # Search response has "services_status": e.g. "6/6" (not a camera list).
+    services_status: str = ""
 
 
 @dataclass(frozen=True)
