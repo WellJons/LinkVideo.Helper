@@ -22,6 +22,9 @@ from linkvideo_vpn_helper.services.billing_response_parser import (
 from linkvideo_vpn_helper.services.billing_search_parser import (
     parse_search_response, select_exact_search_hit,
 )
+from linkvideo_vpn_helper.services.billing_catalog import (
+    TariffReferenceCatalog, build_tariff_reference,
+)
 
 
 JsonGet = Callable[[str], Mapping[str, Any]]
@@ -69,6 +72,18 @@ class BillingReadOnlyGateway:
         # Never claim services were loaded until this request succeeds.
         return attach_cameras_to_client(
             detail, self._get_json(f"/api/accounts/{match.id}/cameras")
+        )
+
+    def reference_catalog(self, client: BillingClient) -> TariffReferenceCatalog:
+        """Show reference data only. Does NOT assert a tariff is assignable."""
+        validate_client(client)
+        # The trailing /1 parameters are observed exactly as supplied from
+        # Network, but their meaning is NOT inferred or reused as country IDs.
+        tariffs_payload = self._get_json("/api/tariffs/list/1")
+        archive_payload = self._get_json("/api/cameras/archive-depth/1")
+        countries_payload = self._get_json("/api/countries/1")
+        return build_tariff_reference(
+            client, tariffs_payload, archive_payload, countries_payload
         )
 
     def tariff_options(self, client_id: str, service_id: str) -> tuple[TariffOption, ...]:
