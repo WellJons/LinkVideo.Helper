@@ -449,6 +449,7 @@ class TariffsPage(QWidget):
     searchReady = Signal(int, object, object)
     operationReady = Signal(int, str, object, object)
     cameraPreviewReady = Signal(int, str, str, object)
+    recipientSearchReady = Signal(int, object, object)
 
     def __init__(self, parent=None, *, gateway: BillingGateway | None = None,
                  settings: QSettings | None = None):
@@ -460,6 +461,7 @@ class TariffsPage(QWidget):
         self._request_id = 0
         self._busy = False
         self._preview_generation = 0
+        self._recipient_request = 0
         self._preview_widgets = {}
         self._unknown_status_changes = set()
         self._uncertain_tariff_changes: set[tuple[str, str, str, date]] = set()
@@ -1396,17 +1398,14 @@ class TariffsPage(QWidget):
         actions.addWidget(go)
         actions.addWidget(close)
         layout.addLayout(actions)
-        def do_search():
-            value = query.text().strip()
-            if not value:
+        def on_results(request_id, hits, error):
+            if request_id != self._recipient_request or not dialog.isVisible():
                 return
-            try:
-                hits = self.gateway.search_clients(value)
-            except Exception:
-                choices.clear()
+            find.setEnabled(True)
+            choices.clear()
+            if error is not None:
                 hint.setText("Поиск не выполнен. Проверьте логин и авторизацию.")
                 return
-            choices.clear()
             for hit in hits:
                 if self.client and hit.id == self.client.id:
                     continue
@@ -1415,10 +1414,34 @@ class TariffsPage(QWidget):
                 )
             if not choices.count():
                 hint.setText("Аккаунты не найдены.")
-        # Search runs through existing authenticated CRM gateway; never posts.
+
+        def do_search():
+            value = query.text().strip()
+            if not value or not callable(getattr(self.gateway, "search_clients", None)):
+                return
+            self._recipient_request += 1
+            request_id = self._recipient_request
+            gateway = self.gateway
+            find.setEnabled(False)
+            hint.setText("Ищу аккаунты получателя…")
+            def work():
+                try:
+                    result = gateway.search_clients(value)
+                    self.recipientSearchReady.emit(request_id, result, None)
+                except Exception as exc:
+                    self.recipientSearchReady.emit(request_id, None, exc)
+            threading.Thread(
+                target=work, name="billing-transfer-recipient-get", daemon=True
+            ).start()
+        self.recipientSearchReady.connect(on_results)
         find.clicked.connect(do_search)
         query.returnPressed.connect(do_search)
         dialog.exec()
+        self._recipient_request += 1
+        try:
+            self.recipientSearchReady.disconnect(on_results)
+        except (RuntimeError, TypeError):
+            pass
 
     def _selected_camera_services(self):
         if self.client is None:
