@@ -1,22 +1,13 @@
 from __future__ import annotations
 
-"""Visible LinkVideo theme identity and native-widget theme completion.
+"""LinkVideo visual identity and native-widget theme completion.
 
-The application already has a balanced light ``linkvideo_2026`` palette in
-``theme.py``: cool neutral surfaces with a clear blue interaction accent. An
-earlier 3.0.8 integration replaced that palette with the orange/cream web
-palette from LinkVideo.Monitor. In Helper that orange was applied much more
-widely (navigation, selected cards, buttons and borders), which made the whole
-workspace look yellow/beige.
+The runtime LinkVideo palette uses cool gray and white surfaces with a
+restrained orange brand accent. Avoid the broad yellow/cream override that
+previously turned navigation and workspaces beige. Installer styling remains
+independent from the desktop palette.
 
-Keep the stable settings key and the LinkVideo name, but let the native Helper
-palette define the colors. Installer branding is independent from this runtime
-theme and is not changed here.
-
-Qt's native QComboBox popup needs explicit styling on Windows. Without it the
-field and, especially, the opened list fall back to the Windows blue selection
-regardless of the selected Helper theme. Complete that missing theme contract
-here so every combo box follows the active palette.
+Native QComboBox fields/popups must also follow the active palette on Windows.
 """
 
 
@@ -102,10 +93,7 @@ def install_linkvideo_brand_theme() -> None:
 
     theme = theme_module.THEMES.get("linkvideo_2026")
     if theme:
-        # Do not repaint the whole desktop UI with Monitor's orange/cream web
-        # palette. The built-in Helper palette intentionally uses neutral
-        # white/blue surfaces and blue selection, while the product still keeps
-        # its LinkVideo name and iconography.
+        # Keep the palette in theme.py: brand identity only adds a name.
         theme["name"] = "LinkVideo"
 
     original_get_theme_style = theme_module.get_theme_style
