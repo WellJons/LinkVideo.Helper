@@ -340,6 +340,11 @@ class TariffsPage(QWidget):
             return
         self._request_id += 1
         request_id = self._request_id
+        # Old client data cannot remain operable while another login is
+        # being searched. Never mistake stale results for this new query.
+        self.client = None
+        self.result_host.hide()
+        self.empty_card.show()
         self._set_busy(True)
         self.task.busy_inline("Поиск клиента", "Запрашиваю сведения из нового биллинга…")
 
