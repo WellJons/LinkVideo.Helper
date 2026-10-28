@@ -14,7 +14,7 @@ from linkvideo_vpn_helper.services.billing_gateway import (
 )
 from linkvideo_vpn_helper.services.billing_readonly_gateway import BillingReadOnlyGateway
 from linkvideo_vpn_helper.services.billing_search_parser import (
-    parse_search_response, select_exact_search_hit,
+    exact_search_hits, parse_search_response, select_exact_search_hit,
 )
 
 search = {"success": True, "response": [{
@@ -52,6 +52,13 @@ for bad in (
         raise AssertionError("Invalid search response was accepted")
     except BillingValidationError:
         pass
+
+# Same login in two countries is valid CRM data, not a search failure.
+belarus_hit = replace(hit, id="726", country="Беларусь")
+both = (hit, belarus_hit)
+assert exact_search_hits(both, "87000000001") == both
+assert exact_search_hits(both, "725") == (hit,)
+assert exact_search_hits(both, "726") == (belarus_hit,)
 
 try:
     select_exact_search_hit(
@@ -117,6 +124,30 @@ assert calls == [
     "/api/accounts/725/cameras",
 ]
 assert gateway.find_client("lkz_87000000001") == result
+# A multiple-country login must return choices without fetching a first
+# account implicitly. The chosen ID is then fetched independently.
+mixed_search = {"success": True, "response": [
+    search["response"][0],
+    dict(search["response"][0], id_account="726", country_name="Беларусь"),
+]}
+responses["/api/accounts/search/shared_demo"] = mixed_search
+# The query must still be an exact login/account name.
+responses["/api/accounts/search/87000000001"] = mixed_search
+calls.clear()
+choices = gateway.find_client_or_choices("87000000001")
+assert isinstance(choices, tuple)
+assert [(x.id, x.country) for x in choices] == [
+    ("725", "Казахстан"), ("726", "Беларусь")
+]
+assert calls == ["/api/accounts/search/87000000001"]
+responses["/api/accounts/726"] = detail
+responses["/api/accounts/726/cameras"] = cameras
+calls.clear()
+by_client = gateway.find_client_by_hit(choices[1])
+assert by_client.id == "726" and by_client.country == "Беларусь"
+assert calls == ["/api/accounts/726", "/api/accounts/726/cameras"]
+responses["/api/accounts/search/87000000001"] = search
+
 # An exact query matching no result does not fetch details.
 responses["/api/accounts/search/00000000000"] = search
 calls.clear()
