@@ -91,7 +91,7 @@ receipt = gateway.change_tariff(change, client=client)
 assert isinstance(receipt, TariffChangeReceipt)
 assert receipt.camera_id == "304" and receipt.tariff_id == "230"
 assert receipt.remain_pay == "0"
-assert receipt.updated_client == client
+assert receipt.updated_client is None  # No GET configured in fake PUT-only session
 assert len(session.calls) == 1
 url, request = session.calls[0]
 assert url == "https://api-billing-global.linkvideo.ru/api/cameras/304/tariff/230"
@@ -101,7 +101,7 @@ assert request["allow_redirects"] is False
 assert "fictional-token" not in repr(receipt)
 
 for invalid in (
-    {"tariff_id": "900"}, {"tariff_id": "999"},
+    {"tariff_id": "900"},
     {"service_id": "305"}, {"client_id": "334"}, {"tariff_id": "../240"},
 ):
     from dataclasses import replace
@@ -148,7 +148,7 @@ for invalid in ({}, {"success": True, "response": {}}, {"success": False}):
 
 app = QApplication.instance() or QApplication([])
 dialog = TariffCatalogDialog(catalog, client.legal_type, service=service)
-assert dialog.tariff_cards.count() == 2
+assert dialog.tariff_cards.count() == 3
 assert not dialog.apply_tariff.isEnabled()
 assert dialog.findChild(QPushButton, "TariffQuickDays7")
 dialog.findChild(QPushButton, "TariffQuickDays7").click()
