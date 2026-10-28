@@ -121,6 +121,27 @@ assert page.client_heading.text() == "Demo Holder"
 assert page.metric_values["services"].text() == "—"
 assert "ещё не загружен" in page.services_hint.text()
 
+from linkvideo_vpn_helper.services.billing_response_parser import attach_cameras_to_client
+with_cameras = attach_cameras_to_client(detail, {
+    "success": True,
+    "response": [{
+        "id_camera": "901", "id_camera_vc": "11001",
+        "short_name": "Тестовая камера",
+        "tariff_name": "Тестовый тариф", "ab_plata": "100",
+        "discount": "0", "costs": "100", "status": "1",
+    }],
+})
+page._render_client(with_cameras)
+assert page.metric_values["services"].text() == "1"
+assert page.services_table.rowCount() == 1
+assert page.services_table.item(0, 0).text() == "Тестовая камера\\n901"
+assert page.services_table.item(0, 1).text() == "Тестовый тариф"
+assert page.services_table.item(0, 2).text() == "100"
+assert page.services_table.item(0, 3).text() == "0"
+assert page.services_table.item(0, 4).text() == "100"
+assert page.services_table.item(0, 5).text() == "Активный"
+assert "ещё не загружен" not in page.services_hint.text()
+
 
 dialog = ChangeTariffDialog(service, (TariffOption("tariff_test_a", service.tariff_name), option))
 assert dialog.tariff.count() == 2
