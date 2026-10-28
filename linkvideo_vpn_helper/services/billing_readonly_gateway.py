@@ -20,7 +20,7 @@ from linkvideo_vpn_helper.services.billing_response_parser import (
     attach_cameras_to_client, parse_account_detail,
 )
 from linkvideo_vpn_helper.services.billing_search_parser import (
-    parse_search_response, select_exact_search_hit,
+    BillingSearchHit, exact_search_hits, parse_search_response, select_exact_search_hit,
 )
 from linkvideo_vpn_helper.services.billing_catalog import (
     AllTariffsSnapshot, TariffReferenceCatalog, build_tariff_reference, parse_all_tariffs_snapshot,
@@ -41,37 +41,53 @@ class BillingReadOnlyGateway:
             raise TypeError("An approved authenticated JSON transport is required.")
         self._get_json = get_json
 
-    def find_client(self, login: str) -> BillingClient | None:
-        query = validate_login(login)
-        # Encoded path *segment*: user input must never become another route.
-        encoded = quote(query, safe="")
-        hits = parse_search_response(self._get_json(f"/api/accounts/search/{encoded}"))
-        match = select_exact_search_hit(hits, query)
-        if match is None:
-            return None
+    def search_clients(self, query: str) -> tuple[BillingSearchHit, ...]:
+        """Return exact accounts, even when multiple countries use one login."""
+        name = validate_login(query)
+        encoded = quote(name, safe="")
+        rows = parse_search_response(self._get_json(f"/api/accounts/search/{encoded}"))
+        return exact_search_hits(rows, name)
 
+    def find_client_or_choices(self, query: str):
+        """One result is loaded; multiple results require explicit user choice."""
+        hits = self.search_clients(query)
+        if len(hits) > 1:
+            return hits
+        return self.find_client_by_hit(hits[0]) if hits else None
+
+    def find_client(self, login: str) -> BillingClient | None:
+        """Compatibility helper: refuse ambiguous login rather than guessing."""
+        hits = self.search_clients(login)
+        if len(hits) > 1:
+            raise BillingValidationError(
+                "Найдено несколько клиентов с одинаковым логином. Выберите страну и ID."
+            )
+        return self.find_client_by_hit(hits[0]) if hits else None
+
+    def find_client_by_hit(self, hit: BillingSearchHit) -> BillingClient:
+        """Fetch account by stable CRM ID from the exact search response."""
+        if not isinstance(hit, BillingSearchHit) or hit.country not in ("Беларусь", "Казахстан"):
+            raise BillingValidationError("Выбранная запись клиента недействительна.")
+        if not hit.id.isascii() or not hit.id.isdecimal() or int(hit.id) <= 0:
+            raise BillingValidationError("Недопустимый ID клиента.")
         detail = parse_account_detail(
-            self._get_json(f"/api/accounts/{match.id}"),
-            account_id=match.id,
-            country=match.country,
-            expected_login=match.login,
+            self._get_json(f"/api/accounts/{hit.id}"),
+            account_id=hit.id,
+            country=hit.country,
+            expected_login=hit.login,
         )
         if detail is None:
-            raise BillingValidationError(
-                "Клиент найден в поиске, но его карточка недоступна."
-            )
-        # The search result provides properties absent from the detail JSON.
+            raise BillingValidationError("Выбранный клиент больше не доступен.")
         detail = validate_client(replace(
             detail,
-            legal_type=match.account_type,
-            services_status=match.services_status,
-            status=detail.status or match.status,
-            display_name=detail.display_name or match.account_name,
-            balance_text=detail.balance_text if detail.balance_text else match.balance_text,
+            legal_type=hit.account_type,
+            services_status=hit.services_status,
+            status=detail.status or hit.status,
+            display_name=detail.display_name or hit.account_name,
+            balance_text=detail.balance_text if detail.balance_text else hit.balance_text,
         ))
-        # Never claim services were loaded until this request succeeds.
         return attach_cameras_to_client(
-            detail, self._get_json(f"/api/accounts/{match.id}/cameras")
+            detail, self._get_json(f"/api/accounts/{hit.id}/cameras")
         )
 
     def reference_catalog(self, client: BillingClient) -> TariffReferenceCatalog:
