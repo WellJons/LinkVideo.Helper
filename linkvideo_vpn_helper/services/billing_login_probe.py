@@ -2,11 +2,10 @@ from __future__ import annotations
 
 """Explicit, safe CRM login probe for the observed POST /auth/login.
 
-This does not infer how subsequent GET calls are authorized. It deliberately
-does not log/return response values or persist cookies/tokens.
+This does not infer how subsequent GET calls are authorized. It does not log or persist response values, cookies or tokens.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 import requests
@@ -26,6 +25,8 @@ class LoginProbeResult:
     has_cookie: bool
     response_keys: tuple[str, ...]
     has_token_field: bool
+    # Confirmed CRM response: {"token": "..."}; secret stays in memory only.
+    token: str = field(default="", repr=False, compare=False)
 
     @property
     def session_known(self) -> bool:
@@ -66,12 +67,19 @@ def check_billing_login(request: BillingLoginRequest, *, sender: Callable | None
     if data.get("success") is False or data.get("error") is True:
         raise BillingLoginError("Биллинг отклонил корпоративную авторизацию.")
 
-    # Keys only; never return token values, headers, session cookies or body.
+    # DevTools confirmed an exact JSON key: token. Its content is secret.
+    # A successful HTTP status without a usable token is not a login.
+    token = data.get("token")
+    if not isinstance(token, str) or not token.strip():
+        raise BillingLoginError("Сервер не выдал токен корпоративной авторизации.")
+    token = token.strip()
+    if any(char in token for char in ("\\r", "\\n")):
+        raise BillingLoginError("Сервер вернул некорректный токен.")
     keys = tuple(sorted(str(k) for k in data if isinstance(k, str)))[:30]
-    token_fields = {"access_token", "token", "jwt", "id_token"}
     return LoginProbeResult(
         status_code=code,
         has_cookie=bool(response.headers.get("set-cookie")),
         response_keys=keys,
-        has_token_field=bool(token_fields.intersection(keys)),
+        has_token_field=True,
+        token=token,
     )
