@@ -163,6 +163,95 @@ class B2OClientCreationWidget(QWidget):
         self._attempt += 1
         self.access_status.set_status("Доступ не проверен", "neutral")
 
+    def _reset_creation_lock_for_new_login(self, *_):
+        # A distinct login is required before a second POST after success/uncertainty.
+        self._created = False
+        self._outcome_unknown = False
+        self._refresh_create_enabled()
+
+    def _refresh_create_enabled(self, *_):
+        if not hasattr(self, "create_button"):
+            return
+        allowed = not (self._creating or self._created or self._outcome_unknown)
+        if allowed:
+            try:
+                self.draft().verified_payload()
+            except ValueError:
+                allowed = False
+        self.create_button.setEnabled(allowed)
+
+    def _start_create(self):
+        if self._creating or self._created or self._outcome_unknown:
+            return
+        try:
+            draft = self.draft()
+            draft.verified_payload()
+        except ValueError as exc:
+            self.message.setText(str(exc))
+            self._refresh_create_enabled()
+            return
+        token = self.b2o.token()
+        if not token:
+            self.message.setText("Для создания клиента сначала войдите в B2O.")
+            return
+        confirmation = QMessageBox.question(
+            self, "Создание клиента B2O",
+            f"Создать клиента {draft.login} в B2O и включить создание в биллинге? "
+            "Операция будет отправлена один раз.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirmation != QMessageBox.StandardButton.Yes:
+            return
+        self._creating = True
+        self._refresh_create_enabled()
+        self.message.setText("Создание клиента в B2O…")
+
+        def work():
+            try:
+                result = self.api.create_client(draft, token=token)
+                self.createReady.emit(result, None)
+            except B2OCreationOutcomeUnknown:
+                self.createReady.emit(None, "unknown")
+            except (PermissionError, RuntimeError, ValueError):
+                self.createReady.emit(None, "rejected")
+            except Exception:
+                # Never leak request body, password, token or server response.
+                self.createReady.emit(None, "unknown")
+
+        threading.Thread(target=work, name="b2o-client-create", daemon=True).start()
+
+    def _on_created(self, result: object, error: object):
+        self._creating = False
+        if result is not None:
+            self._created = True
+            if result.read_back_verified:
+                self.message.setText(
+                    f"Клиент создан в B2O: ID {result.id_account}. "
+                    "Проверочный GET подтвердил логин клиента."
+                )
+            else:
+                self.message.setText(
+                    f"POST подтвердил создание клиента: ID {result.id_account}. "
+                    "Не удалось сверить данные GET — проверьте в админке. "
+                    "Повторно создавать клиента не нужно."
+                )
+            self.access_status.set_status("Создан", "success")
+        elif error == "unknown":
+            self._outcome_unknown = True
+            self.message.setText(
+                "Результат POST неизвестен. Клиент мог быть создан. "
+                "Проверьте логин в админке B2O перед любой повторной отправкой."
+            )
+            self.access_status.set_status("Проверьте B2O", "warning")
+        else:
+            self.message.setText(
+                "B2O отклонил создание клиента. Проверьте права, сессию "
+                "и введённые данные. Повторной отправки не было."
+            )
+            self.access_status.set_status("Не создан", "warning")
+        self._refresh_create_enabled()
+
     def _generate_password(self):
         alphabet = string.ascii_letters + string.digits + "@#_-"
         # Cryptographic randomness; no logging, clipboard or network side effect.
