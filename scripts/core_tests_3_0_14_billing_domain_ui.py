@@ -142,6 +142,12 @@ assert page.services_table.item(0, 4).text() == "100"
 assert page.services_table.item(0, 5).text() == "Активный"
 assert "ещё не загружен" not in page.services_hint.text()
 
+# Search API also returns a 2/2-like service status. Preserve it as-is.
+page._render_client(replace(with_cameras, services_status="1/1", legal_type="Физическое лицо"))
+assert page.metric_values["services"].text() == "1/1"
+assert "Физическое лицо" in page.client_type.text()
+
+
 
 dialog = ChangeTariffDialog(service, (TariffOption("tariff_test_a", service.tariff_name), option))
 assert dialog.tariff.count() == 2
