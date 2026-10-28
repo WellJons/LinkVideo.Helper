@@ -4,7 +4,8 @@ from __future__ import annotations
 
 Russia/operator 241: ordinary type 1, billing 1, cross-sharing 0.
 Kazakhstan/operator 1721: ordinary type 1, billing 1, cross-sharing 1.
-Belarus/operator 1741 and other option combinations remain read-only.
+Belarus/operator 1741: ordinary type 1, billing 1, cross-sharing 1.
+Other option combinations remain read-only.
 A network error after a POST may mean the client was created.
 """
 
@@ -23,12 +24,12 @@ BASE_URL = "https://api.b2o.goodline.info/ords/mobile/vc2"
 ADMIN_URL = "https://operator.b2o.goodline.info"
 OPERATOR_BY_COUNTRY = {"Россия": 241, "Казахстан": 1721, "Беларусь": 1741}
 
-# These are the two EXACT successful browser submissions seen in DevTools.
-# In particular, Kazakhstan's cross_sharing_enabled=1 is supported,
-# but =0 has not been observed. No inferred write policy for Belarus.
+# EXACT successful browser submissions observed 2026-10-28.
+# Other flags/types still require their own evidence.
 VERIFIED_CREATE_CROSS_SHARING = {
     "Россия": 0,
     "Казахстан": 1,
+    "Беларусь": 1,
 }
 
 
@@ -102,7 +103,7 @@ class B2OClientDraft:
         # Check validates basic input. Only verified_payload authorises writes.
 
     def verified_payload(self) -> dict[str, str | int]:
-        """Return one of the captured RU/KZ POST variants, never a guessed one."""
+        """Return a captured RU/KZ/BY POST variant, never a guessed one."""
         self.check()
         required_sharing = VERIFIED_CREATE_CROSS_SHARING.get(self.country)
         if required_sharing is None:
