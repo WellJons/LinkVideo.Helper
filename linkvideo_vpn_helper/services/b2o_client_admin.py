@@ -83,8 +83,8 @@ class B2OClientDraft:
             raise ValueError("Слишком длинное имя или логин")
         if not re.fullmatch(r"[a-zA-Z0-9_.@+-]{2,100}", self.login.strip()):
             raise ValueError("В логине есть недопустимые символы")
-        if len(self.password) < 8:
-            raise ValueError("Пароль должен содержать не меньше 8 символов")
+        if len(self.password) < 6:
+            raise ValueError("Пароль должен содержать не меньше 6 символов")
         if len(self.phone) > 30:
             raise ValueError("Номер телефона слишком длинный")
         if not self.account_type:
@@ -155,6 +155,24 @@ class B2OCreationOutcomeUnknown(RuntimeError):
     """POST may have been processed; user must check B2O before retrying."""
 
 
+class B2OCreationRejected(RuntimeError):
+    """Safe HTTP status/reason only; never expose server response or secrets."""
+
+    def __init__(self, status_code: int):
+        self.status_code = int(status_code)
+        messages = {
+            400: "B2O не принял параметры создания",
+            401: "сессия B2O истекла, требуется повторный вход",
+            403: "нет прав на создание клиента в B2O",
+            404: "B2O не нашёл адрес API создания",
+            409: "возможный конфликт с уже существующим клиентом",
+            422: "B2O отклонил значения полей",
+            429: "B2O ограничил частоту запросов",
+        }
+        self.reason = messages.get(self.status_code, "B2O отклонил запрос")
+        super().__init__(f"HTTP {self.status_code}: {self.reason}")
+
+
 @dataclass(frozen=True)
 class B2OCreatedClient:
     id_account: int
@@ -189,11 +207,14 @@ class B2OOperatorClientManager(B2OOperatorReadOnly):
             with urllib.request.urlopen(request, timeout=25) as reply:
                 raw = reply.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as exc:
-            if exc.code >= 500:
+            if exc.code >= 500 or exc.code in (408, 425):
                 raise B2OCreationOutcomeUnknown(
-                    "B2O вернул ошибку сервера. Проверьте клиента в админке перед повтором."
+                    "Сервер не подтвердил результат POST. Проверьте клиента в админке перед повтором."
                 ) from None
-            raise RuntimeError(f"B2O отклонил создание: HTTP {exc.code}") from None
+            if exc.code == 401:
+                # Use the same B2O logout path as the existing authenticated GET.
+                self.b2o.clear_token()
+            raise B2OCreationRejected(exc.code) from None
         except (urllib.error.URLError, TimeoutError, OSError):
             raise B2OCreationOutcomeUnknown(
                 "Связь прервалась. Клиент мог быть создан: проверьте админку перед повтором."
