@@ -286,38 +286,17 @@ class UpdateService:
         selected_hash = full_setup_hash
         artifact_kind = "setup"
 
-        # Optional differential patch. The public manifest may contain:
-        # "patches": {
-        #   "3.0.10": {"url": "...exe", "sha256": "..."}
-        # }
-        # The patch is selected only for an exact current-version match. Any
-        # other client automatically receives the full setup, so old versions
-        # can never be stranded by a missing patch.
-        patches = data.get("patches") or {}
-        if has_update and isinstance(patches, dict):
-            patch = next(
-                (
-                    candidate
-                    for from_version, candidate in patches.items()
-                    if _same_version(str(from_version), APP_VERSION)
-                ),
-                None,
-            )
-            if isinstance(patch, dict):
-                patch_url = str(patch.get("download_url") or patch.get("url") or "").strip()
-                patch_hash = _validate_sha256(patch.get("sha256", ""), field_name="patch sha256")
-                if patch_url:
-                    selected_url = patch_url
-                    selected_hash = patch_hash
-                    artifact_kind = "patch"
-
+        # Intentionally ignore manifest["patches"], including for 3.0.11.
+        # Existing installed Helpers retain their legacy patch support, but
+        # all NEW clients download the verified full Setup for every release.
+        # Keeping the old manifest URL/fields preserves cross-version updates.
         if has_update and not selected_url:
-            raise RuntimeError("Для новой версии не указана ссылка на установщик или патч")
+            raise RuntimeError("Для новой версии не указана ссылка на установщик")
         if has_update:
             selected_url = _validate_update_url(selected_url, source=source)
             selected_hash = _validate_sha256(
                 selected_hash,
-                field_name="patch sha256" if artifact_kind == "patch" else "sha256",
+                field_name="sha256",
                 required=True,
             )
 
