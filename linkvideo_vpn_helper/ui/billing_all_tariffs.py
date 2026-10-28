@@ -7,10 +7,13 @@ import threading
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from linkvideo_vpn_helper.services.billing_catalog import AllTariffsSnapshot
+from linkvideo_vpn_helper.services.billing_tariff_filter import (
+    archive_days_from_name, select_tariffs,
+)
 from linkvideo_vpn_helper.ui.components import Card, TaskStatus
 
 
@@ -66,17 +69,28 @@ class BillingAllTariffsWidget(QWidget):
         self.country.setObjectName("AllTariffsCountry")
         self.country.addItem("Все страны", "")
         self.country.currentIndexChanged.connect(self._filter)
+        self.archive_days = QSpinBox()
+        self.archive_days.setObjectName("AllTariffsArchiveDays")
+        self.archive_days.setRange(0, 3660)
+        self.archive_days.setSpecialValueText("Все сроки")
+        self.archive_days.setSuffix(" дн.")
+        self.archive_days.setToolTip(
+            "Введите точное количество дней хранения; 0 — все сроки"
+        )
+        self.archive_days.valueChanged.connect(self._filter)
         filter_row.addWidget(self.search, 1)
         filter_row.addWidget(self.country)
+        filter_row.addWidget(QLabel("Глубина архива:"))
+        filter_row.addWidget(self.archive_days)
         root.addLayout(filter_row)
 
         self.status = TaskStatus()
         self.status.hide()
         root.addWidget(self.status)
-        self.table = QTableWidget(0, 7)
+        self.table = QTableWidget(0, 8)
         self.table.setObjectName("AllTariffsTable")
         self.table.setHorizontalHeaderLabels(
-            ["ID", "Название", "Страна", "Тип клиента", "Стоимость", "Пробный", "Камер"]
+            ["ID", "Название", "Архив", "Страна", "Тип клиента", "Стоимость", "Пробный", "Камер"]
         )
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().hide()
@@ -100,6 +114,7 @@ class BillingAllTariffsWidget(QWidget):
         self.country.addItem("Все страны", "")
         self.country.blockSignals(False)
         self.search.clear()
+        self.archive_days.setValue(0)
         connected = bool(
             gateway.configured and callable(getattr(gateway, "all_tariffs", None))
         )
@@ -152,10 +167,23 @@ class BillingAllTariffsWidget(QWidget):
                 self.country.setCurrentIndex(idx)
                 break
         self.country.blockSignals(False)
-        self.table.setRowCount(len(self._rows))
-        for index, row in enumerate(self._rows):
+        self._filter()
+        self.status.done("Каталог обновлён", f"Загружено тарифов: {len(self._rows)}")
+
+    def _filter(self, *_):
+        country = str(self.country.currentData() or "")
+        selected = select_tariffs(
+            self._rows, country=country,
+            days=self.archive_days.value(),
+            search=self.search.text(),
+        )
+        self.table.setRowCount(len(selected))
+        for index, row in enumerate(selected):
+            depth = archive_days_from_name(row.name)
             values = (
-                row.id, row.name, row.country, row.account_type,
+                row.id, row.name,
+                f"{depth} дн." if depth is not None else "Не указан",
+                row.country, row.account_type,
                 f"{row.price} {self._currencies.get(row.country, '')}".strip(),
                 f"{row.test_days} дн." if row.test_days is not None else "—",
                 str(row.count_cameras) if row.count_cameras is not None else "—",
@@ -165,17 +193,11 @@ class BillingAllTariffsWidget(QWidget):
                 cell.setToolTip(row.description or row.name)
                 self.table.setItem(index, column, cell)
             self.table.setRowHeight(index, 38)
-        self._filter()
-        self.empty.setText("Каталог пуст." if not self._rows else "")
-        self.status.done("Каталог обновлён", f"Загружено тарифов: {len(self._rows)}")
-
-    def _filter(self, *_):
-        query = self.search.text().strip().casefold()
-        country = self.country.currentData()
-        for index, row in enumerate(self._rows):
-            allowed = (not country or row.country == country) and (
-                not query or query in (
-                    row.name + " " + row.id + " " + row.description
-                ).casefold()
+        if not selected:
+            self.empty.setText(
+                "Нет тарифов по выбранной стране, валюте и глубине архива. "
+                "Попробуйте другой срок или очистите фильтры."
+                if self._rows else "Каталог пуст."
             )
-            self.table.setRowHidden(index, not allowed)
+        else:
+            self.empty.setText("")
