@@ -66,6 +66,14 @@ class BillingEditableGateway(BillingReadOnlyGateway):
         super().__init__(transport.get_json)
         self._transport = transport
 
+    def refresh_client(self, client: BillingClient) -> BillingClient:
+        """Read current camera services by the already selected stable CRM ID."""
+        if not re.fullmatch(r"[1-9][0-9]{0,17}", client.id):
+            raise BillingValidationError("Некорректный ID клиента для обновления.")
+        return attach_cameras_to_client(
+            client, self._get_json(f"/api/accounts/{client.id}/cameras")
+        )
+
     def change_tariff(self, change: TariffChange, *, client: BillingClient) -> TariffChangeReceipt:
         """Explicit user-confirmed write for one verified customer's camera."""
         if not isinstance(change, TariffChange):
@@ -93,9 +101,7 @@ class BillingEditableGateway(BillingReadOnlyGateway):
         # belong to several countries and a new search would be ambiguous.
         # Scheduled tariffs may not be shown until their effective date.
         try:
-            fresh = attach_cameras_to_client(
-                client, self._get_json(f"/api/accounts/{client.id}/cameras")
-            )
+            fresh = self.refresh_client(client)
         except Exception:
             fresh = None
         return TariffChangeReceipt(
