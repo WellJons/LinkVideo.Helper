@@ -428,5 +428,16 @@ class UpdateService:
                 subprocess.Popen([str(setup_path)], shell=False, creationflags=flags)
         else:
             subprocess.Popen([str(setup_path)], shell=False)
-        time.sleep(1.0)
-        os._exit(0)
+        # Leave the running Qt event loop normally instead of aborting the
+        # Python process via os._exit(). This allows UI cleanup and settings
+        # flush before the installer replaces the application runtime.
+        try:
+            from PySide6.QtCore import QCoreApplication
+
+            app = QCoreApplication.instance()
+            if app is not None:
+                app.quit()
+        except ImportError:
+            # Also usable by headless tests; the installer has its own bounded
+            # process-stop logic for the real installed application.
+            pass
