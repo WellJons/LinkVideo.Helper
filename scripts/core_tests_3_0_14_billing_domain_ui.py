@@ -134,7 +134,7 @@ with_cameras = attach_cameras_to_client(detail, {
 page._render_client(with_cameras)
 assert page.metric_values["services"].text() == "1"
 assert page.services_table.rowCount() == 1
-assert page.services_table.item(0, 0).text() == "Тестовая камера\\n901"
+assert page.services_table.item(0, 0).text() == "Тестовая камера\n901"
 assert page.services_table.item(0, 1).text() == "Тестовый тариф"
 assert page.services_table.item(0, 2).text() == "100"
 assert page.services_table.item(0, 3).text() == "0"
