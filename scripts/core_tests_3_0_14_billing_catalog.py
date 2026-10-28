@@ -109,6 +109,9 @@ assert reference.country.name == "Казахстан"
 assert reference.country.currency_code == "тг."
 assert [x.id for x in reference.tariffs] == ["2", "3"]
 assert [x.days for x in reference.archive_periods] == [180, 0, 90]
+# All reference routes are exact paths supplied by Network; '/1' is not
+# interpreted as a country ID, and no pricing write method is called.
+assert gateway.can_change_tariffs is False
 assert calls == [
     "/api/tariffs/list/1", "/api/cameras/archive-depth/1", "/api/countries/1",
 ]
