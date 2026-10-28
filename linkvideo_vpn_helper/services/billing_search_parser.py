@@ -85,11 +85,11 @@ def exact_search_hits(
     requested = validate_login(query).casefold()
     exact = tuple(
         hit for hit in hits
-        if requested in (hit.login.casefold(), hit.account_name.casefold())
+        if requested in (hit.login.casefold(), hit.account_name.casefold(), hit.id)
         and hit.country in ALLOWED_COUNTRIES
     )
     if not exact and any(
-        requested in (hit.login.casefold(), hit.account_name.casefold())
+        requested in (hit.login.casefold(), hit.account_name.casefold(), hit.id)
         for hit in hits
     ):
         raise BillingPermissionDenied(
