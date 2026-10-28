@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FILES = (
     "linkvideo_vpn_helper/theme.py",
     "linkvideo_vpn_helper/ui/main_window.py",
+    "linkvideo_vpn_helper/ui/nav_icons.py",
     "linkvideo_vpn_helper/ui/login_window.py",
     "linkvideo_vpn_helper/ui/pages/settings_page.py",
     "linkvideo_vpn_helper/ui/pages/create_client_page.py",
@@ -62,6 +63,9 @@ assert "self._render_client()" in search
 assert "self._sync_selected_port_controls()" in search
 
 assert 'user_card.setObjectName("SidebarUserCard")' in main
+assert "navigation_icon(" in main
+assert "def _refresh_nav_icons(self):" in main
+assert "QSvgRenderer(QByteArray" in sources["linkvideo_vpn_helper/ui/nav_icons.py"]
 assert "QFrame#Sidebar QPushButton[nav=" in theme
 assert "QFrame#LoginForm" in theme
 for filename in FILES:
@@ -89,6 +93,7 @@ from linkvideo_vpn_helper.services.server_registry import ServerRegistry
 from linkvideo_vpn_helper.services.search_service import FastSearchService
 from linkvideo_vpn_helper.services.vpn_service import SessionCredentials, VPNService
 from linkvideo_vpn_helper.ui.login_window import LoginWindow
+from linkvideo_vpn_helper.ui.nav_icons import navigation_icon
 from linkvideo_vpn_helper.ui.pages.create_client_page import CreateClientPage
 from linkvideo_vpn_helper.ui.pages.search_manage_page import SearchManagePage
 from linkvideo_vpn_helper.ui.pages.settings_page import SettingsPage
@@ -106,6 +111,8 @@ with tempfile.TemporaryDirectory() as temp:
     creds = SessionCredentials("visual-smoke", "test-only")
     search_service = FastSearchService(service)
 
+    assert not navigation_icon("create").isNull()
+    assert not navigation_icon("settings").isNull()
     login_window = LoginWindow(cfg)
     assert login_window.findChild(type(login_window.error_banner), "LoginForm") is not None
     login_window._status("Неверный логин или пароль", danger=True)
