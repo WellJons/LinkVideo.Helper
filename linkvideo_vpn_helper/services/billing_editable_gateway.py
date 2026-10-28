@@ -16,6 +16,7 @@ from linkvideo_vpn_helper.services.billing_gateway import (
 )
 from linkvideo_vpn_helper.services.billing_readonly_gateway import BillingReadOnlyGateway
 from linkvideo_vpn_helper.services.billing_catalog import filter_tariffs_for_client
+from linkvideo_vpn_helper.services.billing_response_parser import attach_cameras_to_client
 from linkvideo_vpn_helper.services.billing_token_transport import (
     BillingTokenTransport, BillingWriteOutcomeUnknown,
 )
@@ -88,10 +89,13 @@ class BillingEditableGateway(BillingReadOnlyGateway):
             change.service_id, change.tariff_id, change.effective_date
         )
         receipt = validated_tariff_receipt(response, change)
-        # A GET following a successful scheduled PUT may still return the old
-        # plan: never claim it was applied immediately. Refresh is best effort.
+        # Reload by the confirmed account ID, NOT by login: one login may
+        # belong to several countries and a new search would be ambiguous.
+        # Scheduled tariffs may not be shown until their effective date.
         try:
-            fresh = self.find_client(client.login)
+            fresh = attach_cameras_to_client(
+                client, self._get_json(f"/api/accounts/{client.id}/cameras")
+            )
         except Exception:
             fresh = None
         return TariffChangeReceipt(
