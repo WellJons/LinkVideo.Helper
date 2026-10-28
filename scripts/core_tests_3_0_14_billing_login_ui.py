@@ -122,24 +122,29 @@ with tempfile.TemporaryDirectory() as temp:
     settings = QSettings(str(Path(temp) / "ui.ini"), QSettings.Format.IniFormat)
     settings.setValue("username", "existing.helper")
     settings.setValue("password", "fictional-helper-password")
+    settings.setValue("b2o/login", "same.employee")
     store = BillingCredentialStore(
         settings, platform="win32", protector=fake_encrypt, unprotector=fake_decrypt,
     )
     panel = BillingLoginPanel(settings, credential_store=store)
-    assert panel.username.text() == ""
+    assert panel.username.text() == "same.employee"
     assert panel.password.text() == ""
+    panel.username.setText("custom")
     panel.use_saved.click()
-    assert panel.username.text() == "existing.helper"
-    assert panel.password.text() == "fictional-helper-password"
+    assert panel.username.text() == "same.employee"
+    assert panel.password.text() == ""
+    panel.password.setText("fictional-crm-password")
     assert panel.submit.text() == "Войти"
     assert not panel.login_verified
     assert not settings.contains("billing/crm/password_dpapi")
     # Confirmed token becomes a RAM-only session. Avoid network in smoke.
     panel._on_login_done(0, result, None)
     assert panel.login_verified
-    assert panel.status.text() == "Вход выполнен"
+    assert panel.status.text() == "Биллинг подключён"
+    assert panel.connected_account.text() == "same.employee"
+    assert panel.login_form.isHidden() and not panel.connected_row.isHidden()
     assert panel.logout_btn.isEnabled()
-    assert panel.store.load().password == "fictional-helper-password"
+    assert panel.store.load().password == "fictional-crm-password"
     assert not settings.contains("billing/crm/token")
     assert "fake-secret-token" not in Path(temp, "ui.ini").read_text(encoding="utf-8")
     panel._credentials_edited()
@@ -149,7 +154,7 @@ with tempfile.TemporaryDirectory() as temp:
     assert panel.login_verified
     panel.logout_btn.click()
     assert not panel.login_verified
-    assert panel.store.load().password == "fictional-helper-password"
+    assert panel.store.load().password == "fictional-crm-password"
     assert panel.status.text() == "Не подключён"
     panel.clear_btn.click()
     assert not panel.username.text() and not panel.password.text()
