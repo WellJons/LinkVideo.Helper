@@ -39,16 +39,16 @@ def archive_days_from_name(name: str) -> int | None:
 def country_tariff_visible(tariff: TariffCatalogEntry, country: str) -> bool:
     """Filter by CRM country and guard against foreign currency labels.
 
-    For Belarus the user explicitly requested BYN in the tariff NAME.
-    Other countries can have names without any currency marker; exclude
-    only those explicitly tagged with a different ISO currency.
+    Original CRM tariff names may omit ISO codes entirely ("ЮЛ 30 дней",
+    "Стартовый 90"). Keep these authentic labels and only reject an
+    explicitly contradictory foreign ISO-currency marker.
     """
     if tariff.country != country:
         return False
     label = tariff.name
     iso_markers = {m.group(0).upper() for m in _ISO_CURRENCY_RE.finditer(label)}
     if country == "Беларусь":
-        return "BYN" in iso_markers and iso_markers == {"BYN"}
+        return not iso_markers or iso_markers == {"BYN"}
     expected = {
         "Казахстан": {"KZT"},
         "Российская федерация": {"RUB", "RUR"},
