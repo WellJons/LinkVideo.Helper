@@ -155,10 +155,40 @@ class B2OCreationOutcomeUnknown(RuntimeError):
     """POST may have been processed; user must check B2O before retrying."""
 
 
-class B2OCreationRejected(RuntimeError):
-    """Safe HTTP status/reason only; never expose server response or secrets."""
+def safe_b2o_validation_hint(raw: bytes) -> str:
+    """Classify common validation errors without ever displaying response values.
 
-    def __init__(self, status_code: int):
+    B2O error responses can echo login, phone and even password. Neither raw
+    body nor any arbitrary substring from it may escape into UI or logs.
+    """
+    if not isinstance(raw, bytes):
+        return ""
+    body = raw[:8192].decode("utf-8", "replace").lower()
+    duplicates = ("already exists", "already registered", "duplicate",
+                  "unique constraint", "already taken", "уже существует",
+                  "уже зарегистрирован", "уже занят", "не уникал")
+    if any(phrase in body for phrase in duplicates):
+        return "возможно, логин или клиент уже существует в B2O/биллинге"
+    fields = (
+        ("account_type", "тип аккаунта"), ("client_name", "имя клиента"),
+        ("cross_sharing_enabled", "общий доступ"),
+        ("push_to_billing", "создание в биллинге"),
+        ("login", "логин"), ("phone", "телефон"), ("password", "пароль"),
+    )
+    identified = [label for key, label in fields
+                  if re.search(r"(?<![a-z_])" + re.escape(key) + r"(?![a-z_])", body)]
+    if identified:
+        return "в ответе упомянуты поля: " + ", ".join(identified)
+    match = re.search(r"\bora-(\d{5})\b", body)
+    if match:
+        return "код серверной проверки ORA-" + match.group(1)
+    return ""
+
+
+class B2OCreationRejected(RuntimeError):
+    """Safe HTTP status and classified validation hint, never server content."""
+
+    def __init__(self, status_code: int, hint: str = ""):
         self.status_code = int(status_code)
         messages = {
             400: "B2O не принял параметры создания",
@@ -170,7 +200,9 @@ class B2OCreationRejected(RuntimeError):
             429: "B2O ограничил частоту запросов",
         }
         self.reason = messages.get(self.status_code, "B2O отклонил запрос")
-        super().__init__(f"HTTP {self.status_code}: {self.reason}")
+        self.validation_hint = hint
+        suffix = f" ({hint})" if hint else ""
+        super().__init__(f"HTTP {self.status_code}: {self.reason}{suffix}")
 
 
 @dataclass(frozen=True)
@@ -214,7 +246,12 @@ class B2OOperatorClientManager(B2OOperatorReadOnly):
             if exc.code == 401:
                 # Use the same B2O logout path as the existing authenticated GET.
                 self.b2o.clear_token()
-            raise B2OCreationRejected(exc.code) from None
+            # A strictly bounded classification only: never surface raw HTTP body.
+            try:
+                hint = safe_b2o_validation_hint(exc.read(8192))
+            except Exception:
+                hint = ""
+            raise B2OCreationRejected(exc.code, hint) from None
         except (urllib.error.URLError, TimeoutError, OSError):
             raise B2OCreationOutcomeUnknown(
                 "Связь прервалась. Клиент мог быть создан: проверьте админку перед повтором."
