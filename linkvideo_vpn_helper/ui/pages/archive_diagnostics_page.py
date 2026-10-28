@@ -27,7 +27,7 @@ from linkvideo_vpn_helper.ui.components import (
     PageHeader,
     SegmentedControl,
     StatusPill,
-    TaskStatus, build_page_scaffold,
+    TaskStatus, WorkflowStep, build_page_scaffold,
 )
 from linkvideo_vpn_helper.ui.dialogs import B2OLoginDialog
 
@@ -74,18 +74,10 @@ class ArchiveDiagnosticsPage(QWidget):
         self.page_layout = outer
 
 
-        header = Card()
-        hl = QVBoxLayout(header)
-        hl.setContentsMargins(16, 14, 16, 14)
-        hl.setSpacing(5)
-        title = QLabel("Диагностика архива")
-        title.setObjectName("SectionTitle")
-        hint = QLabel("Проверка архива, точных разрывов, переездов между vcore и сравнение с другими камерами.")
-        hint.setObjectName("Muted")
-        hint.setWordWrap(True)
-        hl.addWidget(title)
-        hl.addWidget(hint)
-        outer.addWidget(header)
+        outer.addWidget(PageHeader(
+            "Диагностика архива",
+            "Проверьте разрывы, переезды между vcore и сравните камеры одного адреса."
+        ))
 
         form = Card(kind="hero")
         fl = QVBoxLayout(form)
@@ -112,9 +104,9 @@ class ArchiveDiagnosticsPage(QWidget):
         if saved_operator not in {"241", "1721", "1741"}:
             saved_operator = "241"
 
-        camera_section = QLabel("Камера")
-        camera_section.setObjectName("SectionTitle")
-        fl.addWidget(camera_section)
+        fl.addWidget(WorkflowStep(
+            1, "Камеры", "Укажите основную камеру, при необходимости добавьте камеры для сравнения"
+        ))
 
         # Страна и ID камеры намеренно расположены в отдельных строках.
         operator_row = QHBoxLayout()
@@ -154,9 +146,9 @@ class ArchiveDiagnosticsPage(QWidget):
         self.extra_layout.setSpacing(6)
         fl.addWidget(self.extra_host)
 
-        period_section = QLabel("Период проверки")
-        period_section.setObjectName("SectionTitle")
-        fl.addWidget(period_section)
+        fl.addWidget(WorkflowStep(
+            2, "Период проверки", "Время задаётся по часам камеры"
+        ))
 
         self.period_row = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         self.period_row.setSpacing(10)
@@ -199,7 +191,7 @@ class ArchiveDiagnosticsPage(QWidget):
         rl.setContentsMargins(16, 15, 16, 16)
         rl.setSpacing(10)
         top = QHBoxLayout()
-        rt = QLabel("Результат")
+        rt = QLabel("Отчёт диагностики")
         rt.setObjectName("SectionTitle")
         self.badge = StatusPill("Ожидание", "neutral")
         top.addWidget(rt)
@@ -248,7 +240,9 @@ class ArchiveDiagnosticsPage(QWidget):
         self.report_text.setReadOnly(True)
         self.report_text.setMinimumHeight(280)
         self.report_text.setMaximumHeight(520)
-        self.report_text.setPlaceholderText("После проверки здесь появится отчёт и вывод о вероятной стороне проблемы.")
+        self.report_text.setPlaceholderText(
+            "Отчёт ещё не сформирован. Выберите камеры и период, затем нажмите «Проверить архив»."
+        )
         rl.addWidget(self.report_text)
         outer.addWidget(self.report)
         outer.addStretch(1)
