@@ -69,7 +69,7 @@ client = BillingClient(
     status="Активный", legal_type="Физическое лицо",
 )
 scoped = filter_tariffs_for_client(parsed, client)
-assert [x.id for x in scoped] == ["2", "3"]
+assert [x.id for x in scoped] == ["2", "3", "5"]
 # Monitor and is_showed data are preserved without guessing edit eligibility.
 assert scoped[1].is_monitor and scoped[1].is_showed == 0
 assert len(filter_tariffs_for_client(parsed, replace(client, country="Беларусь"))) == 1
@@ -107,7 +107,7 @@ gateway = BillingReadOnlyGateway(fake_get)
 reference = gateway.reference_catalog(client)
 assert reference.country.name == "Казахстан"
 assert reference.country.currency_code == "тг."
-assert [x.id for x in reference.tariffs] == ["2", "3"]
+assert [x.id for x in reference.tariffs] == ["2", "3", "5"]
 assert [x.days for x in reference.archive_periods] == [180, 0, 90]
 # All reference routes are exact paths supplied by Network; '/1' is not
 # interpreted as a country ID, and no pricing write method is called.
@@ -123,7 +123,7 @@ from PySide6.QtWidgets import QApplication
 from linkvideo_vpn_helper.ui.pages.tariffs_page import TariffCatalogDialog, TariffsPage
 app = QApplication.instance() or QApplication([])
 dialog = TariffCatalogDialog(reference, client.legal_type)
-assert dialog.table.rowCount() == 2
+assert dialog.table.rowCount() == 3
 assert dialog.period_table.rowCount() == 3
 assert dialog.period_table.item(0, 1).text() == "0"
 assert dialog.archive_days.value() == 0
