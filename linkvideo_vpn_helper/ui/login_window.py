@@ -8,7 +8,7 @@ from PySide6.QtCore import QEasingCurve, QObject, QPoint, QPropertyAnimation, QS
 from PySide6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPainterPath
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QVBoxLayout, QWidget,
+    QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from linkvideo_vpn_helper.services.routeros_login_verification import (
@@ -88,8 +88,8 @@ class LoginWindow(QDialog):
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
         self._icon_path = icon_path
-        self.resize(1080, 660)
-        self.setMinimumSize(730, 550)
+        self.resize(1080, 680)
+        self.setMinimumSize(730, 620)
         self.setObjectName("AppRoot")
         self.setStyleSheet(get_theme_style(str(self.settings.value("ui/theme_v2", "system", str) or "system")))
         self._build()
@@ -211,6 +211,8 @@ class LoginWindow(QDialog):
 
         self.error_banner = QFrame()
         self.error_banner.setObjectName("LoginError")
+        self.error_banner.setMinimumHeight(76)
+        self.error_banner.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         error_l = QHBoxLayout(self.error_banner)
         error_l.setContentsMargins(12, 10, 12, 10)
         error_l.setSpacing(8)
@@ -220,6 +222,8 @@ class LoginWindow(QDialog):
         self.error = QLabel("")
         self.error.setObjectName("DangerText")
         self.error.setWordWrap(True)
+        self.error.setMinimumHeight(44)
+        self.error.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         error_l.addWidget(error_icon)
         error_l.addWidget(self.error, 1)
         self.error_banner.hide()
@@ -245,6 +249,11 @@ class LoginWindow(QDialog):
     def _status(self, message: str, *, danger: bool = False):
         self.error.setText(message if danger else "")
         self.error_banner.setVisible(bool(message) and danger)
+        if danger and message:
+            # Recalculate word wrap and frame geometry on the current theme.
+            self.error.updateGeometry()
+            self.error_banner.updateGeometry()
+            self.error_banner.layout().activate()
         self.status_message.setText(message if not danger else "")
         self.status_message.setVisible(bool(message) and not danger)
 
