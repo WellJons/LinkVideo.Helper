@@ -35,7 +35,7 @@ def main() -> None:
 
         # Exact-version legacy patches are deliberately ignored by NEW helpers.
         for current in ("3.0.8", "3.0.11", "3.0.12", "3.0.13"):
-            update_service.APP_VERSION = current
+            setattr(update_service, "APP_VERSION", current)
             info = service._parse_manifest(manifest(), source="github")
             assert info.has_update and info.latest_version == "3.0.14"
             assert info.setup_url == OFFICIAL_SETUP
@@ -44,18 +44,18 @@ def main() -> None:
             assert not info.is_patch
 
         # The old Drive format still works when GitHub is temporarily offline.
-        update_service.APP_VERSION = "3.0.11"
+        setattr(update_service, "APP_VERSION", "3.0.11")
         legacy = service._parse_manifest(manifest(old_url=True), source="google_drive")
         assert legacy.has_update and legacy.setup_url == OFFICIAL_SETUP
         assert legacy.artifact_kind == "setup"
 
         # An already up-to-date/newer client is never forced to downgrade.
-        update_service.APP_VERSION = "3.0.14"
+        setattr(update_service, "APP_VERSION", "3.0.14")
         assert not service._parse_manifest(manifest(), source="github").has_update
-        update_service.APP_VERSION = "3.0.15"
+        setattr(update_service, "APP_VERSION", "3.0.15")
         assert not service._parse_manifest(manifest(), source="github").has_update
 
-        update_service.APP_VERSION = "3.0.13"
+        setattr(update_service, "APP_VERSION", "3.0.13")
         no_hash = manifest()
         no_hash.pop("sha256")
         try:
@@ -91,7 +91,7 @@ def main() -> None:
             update_service.LEGACY_GOOGLE_DRIVE_MANIFEST_URL,
         ]
     finally:
-        update_service.APP_VERSION = original
+        setattr(update_service, "APP_VERSION", original)
 
     print("CORE TESTS: FULL SETUP ONLY AND LEGACY MANIFEST COMPAT OK")
 
