@@ -208,6 +208,7 @@ class TariffCatalogDialog(QDialog):
             )
         self._tariffs = snapshot.tariffs
         self._country = snapshot.country.name
+        self._account_type = account_type
         self._currency = snapshot.country.currency_code
         self.filter.textChanged.connect(self._filter_rows)
         self.archive_days.valueChanged.connect(self._filter_rows)
@@ -306,6 +307,7 @@ class TariffCatalogDialog(QDialog):
     def _fill_rows(self, tariffs):
         selected = select_tariffs(
             tariffs, country=self._country,
+            account_type=self._account_type,
             days=self.archive_days.value(),
             search=self.filter.text(),
             bitrate_mbps=float(self.bitrate_filter.currentData() or 0),
