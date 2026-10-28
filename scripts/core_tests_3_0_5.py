@@ -6,7 +6,7 @@ ver=(ROOT/'linkvideo_vpn_helper/version.py').read_text(encoding='utf-8')
 assert re.search(r'^APP_VERSION\s*=\s*"\d+\.\d+\.\d+"\s*$', ver, re.MULTILINE)
 expected={
  'rose_milk':'#E83F8C',
- 'linkvideo_2026':'#3478F6',
+ 'linkvideo_2026':'#C94E08',
  'lavender_mist':'#8B5CF6',
  'ocean_blue':'#18A9E6',
  'midnight_purple':'#A855F7',
