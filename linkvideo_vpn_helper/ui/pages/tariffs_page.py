@@ -379,14 +379,14 @@ class TariffsPage(QWidget):
         validate_client(client)
         self.empty_card.hide()
         self.result_host.show()
-        self.client_heading.setText(client.login)
+        self.client_heading.setText(client.display_name or client.login)
         positive = client.status.strip().casefold() in {"активный", "активен", "active"}
         self.client_status.set_status(client.status or "Неизвестно", "success" if positive else "neutral")
         self.client_type.setText(" · ".join(x for x in (client.legal_type, client.country) if x))
         for key, text in (
             ("login", client.login),
             ("contract", client.contract_number),
-            ("services", str(len(client.services))),
+            ("services", str(len(client.services)) if client.services_loaded or client.services else "—"),
             ("balance", client.balance_text),
         ):
             self.metric_values[key].setText(_value(text))
@@ -399,6 +399,12 @@ class TariffsPage(QWidget):
         for key, value in fields.items():
             self.info_values[key].setText(_value(value))
         self.services_table.setRowCount(len(client.services))
+        self.services_hint.setText(
+            "Список камер ещё не загружен из CRM. Нужен ответ /api/accounts/{id}/cameras."
+            if not client.services_loaded and not client.services else
+            "Смена тарифов выполняется по каждой услуге отдельно. "
+            "Без подтверждённого API изменение отключено."
+        )
         for row, service in enumerate(client.services):
             cells = (
                 service.camera_name + ("\n" + service.camera_id if service.camera_id else ""),
