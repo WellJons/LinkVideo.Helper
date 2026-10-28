@@ -263,6 +263,9 @@ def get_theme_style(key: str = "rose_milk") -> str:
     QPushButton[role="ghost"] {{ background: transparent; border-color: transparent; color: {c['muted']}; }}
     QPushButton[role="ghost"]:hover {{ background: {c['panel2']}; color: {c['text']}; }}
     QPushButton[role="soft"] {{ background: {c['accent_soft']}; border-color: transparent; color: {c['accent']}; }}
+    QPushButton[role="soft"]:disabled {{
+        color: {c['muted']}; background: {c['panel2']}; border: 1px solid {c['border']};
+    }}
     QPushButton[role="icon"] {{ min-width: 40px; max-width: 40px; padding: 0; font-size: 16px; }}
     QPushButton[role="dangerGhost"] {{ background: transparent; border-color: transparent; color: {c['danger']}; }}
     QPushButton[feedback="success"] {{ background: {c['success_soft']}; border-color: transparent; color: {c['success']}; }}
