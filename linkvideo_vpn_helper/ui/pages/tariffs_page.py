@@ -116,8 +116,8 @@ class TariffCatalogDialog(QDialog):
         super().__init__(parent)
         self.setObjectName("TariffCatalogDialog")
         self.setWindowTitle("Подбор тарифа" if service else "Справочник тарифов")
-        self.resize(960, 680 if service else 600)
-        self.setMinimumSize(720, 480)
+        self.resize(850, 630 if service else 600)
+        self.setMinimumSize(700, 455)
         self.service = service
         self._chosen_date = QDate.currentDate()
         self._visible_tariffs = ()
@@ -137,9 +137,11 @@ class TariffCatalogDialog(QDialog):
             selected_camera.setWordWrap(True)
             root.addWidget(selected_camera)
         note = QLabel(
-            f"{snapshot.country.name} · {account_type} · "
-            "тарифы от меньшей глубины хранения к большей. "
-            "Это справочник: применение к камере пока недоступно через API."
+            f"{snapshot.country.name} · {account_type}  ·  "
+            "Срок хранения и скорость в названии тарифа. "
+            "Проверьте цену перед применением."
+            if service else
+            f"{snapshot.country.name} · {account_type} · Справочник тарифов"
         )
         note.setObjectName("Muted")
         note.setWordWrap(True)
@@ -165,6 +167,30 @@ class TariffCatalogDialog(QDialog):
         self.archive_days.setToolTip("Введите точное число дней; 0 — любой срок")
         filter_row.addWidget(self.archive_days)
         main_l.addLayout(filter_row)
+        quick_row = QHBoxLayout()
+        quick_row.setSpacing(6)
+        quick_row.addWidget(QLabel("Архив:"))
+        self.quick_days = []
+        for days in (0, 3, 7, 14, 30, 90):
+            button = QPushButton("Все" if days == 0 else f"{days} дн.")
+            button.setObjectName(f"TariffQuickDays{days}")
+            button.setCheckable(True)
+            button.clicked.connect(
+                lambda checked=False, value=days: self.archive_days.setValue(value)
+            )
+            quick_row.addWidget(button)
+            self.quick_days.append((days, button))
+        quick_row.addStretch(1)
+        quick_row.addWidget(QLabel("Скорость:"))
+        self.bitrate_filter = QComboBox()
+        self.bitrate_filter.setObjectName("TariffBitrateFilter")
+        for text, value in (("Любая", 0), ("0,5 Мбит/с", 0.5),
+                            ("1 Мбит/с", 1), ("2 Мбит/с", 2),
+                            ("4 Мбит/с", 4), ("8 Мбит/с", 8)):
+            self.bitrate_filter.addItem(text, value)
+        self.bitrate_filter.currentIndexChanged.connect(self._filter_rows)
+        quick_row.addWidget(self.bitrate_filter)
+        main_l.addLayout(quick_row)
 
         self.table = QTableWidget(0, 6)
         self.table.setObjectName("TariffCatalogTable")
@@ -187,7 +213,26 @@ class TariffCatalogDialog(QDialog):
         self.filter.textChanged.connect(self._filter_rows)
         self.archive_days.valueChanged.connect(self._filter_rows)
         main_l.addWidget(self.table)
+        self.tariff_cards = QListWidget()
+        self.tariff_cards.setObjectName("TariffPickerResults")
+        self.tariff_cards.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.tariff_cards.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.tariff_cards.verticalScrollBar().setSingleStep(26)
+        self.tariff_cards.setStyleSheet(
+            "QListWidget#TariffPickerResults { background: transparent; border: none; }"
+            "QListWidget#TariffPickerResults::item { margin: 3px; padding: 11px 14px;"
+            " border-radius: 10px; border: 1px solid palette(mid); }"
+            "QListWidget#TariffPickerResults::item:selected {"
+            " border: 2px solid palette(highlight);"
+            " background: palette(alternate-base); color: palette(text); }"
+        )
+        self.tariff_cards.currentRowChanged.connect(self._on_tariff_picked)
+        self.tariff_cards.setVisible(bool(service))
+        self.table.setVisible(not service)
+        main_l.addWidget(self.tariff_cards, 1)
         tabs.addTab(main, "Тарифы")
+        if service:
+            tabs.tabBar().hide()
 
         archive = QWidget()
         archive_l = QVBoxLayout(archive)
@@ -216,12 +261,13 @@ class TariffCatalogDialog(QDialog):
                 self.period_table.setItem(row, column, QTableWidgetItem(value))
         archive_l.addWidget(self.period_table)
         tabs.addTab(archive, "Глубина архива")
+        if service:
+            tabs.setTabVisible(1, False)
 
         root.addWidget(tabs, 1)
         if service is not None:
             note = QLabel(
-                "Выбор тарифа и даты можно скопировать для ручного изменения. "
-                "Автоматическая смена тарифа отключена до подтверждения API."
+                "Изменение будет отправлено в биллинг после отдельного подтверждения."
             )
             note.setObjectName("TinyMuted")
             note.setWordWrap(True)
@@ -241,17 +287,34 @@ class TariffCatalogDialog(QDialog):
             root.addLayout(preview_row)
         close = QPushButton("Закрыть")
         close.setObjectName("TariffCatalogClose")
-        close.clicked.connect(self.accept)
-        root.addWidget(close, 0, Qt.AlignmentFlag.AlignRight)
+        close.clicked.connect(self.reject)
+        if service:
+            actions = QHBoxLayout()
+            actions.addStretch(1)
+            actions.addWidget(close)
+            self.apply_tariff = QPushButton("Применить тариф")
+            self.apply_tariff.setObjectName("ApplyServiceTariff")
+            self.apply_tariff.setProperty("role", "primary")
+            self.apply_tariff.setMinimumHeight(42)
+            self.apply_tariff.setEnabled(False)
+            self.apply_tariff.clicked.connect(self.accept)
+            actions.addWidget(self.apply_tariff)
+            root.addLayout(actions)
+        else:
+            root.addWidget(close, 0, Qt.AlignmentFlag.AlignRight)
 
     def _fill_rows(self, tariffs):
         selected = select_tariffs(
             tariffs, country=self._country,
             days=self.archive_days.value(),
             search=self.filter.text(),
+            bitrate_mbps=float(self.bitrate_filter.currentData() or 0),
         )
         self._visible_tariffs = selected
         self.table.setRowCount(len(selected))
+        self.tariff_cards.clear()
+        for days, button in self.quick_days:
+            button.setChecked(self.archive_days.value() == days)
         for row, tariff in enumerate(selected):
             retention = archive_days_from_name(tariff.name)
             fields = (
@@ -267,6 +330,29 @@ class TariffCatalogDialog(QDialog):
                 item.setToolTip(tariff.description or tariff.name)
                 self.table.setItem(row, column, item)
             self.table.setRowHeight(row, 42)
+            bit = bitrate_mbps_from_name(tariff.name)
+            label = (
+                f"{retention} дней" if retention is not None else "Срок не указан"
+            )
+            speed = f"{bit:g} Мбит/с" if bit else "Скорость не указана"
+            option = QListWidgetItem(
+                f"{label}   •   {speed}   •   {tariff.price} {self._currency}\n"
+                f"{tariff.name}"
+            )
+            option.setToolTip(tariff.description or tariff.name)
+            option.setSizeHint(option.sizeHint().expandedTo(
+                self.tariff_cards.sizeHintForIndex(self.tariff_cards.model().index(0, 0))
+                if self.tariff_cards.count() else option.sizeHint()
+            ))
+            self.tariff_cards.addItem(option)
+        if self.service is not None and hasattr(self, "apply_tariff"):
+            self.apply_tariff.setEnabled(False)
+
+    def _on_tariff_picked(self, index: int):
+        if 0 <= index < self.table.rowCount():
+            self.table.selectRow(index)
+        if hasattr(self, "apply_tariff"):
+            self.apply_tariff.setEnabled(index >= 0)
 
     def _filter_rows(self, *_):
         self._fill_rows(self._tariffs)
@@ -304,7 +390,9 @@ class TariffCatalogDialog(QDialog):
     def selection_message(self) -> str:
         if self.service is None:
             raise ValueError("Камера не выбрана")
-        index = self.table.currentRow()
+        index = self.tariff_cards.currentRow()
+        if index < 0:
+            index = self.table.currentRow()
         if not 0 <= index < len(self._visible_tariffs):
             raise ValueError("Выберите строку тарифа в таблице")
         tariff = self._visible_tariffs[index]
@@ -316,6 +404,18 @@ class TariffCatalogDialog(QDialog):
             f"Архив: {str(retention) + ' дн.' if retention is not None else 'не указан'}\n"
             f"Дата: {self._chosen_date.toString('dd.MM.yyyy')}\n\n"
             "Подбор для ручного применения в биллинге. Тариф ещё не изменён."
+        )
+
+    def selection_change(self, client: BillingClient) -> TariffChange:
+        if self.service is None:
+            raise BillingValidationError("Камера не выбрана")
+        row = self.tariff_cards.currentRow()
+        if not 0 <= row < len(self._visible_tariffs):
+            raise BillingValidationError("Выберите тариф из списка.")
+        tariff = self._visible_tariffs[row]
+        return validate_tariff_change(
+            client, self.service, TariffOption(tariff.id, tariff.name),
+            self._chosen_date.toPython(), "",
         )
 
     def _copy_selection(self):
