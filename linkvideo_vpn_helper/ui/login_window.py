@@ -4,7 +4,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt, Signal
+from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QSettings, Qt, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
@@ -29,6 +29,7 @@ class LoginWindow(QDialog):
         self.settings = settings or QSettings("LinkVideo", "LinkVideo.Helper")
         self.payload: LoginPayload | None = None
         self._checking = False
+        self._shake_animation = None
         self._pending: tuple[str, str, bool] | None = None
         self.setWindowTitle("LinkVideo.Helper")
         icon_path = Path(__file__).resolve().parents[2] / "icon.ico"
@@ -116,6 +117,7 @@ class LoginWindow(QDialog):
         self.remember.setChecked(bool(self.settings.value("remember", True, bool)))
         fl.addWidget(self.remember)
         self.error = QLabel("")
+        self.error.setMinimumHeight(32)
         self.error.setObjectName("DangerText")
         self.error.setWordWrap(True)
         fl.addWidget(self.error)
@@ -129,10 +131,42 @@ class LoginWindow(QDialog):
 
         self.password.returnPressed.connect(self._submit)
         self.login.returnPressed.connect(lambda: self.password.setFocus())
+        self.login.textChanged.connect(self._clear_login_error)
+        self.password.textChanged.connect(self._clear_login_error)
         if self.login.text().strip():
             self.password.setFocus()
         else:
             self.login.setFocus()
+
+    def _status(self, message: str, *, danger: bool = False):
+        self.error.setObjectName("DangerText" if danger else "Muted")
+        self.error.setText(message)
+        self.error.style().unpolish(self.error)
+        self.error.style().polish(self.error)
+
+    def _clear_login_error(self, *_args):
+        if self._checking:
+            return
+        self._status("")
+        for field in (self.login, self.password):
+            field.setProperty("error", False)
+            field.style().unpolish(field)
+            field.style().polish(field)
+
+    def _shake_on_invalid_password(self):
+        if not bool(self.settings.value("ui/animations_enabled", True, bool)):
+            return
+        if self._shake_animation is not None:
+            self._shake_animation.stop()
+        origin = self.pos()
+        shake = QPropertyAnimation(self, b"pos", self)
+        shake.setDuration(280)
+        shake.setEasingCurve(QEasingCurve.Type.InOutSine)
+        offsets = (0, -7, 7, -5, 5, -2, 2, 0)
+        for index, offset in enumerate(offsets):
+            shake.setKeyValueAt(index / (len(offsets) - 1), QPoint(origin.x() + offset, origin.y()))
+        self._shake_animation = shake
+        shake.start()
 
     def _toggle_password(self, visible: bool):
         self.password.setEchoMode(QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password)
@@ -144,7 +178,7 @@ class LoginWindow(QDialog):
         user = self.login.text().strip()
         password = self.password.text()
         if not user or not password:
-            self.error.setText("Введите логин и пароль MikroTik.")
+            self._status("Введите логин и пароль MikroTik.", danger=True)
             return
 
         from linkvideo_vpn_helper.services.server_registry import ServerRegistry
@@ -153,7 +187,7 @@ class LoginWindow(QDialog):
             hosts = [server.host for server in ServerRegistry.defaults()]
         self._pending = (user, password, self.remember.isChecked())
         self._checking = True
-        self.error.setText("Проверяю доступ на VPN-серверах…")
+        self._status("Проверяю доступ на VPN-серверах…")
         self.submit.setText("Проверка входа…")
         for widget in (self.login, self.password, self.remember, self.submit):
             widget.setEnabled(False)
@@ -178,7 +212,16 @@ class LoginWindow(QDialog):
             widget.setEnabled(True)
         if not success or self._pending is None:
             self._pending = None
-            self.error.setText(error or "Не удалось проверить учётную запись.")
+            message = error or "Не удалось проверить учётную запись."
+            credential_rejected = message.startswith("Логин или пароль")
+            self._status(message, danger=True)
+            if credential_rejected:
+                for field in (self.login, self.password):
+                    field.setProperty("error", True)
+                    field.style().unpolish(field)
+                    field.style().polish(field)
+                self.password.selectAll()
+                self._shake_on_invalid_password()
             self.password.setFocus()
             return
         user, password, remember = self._pending
