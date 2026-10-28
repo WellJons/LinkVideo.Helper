@@ -15,6 +15,10 @@ FILES = (
     "linkvideo_vpn_helper/ui/pages/settings_page.py",
     "linkvideo_vpn_helper/ui/pages/create_client_page.py",
     "linkvideo_vpn_helper/ui/pages/search_manage_page.py",
+    "linkvideo_vpn_helper/ui/pages/archive_download_page.py",
+    "linkvideo_vpn_helper/ui/pages/archive_diagnostics_page.py",
+    "linkvideo_vpn_helper/ui/pages/inactive_clients_page.py",
+    "linkvideo_vpn_helper/ui/pages/vpn_servers_page.py",
 )
 sources = {path: (ROOT / path).read_text(encoding="utf-8") for path in FILES}
 for filename, source in sources.items():
@@ -60,6 +64,16 @@ assert "self._sync_selected_port_controls()" in search
 assert 'user_card.setObjectName("SidebarUserCard")' in main
 assert "QFrame#Sidebar QPushButton[nav=" in theme
 assert "QFrame#LoginForm" in theme
+for filename in FILES:
+    if filename.endswith((
+        "archive_download_page.py", "archive_diagnostics_page.py",
+        "inactive_clients_page.py", "vpn_servers_page.py",
+    )):
+        assert "PageHeader(" in sources[filename], filename
+for filename in ("archive_download_page.py", "archive_diagnostics_page.py"):
+    assert "WorkflowStep(" in sources["linkvideo_vpn_helper/ui/pages/" + filename]
+assert "self.legend_toggle" in sources["linkvideo_vpn_helper/ui/pages/vpn_servers_page.py"]
+assert "self.sort_row" in sources["linkvideo_vpn_helper/ui/pages/inactive_clients_page.py"]
 assert "QTabWidget#SettingsTabs" in theme
 
 # Build the controls offscreen where Qt's platform plugin is available.
@@ -70,6 +84,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication, QTabWidget
 
+from linkvideo_vpn_helper.services.archive_service import ArchiveService
 from linkvideo_vpn_helper.services.server_registry import ServerRegistry
 from linkvideo_vpn_helper.services.search_service import FastSearchService
 from linkvideo_vpn_helper.services.vpn_service import SessionCredentials, VPNService
@@ -77,6 +92,10 @@ from linkvideo_vpn_helper.ui.login_window import LoginWindow
 from linkvideo_vpn_helper.ui.pages.create_client_page import CreateClientPage
 from linkvideo_vpn_helper.ui.pages.search_manage_page import SearchManagePage
 from linkvideo_vpn_helper.ui.pages.settings_page import SettingsPage
+from linkvideo_vpn_helper.ui.pages.archive_download_page import ArchiveDownloadPage
+from linkvideo_vpn_helper.ui.pages.archive_diagnostics_page import ArchiveDiagnosticsPage
+from linkvideo_vpn_helper.ui.pages.inactive_clients_page import InactiveClientsPage
+from linkvideo_vpn_helper.ui.pages.vpn_servers_page import VPNServersPage
 
 app = QApplication.instance() or QApplication([])
 with tempfile.TemporaryDirectory() as temp:
@@ -109,7 +128,19 @@ with tempfile.TemporaryDirectory() as temp:
     assert search_page.query is not None
     assert search_page.detail_panel is not None
 
-    for widget in (login_window, settings_page, create_page, search_page):
+    archive_service = ArchiveService(cfg)
+    archive_page = ArchiveDownloadPage(archive_service, cfg)
+    diagnostics_page = ArchiveDiagnosticsPage(archive_service, cfg)
+    inactive_page = InactiveClientsPage(service, creds, registry)
+    vpn_page = VPNServersPage(service, creds, registry)
+    assert archive_page.start is not None and archive_page.btn_find is not None
+    assert diagnostics_page.run is not None and diagnostics_page.report is not None
+    assert inactive_page.refresh_btn is not None and inactive_page.sort_row is not None
+    assert vpn_page.table is not None and vpn_page.legend_toggle is not None
+    assert not vpn_page.legend_card.isVisible()
+
+    for widget in (login_window, settings_page, create_page, search_page,
+                   archive_page, diagnostics_page, inactive_page, vpn_page):
         widget.close()
     app.processEvents()
 
