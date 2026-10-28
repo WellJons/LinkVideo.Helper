@@ -99,6 +99,38 @@ def main() -> None:
     else:
         raise AssertionError("/user permission failure was ignored")
 
+    # A regional account can exist on one trusted VPN server but not
+    # another. Missing /user is never a successful login, yet should not
+    # block verification on a different trusted server.
+    resolved = cases({
+        "vpn01": (None, [{"name": "unrelated", "group": "full", "disabled": "false"}]),
+        "vpn02": (None, full),
+    })
+    assert resolved.server == "vpn02"
+    assert FakeRouterOS.connected == ["vpn01", "vpn02"]
+
+    # A malformed legacy API reply can cause a ValueError during /login.
+    # Such a protocol failure should not be misreported as a wrong password.
+    recovered = cases({
+        "vpn01": (ValueError("invalid challenge hex"), []),
+        "vpn02": (None, full),
+    })
+    assert recovered.server == "vpn02"
+    assert FakeRouterOS.connected == ["vpn01", "vpn02"]
+
+    # The attempt still fails closed when no host positively verifies /user.
+    must_reject(
+        {"vpn01": (None, [{"name": "other", "group": "full", "disabled": "false"}]),
+         "vpn02": (None, [])},
+        LoginRejected, "не найден"
+    )
+    must_reject(
+        {"vpn01": (None, [{"name": "evstegneev.na", "group": "read", "disabled": "false"}]),
+         "vpn02": (None, full)},
+        LoginRejected, "full"
+    )
+    assert FakeRouterOS.connected == ["vpn01"]
+
     # Actual connectivity failures may try another known VPN server.
     found = cases({
         "vpn01": (ConnectionRefusedError("offline"), []),
