@@ -977,7 +977,6 @@ class SearchManagePage(QWidget):
         main_info = QLabel(
             f"Сервер: {c.server}\n"
             f"Логин: {c.login}\n"
-            f"Пароль: {c.password}\n"
             f"Remote Address: {c.remote_address or '—'}\n"
             f"Порты: {', '.join(str(x) for x in c.ports) if c.ports else '—'}"
         )
@@ -987,6 +986,32 @@ class SearchManagePage(QWidget):
         main_info.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         dl.addWidget(dt)
         dl.addWidget(main_info, 1)
+
+        # Sensitive client credentials are concealed until the operator
+        # explicitly requests visibility; copying VPN configuration still works.
+        password_row = QHBoxLayout()
+        password_row.setSpacing(6)
+        password_label = QLabel("Пароль:")
+        password_label.setObjectName("TinyMuted")
+        password_view = QLineEdit(c.password)
+        password_view.setReadOnly(True)
+        password_view.setEchoMode(QLineEdit.EchoMode.Password)
+        password_view.setToolTip("Пароль скрыт. Для просмотра нажмите «Показать».")
+        password_toggle = QPushButton("Показать")
+        password_toggle.setCheckable(True)
+        password_toggle.setProperty("role", "soft")
+        password_toggle.toggled.connect(
+            lambda visible: (
+                password_view.setEchoMode(
+                    QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
+                ),
+                password_toggle.setText("Скрыть" if visible else "Показать")
+            )
+        )
+        password_row.addWidget(password_label)
+        password_row.addWidget(password_view, 1)
+        password_row.addWidget(password_toggle)
+        dl.addLayout(password_row)
 
         vpn = Card()
         vl = QVBoxLayout(vpn)
@@ -1090,8 +1115,24 @@ class SearchManagePage(QWidget):
                     item.setToolTip("Конфликт NAT: этот внешний TCP-порт встречается в другой учётке на том же сервере")
                     item.setForeground(QColor("#D97706"))
                 else:
-                    item.setText(f"Порт {port}" + ("    • новый" if int(port) in self._recent_new_ports else ""))
-                item.setSizeHint(QSize(0, 42))
+                    current_port = int(port)
+                    if current_port in c.disabled_ports:
+                        status = "Отключён"
+                    elif current_port in c.active_ports:
+                        status = "Включён"
+                    else:
+                        status = "Статус неизвестен"
+                    byte_value = c.port_bytes.get(current_port)
+                    connections = c.port_connections.get(current_port)
+                    details = [status]
+                    if byte_value is not None:
+                        details.append(f"NAT: {self._fmt_bytes(byte_value)}")
+                    if connections is not None:
+                        details.append(f"Пакеты/соединения: {connections}")
+                    if current_port in self._recent_new_ports:
+                        details.append("Новый")
+                    item.setText(f"Порт {port}    ·    " + "    ·    ".join(details))
+                item.setSizeHint(QSize(0, 50))
                 self.port_list.addItem(item)
             desired = self._selected_port if self._selected_port in c.ports else c.ports[0]
             for i in range(self.port_list.count()):
