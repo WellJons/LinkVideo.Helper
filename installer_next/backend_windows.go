@@ -435,6 +435,16 @@ func removeLegacyInstallArtifacts(dest string) {
 
 func registerUninstall(appPath, dest string) error {
     uninstall := filepath.Join(dest, "Uninstall.exe")
+    // Never register a Windows "Uninstall" action pointing at a non-existent
+    // file. A missing/unreadable file should fail Setup, not create a broken
+    // Apps & Features entry that cannot be removed.
+    info, err := os.Stat(uninstall)
+    if err != nil {
+        return fmt.Errorf("не найден мастер удаления %s: %w", uninstall, err)
+    }
+    if !info.Mode().IsRegular() || info.Size() < 500_000 {
+        return fmt.Errorf("мастер удаления повреждён: %s", uninstall)
+    }
     values := [][]string{
         {"/v", "DisplayName", "/t", "REG_SZ", "/d", productName},
         {"/v", "DisplayVersion", "/t", "REG_SZ", "/d", version},
@@ -453,6 +463,9 @@ func registerUninstall(appPath, dest string) error {
         if err := runHiddenTimeout(8*time.Second, "reg.exe", full...); err != nil {
             return err
         }
+    }
+    if err := runHiddenTimeout(8*time.Second, "reg.exe", "query", uninstallKey, "/v", "UninstallString"); err != nil {
+        return fmt.Errorf("Windows не подтвердила регистрацию удаления: %w", err)
     }
     return nil
 }
@@ -503,6 +516,9 @@ func installProduct(opts installOptions, progress progressFunc) (string, error) 
     if err := registerUninstall(appPath, dest); err != nil {
         return "", fmt.Errorf("не удалось зарегистрировать удаление: %w", err)
     }
+    if err := verifyRuntimeSnapshot(dest); err != nil {
+        return "", fmt.Errorf("установка не завершена: после регистрации отсутствует обязательный файл: %w", err)
+    }
 
     // The old SYSTEM scheduled task was already removed at the beginning of
     // this installation. Do not recreate it: all future updates use the
@@ -544,25 +560,35 @@ func uninstallProduct(removeData bool, progress progressFunc) error {
     stopHelperProcesses()
     progress(18, "Удаление фонового updater…")
     removeSilentUpdateTask()
-    progress(25, "Удаление регистрации Windows…")
-    for _, key := range []string{uninstallKey, legacyInnoKey, legacyInnoWowKey} {
-        runCleanup("reg.exe", "delete", key, "/f")
+
+    // Remove actual files BEFORE removing Windows uninstall registration.
+    // The previous implementation ignored os.RemoveAll errors and reported a
+    // successful uninstall even if files were still locked or access denied.
+    progress(35, "Удаление файлов программы…")
+    entries, err := os.ReadDir(dest)
+    if err != nil && !errors.Is(err, os.ErrNotExist) {
+        return fmt.Errorf("не удалось открыть папку программы: %w", err)
     }
-    progress(38, "Удаление ярлыков…")
-    removeShortcuts()
-    if removeData {
-        progress(50, "Удаление настроек и кэша…")
-        removeUserData()
-    }
-    progress(62, "Удаление файлов программы…")
     self, _ := os.Executable()
-    entries, _ := os.ReadDir(dest)
     for _, entry := range entries {
         target := filepath.Join(dest, entry.Name())
         if strings.EqualFold(filepath.Clean(target), filepath.Clean(self)) {
             continue
         }
-        _ = os.RemoveAll(target)
+        if err := os.RemoveAll(target); err != nil {
+            return fmt.Errorf("не удалось удалить %s: %w", entry.Name(), err)
+        }
+    }
+    // Only unregister after all program files were successfully removed.
+    progress(73, "Удаление регистрации Windows…")
+    for _, key := range []string{uninstallKey, legacyInnoKey, legacyInnoWowKey} {
+        runCleanup("reg.exe", "delete", key, "/f")
+    }
+    progress(84, "Удаление ярлыков…")
+    removeShortcuts()
+    if removeData {
+        progress(90, "Удаление настроек и кэша…")
+        removeUserData()
     }
     progress(100, "LinkVideo.Helper удалён")
     return nil
