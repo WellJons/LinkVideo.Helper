@@ -74,24 +74,37 @@ def parse_search_response(payload: Mapping[str, Any]) -> tuple[BillingSearchHit,
     return tuple(found)
 
 
-def select_exact_search_hit(
-    hits: tuple[BillingSearchHit, ...], query: str
-) -> BillingSearchHit | None:
-    """Accept only one exact login or account-name match, never a fuzzy one."""
+def exact_search_hits(
+    hits: tuple[BillingSearchHit, ...], query: str,
+) -> tuple[BillingSearchHit, ...]:
+    """Return exact matching supported accounts without choosing one.
+
+    CRM may return both Belarusian and Kazakh accounts for one login. Require
+    user choice by country and ID before fetching or mutating anything.
+    """
     requested = validate_login(query).casefold()
-    exact = [
+    exact = tuple(
         hit for hit in hits
         if requested in (hit.login.casefold(), hit.account_name.casefold())
-    ]
-    if not exact:
-        return None
-    if len(exact) != 1:
-        raise BillingValidationError(
-            "Найдено несколько клиентов с одинаковым логином. Уточните запрос."
-        )
-    selected = exact[0]
-    if selected.country not in ALLOWED_COUNTRIES:
+        and hit.country in ALLOWED_COUNTRIES
+    )
+    if not exact and any(
+        requested in (hit.login.casefold(), hit.account_name.casefold())
+        for hit in hits
+    ):
         raise BillingPermissionDenied(
             "Пока поддерживаются только клиенты Беларуси и Казахстана."
         )
-    return selected
+    return exact
+
+
+def select_exact_search_hit(
+    hits: tuple[BillingSearchHit, ...], query: str
+) -> BillingSearchHit | None:
+    """Existing single-account interface still fails closed on ambiguity."""
+    exact = exact_search_hits(hits, query)
+    if len(exact) > 1:
+        raise BillingValidationError(
+            "Найдено несколько клиентов с одинаковым логином. Выберите страну и ID."
+        )
+    return exact[0] if exact else None
