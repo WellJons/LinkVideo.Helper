@@ -28,7 +28,8 @@ assert "runHiddenTimeout(" in task
 assert "4*time.Second" in task and "6*time.Second" in task
 verify = task.split("func verifySilentUpdateTask", 1)[1]
 assert '"schtasks.exe"' not in verify
-assert "recordSilentUpdateWarning(silentErr)" in backend
+assert "recordSilentUpdateWarning(nil)" in backend
+assert "registerSilentUpdateTask(dest)" not in backend
 assert "return appPath, nil" in backend
 
 assert "context.WithTimeout" in updater
