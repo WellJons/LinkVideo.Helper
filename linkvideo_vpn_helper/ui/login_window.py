@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QSettings, Qt, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
@@ -21,10 +22,14 @@ class LoginPayload:
 
 
 class LoginWindow(QDialog):
+    validationFinished = Signal(bool, str)
+
     def __init__(self, settings: QSettings | None = None, parent=None):
         super().__init__(parent)
         self.settings = settings or QSettings("LinkVideo", "LinkVideo.Helper")
         self.payload: LoginPayload | None = None
+        self._checking = False
+        self._pending: tuple[str, str, bool] | None = None
         self.setWindowTitle("LinkVideo.Helper")
         icon_path = Path(__file__).resolve().parents[2] / "icon.ico"
         if icon_path.exists():
@@ -35,6 +40,7 @@ class LoginWindow(QDialog):
         self.setObjectName("AppRoot")
         self.setStyleSheet(get_theme_style(str(self.settings.value("ui/theme_v2", "system", str) or "system")))
         self._build()
+        self.validationFinished.connect(self._on_validation_finished)
 
     def _build(self):
         root = QHBoxLayout(self)
@@ -76,7 +82,7 @@ class LoginWindow(QDialog):
         fl.setSpacing(11)
         heading = QLabel("Вход")
         heading.setObjectName("PageTitle")
-        sub = QLabel("Данные используются для подключения к RouterOS API.")
+        sub = QLabel("Данные проверяются через RouterOS API до открытия программы.")
         sub.setObjectName("Muted")
         sub.setWordWrap(True)
         fl.addWidget(heading)
@@ -133,12 +139,52 @@ class LoginWindow(QDialog):
         self.show_password.setText("Скрыть" if visible else "Показать")
 
     def _submit(self):
+        if self._checking:
+            return
         user = self.login.text().strip()
         password = self.password.text()
         if not user or not password:
             self.error.setText("Введите логин и пароль MikroTik.")
             return
-        remember = self.remember.isChecked()
+
+        from linkvideo_vpn_helper.services.server_registry import ServerRegistry
+        hosts = ServerRegistry(self.settings).hosts()
+        if not hosts:
+            hosts = [server.host for server in ServerRegistry.defaults()]
+        self._pending = (user, password, self.remember.isChecked())
+        self._checking = True
+        self.error.setText("Проверяю доступ на VPN-серверах…")
+        self.submit.setText("Проверка входа…")
+        for widget in (self.login, self.password, self.remember, self.submit):
+            widget.setEnabled(False)
+
+        def worker():
+            from linkvideo_vpn_helper.services.authentication import AuthenticationFailure, verify_credentials
+            try:
+                verify_credentials(user, password, hosts)
+            except AuthenticationFailure as exc:
+                self.validationFinished.emit(False, str(exc))
+            except Exception:
+                self.validationFinished.emit(False, "Произошла ошибка при проверке входа. Повторите попытку.")
+            else:
+                self.validationFinished.emit(True, "")
+
+        threading.Thread(target=worker, name="lv-login-check", daemon=True).start()
+
+    def _on_validation_finished(self, success: bool, error: str):
+        self._checking = False
+        self.submit.setText("Войти в LinkVideo.Helper")
+        for widget in (self.login, self.password, self.remember, self.submit):
+            widget.setEnabled(True)
+        if not success or self._pending is None:
+            self._pending = None
+            self.error.setText(error or "Не удалось проверить учётную запись.")
+            self.password.setFocus()
+            return
+        user, password, remember = self._pending
+        self._pending = None
+        # Store credentials only AFTER RouterOS has verified them. An invalid
+        # saved password will never silently unlock the application on restart.
         self.settings.setValue("remember", remember)
         if remember:
             self.settings.setValue("username", user)
