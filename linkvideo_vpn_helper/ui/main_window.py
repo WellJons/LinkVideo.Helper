@@ -217,7 +217,7 @@ class MainWindow(QMainWindow):
             page = InactiveClientsPage(self.service, self.credentials, self.registry, self)
         elif key == "tariffs":
             from linkvideo_vpn_helper.ui.pages.tariffs_page import TariffsPage
-            page = TariffsPage(self)
+            page = TariffsPage(self, settings=self.settings)
         elif key == "settings":
             from linkvideo_vpn_helper.ui.pages.settings_page import SettingsPage
             page = SettingsPage(self.settings, self.registry, self.service, self.credentials, self)
