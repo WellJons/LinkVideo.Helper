@@ -453,6 +453,14 @@ with tempfile.TemporaryDirectory() as temp:
     assert QApplication.clipboard().text() == expected_message
     assert "Скопировано" in widget.copy_credentials.text()
     assert not widget.create_button.isEnabled(), "Prevent duplicate creation"
+    assert ("Россия", submitted.login.casefold()) in widget._processed_logins
+    widget.country.setCurrentIndex(1)
+    assert widget.cross_share.isChecked()
+    assert widget.create_button.text() == "Создать клиента у оператора"
+    assert widget.create_button.isEnabled(), "Same login must be allowed for another country"
+    assert widget.result_card.isHidden(), "Don't show another country's password"
+    widget.country.setCurrentIndex(0)
+    assert not widget.create_button.isEnabled(), "Returning to created country must not duplicate"
     widget.login.setText("another-client")
     assert widget.create_button.isEnabled(), "A different login is a new operation"
     widget.login.setText(submitted.login)
