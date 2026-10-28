@@ -344,4 +344,83 @@ def get_theme_style(key: str = "rose_milk") -> str:
     QMenu::item {{ padding: 9px 26px 9px 12px; border-radius: 8px; }}
     QMenu::item:selected {{ background: {c['accent_soft']}; color: {c['text']}; }}
     QMenu::separator {{ height: 1px; background: {c['border']}; margin: 5px 8px; }}
+
+    /* Unified desktop design for every palette: a quiet dark navigation rail,
+       clean work surfaces and a single accessible accent colour. */
+    QFrame#Sidebar {{
+        background: #1F262E; border: none; border-right: 1px solid #303B46;
+    }}
+    QFrame#Sidebar QLabel#AppLogo, QFrame#Sidebar QLabel#Value {{
+        color: #FFFFFF;
+    }}
+    QFrame#Sidebar QLabel#TinyMuted, QFrame#Sidebar QLabel#NavSection {{
+        color: #AFBBC7;
+    }}
+    QFrame#Sidebar QFrame#SidebarUserCard {{
+        background: #2B343E; border: 1px solid #3A4855; border-radius: 13px;
+    }}
+    QFrame#Sidebar QLabel#Avatar {{
+        background: {c['accent_soft']}; color: {c['accent']};
+    }}
+    QFrame#Sidebar QPushButton[nav="true"] {{
+        color: #D8E0E8; font-weight: 620; border: 1px solid transparent;
+        min-height: 40px;
+    }}
+    QFrame#Sidebar QPushButton[nav="true"]:hover {{
+        background: #303B46; color: #FFFFFF; border-color: transparent;
+    }}
+    QFrame#Sidebar QPushButton[nav="true"][active="true"] {{
+        color: #FFFFFF; background: {c['accent']};
+        border: 1px solid {c['accent']}; font-weight: 730;
+    }}
+    QFrame#Sidebar QPushButton[role="icon"] {{
+        background: #36414E; color: #F8FAFC; border-color: #4A5765;
+    }}
+    QFrame#Sidebar QPushButton[role="icon"]:hover {{
+        background: #475665; border-color: #718091;
+    }}
+
+    /* Login: a dedicated desktop screen, not a browser view. */
+    QFrame#LoginForm {{
+        background: {c['panel']}; border: 1px solid {c['border']};
+        border-radius: 20px;
+    }}
+    QWidget#LoginStage {{ background: transparent; }}
+    QLabel#LoginTitle {{ font-size: 25px; font-weight: 780; }}
+    QLabel#LoginBrandTitle {{ font-size: 29px; font-weight: 800; }}
+    QLabel#LoginBrandSubtitle {{ font-size: 15px; color: {c['muted']}; }}
+    QLabel#LoginVersion {{ font-size: 12px; color: {c['muted']}; }}
+    QFrame#LoginError {{
+        background: {c['danger_soft']}; border: 1px solid {c['danger']};
+        border-radius: 11px;
+    }}
+    QFrame#LoginError QLabel {{ color: {c['danger']}; font-weight: 650; }}
+    QLineEdit#LoginField {{ min-height: 31px; padding: 9px 13px; }}
+    QFrame#LoginForm QPushButton[role="primary"] {{ min-height: 47px; }}
+    QFrame#LoginForm QLabel#CardTitle {{ font-size: 13px; font-weight: 620; }}
+
+    /* Compact settings: top tabs and theme swatches. */
+    QTabWidget#SettingsTabs::pane {{ border: none; background: transparent; }}
+    QTabWidget#SettingsTabs QTabBar::tab {{
+        background: transparent; border: none; padding: 12px 19px;
+        margin-right: 5px; color: {c['muted']}; font-weight: 680;
+        border-bottom: 2px solid transparent;
+    }}
+    QTabWidget#SettingsTabs QTabBar::tab:hover {{ color: {c['text']}; }}
+    QTabWidget#SettingsTabs QTabBar::tab:selected {{
+        color: {c['accent']}; border-bottom: 2px solid {c['accent']};
+    }}
+    QFrame#SettingsTabCard {{
+        background: {c['panel']}; border: 1px solid {c['border']};
+        border-radius: 16px;
+    }}
+    QLabel#StepNumber {{
+        background: {c['accent']}; color: #FFFFFF; border-radius: 13px;
+        font-size: 13px; font-weight: 780;
+    }}
+    QFrame#CreateResultEmpty {{
+        background: {c['panel2']}; border: 1px dashed {c['border2']};
+        border-radius: 14px;
+    }}
+    QLabel#CreateEmptySymbol {{ color: {c['muted']}; font-size: 30px; }}
     """
