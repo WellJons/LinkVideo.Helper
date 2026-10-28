@@ -184,7 +184,9 @@ class LoginWindow(QDialog):
         attempt = self._attempt
         self._set_pending(True)
         # No queries or DNS lookups on the Qt UI thread.
-        hosts = ServerRegistry(self.settings).hosts()
+        # Authentication hosts must not come from user-editable custom
+        # server settings: a hostile custom IP could capture passwords.
+        hosts = [item.host for item in ServerRegistry.defaults()]
 
         def worker() -> None:
             try:
