@@ -1536,10 +1536,34 @@ class TariffsPage(QWidget):
             self._uncertain_tariff_changes.add(result)
             self.task.warning("Проверьте биллинг", self._safe_error(error))
             return
+        if operation == "status_unknown":
+            self._unknown_status_changes.add(result)
+            self.task.warning("Проверьте статус камеры", self._safe_error(error))
+            return
         if error is not None:
             self.task.error("Операция биллинга не выполнена", self._safe_error(error))
             return
-        if operation == "catalog":
+        if operation == "camera_history":
+            if self.client is None:
+                return
+            service, rows = result
+            if service in self.client.services:
+                self.task.hide()
+                self._show_camera_history(service, rows)
+        elif operation == "status_changed":
+            if self.client is None:
+                return
+            service, new_status, fresh = result
+            if fresh is not None and fresh.id == self.client.id:
+                self.client = fresh
+                self._render_client(fresh)
+            self.task.done(
+                "Запрос смены статуса выполнен",
+                f"Камера {service.camera_name}: "
+                f"{'отключение' if new_status == 0 else 'включение'} "
+                "подтверждено биллингом.",
+            )
+        elif operation == "catalog":
             if self.client is None:
                 return
             self.task.hide()
