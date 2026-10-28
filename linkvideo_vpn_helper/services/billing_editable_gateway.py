@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from linkvideo_vpn_helper.services.billing_gateway import (
-    BillingClient, BillingPermissionDenied, BillingValidationError, TariffChange,
+    BillingClient, BillingService, BillingPermissionDenied, BillingValidationError, TariffChange,
 )
 from linkvideo_vpn_helper.services.billing_readonly_gateway import BillingReadOnlyGateway
 from linkvideo_vpn_helper.services.billing_catalog import filter_tariffs_for_client
@@ -65,6 +65,62 @@ class BillingEditableGateway(BillingReadOnlyGateway):
     def __init__(self, transport: BillingTokenTransport):
         super().__init__(transport.get_json)
         self._transport = transport
+
+    def camera_history(self, client: BillingClient, service_id: str) -> tuple[dict, ...]:
+        """Read observed GET camera history only for a customer-owned camera."""
+        self._owned_camera(client, service_id)
+        data = self._get_json(f"/api/cameras/{service_id}/history")
+        if not isinstance(data, dict) or data.get("success") is not True:
+            raise BillingValidationError("CRM не подтвердила историю камеры.")
+        rows = data.get("response")
+        if not isinstance(rows, list) or len(rows) > 1000:
+            raise BillingValidationError("Некорректный ответ истории камеры.")
+        output = []
+        for row in rows:
+            if not isinstance(row, dict):
+                raise BillingValidationError("Некорректная строка истории.")
+            output.append({
+                key: str(row.get(key) or "")[:350]
+                for key in ("date", "user", "action", "field_name",
+                            "old_value", "new_value")
+            })
+        return tuple(output)
+
+    @staticmethod
+    def _owned_camera(client: BillingClient, camera_id: str) -> BillingService:
+        if not re.fullmatch(r"[1-9][0-9]{0,17}", camera_id):
+            raise BillingValidationError("Некорректный ID камеры.")
+        return next(
+            (s for s in client.services
+             if s.id == camera_id and s.camera_id == camera_id),
+            None
+        ) or (_ for _ in ()).throw(
+            BillingPermissionDenied("Камера не принадлежит выбранному аккаунту.")
+        )
+
+    def set_camera_status(
+        self, client: BillingClient, camera_id: str,
+        status: int, effective_date,
+    ) -> tuple[dict, BillingClient | None]:
+        """User-confirmed camera activation/deactivation only."""
+        from datetime import date
+        service = self._owned_camera(client, camera_id)
+        if type(status) is not int or status not in (0, 1):
+            raise BillingValidationError("Неподдерживаемый статус.")
+        # Status is based on the verified 0 (disabled) / 1 (enabled) CRM codes.
+        parsed = self._transport.put_camera_status(
+            service.id, status, effective_date
+        )
+        if parsed.get("success") is not True or parsed.get("response") != 1:
+            raise BillingWriteOutcomeUnknown(
+                "Не получено ожидаемое подтверждение смены статуса. "
+                "Проверьте биллинг перед повтором."
+            )
+        try:
+            fresh = self.refresh_client(client)
+        except Exception:
+            fresh = None
+        return parsed, fresh
 
     def refresh_client(self, client: BillingClient) -> BillingClient:
         """Read current camera services by the already selected stable CRM ID."""
