@@ -14,12 +14,12 @@ from linkvideo_vpn_helper.ui.billing_all_tariffs import BillingAllTariffsWidget
 
 tariff_list = {"success": True, "response": [
     {
-        "id_tariff": 101, "tariff_name": "Тест Беларусь", "country": "Беларусь",
+        "id_tariff": 101, "tariff_name": "BYN Тест Беларусь", "country": "Беларусь",
         "account_type_name": "Физическое лицо", "full_ab_plata": 75,
         "test_days": 0, "count_cameras": 2, "is_tariff_lv_monitor": 0,
     },
     {
-        "id_tariff": 102, "tariff_name": "Тест Казахстан", "country": "Казахстан",
+        "id_tariff": 102, "tariff_name": "KZT Тест Казахстан", "country": "Казахстан",
         "account_type_name": "Юридическое лицо", "full_ab_plata": 555,
         "test_days": 7, "count_cameras": None, "is_tariff_lv_monitor": 0,
     },
@@ -50,26 +50,31 @@ widget = BillingAllTariffsWidget(gateway)
 assert widget.refresh.isEnabled()
 widget._on_result(0, snapshot, None)
 assert widget.table.rowCount() == 2
-assert widget.table.item(0, 4).text() == "75 BYN"
-assert widget.table.item(1, 4).text() == "555 тг."
+assert widget.table.item(0, 5).text() == "75 BYN"
+assert widget.table.item(1, 5).text() == "555 тг."
 widget.search.setText("Казахстан")
-assert not widget.table.isRowHidden(1)
-# Text filter searches name, description and ID, not country.
+assert widget.table.rowCount() == 1
+assert widget.table.item(0, 1).text() == "KZT Тест Казахстан"
 widget.search.setText("Тест Казахстан")
-assert widget.table.isRowHidden(0) and not widget.table.isRowHidden(1)
+assert widget.table.rowCount() == 1
 widget.search.clear()
 widget.country.setCurrentIndex(1)
-assert not widget.table.isRowHidden(0) and widget.table.isRowHidden(1)
+assert widget.table.rowCount() == 1
+assert widget.table.item(0, 1).text() == "BYN Тест Беларусь"
 
 # New server tariff appears after a future reload without Helper updates.
 tariff_list["response"].append({
-    "id_tariff": 103, "tariff_name": "Новый тариф", "country": "Беларусь",
+    "id_tariff": 103, "tariff_name": "BYN Новый тариф", "country": "Беларусь",
     "account_type_name": "Физическое лицо", "full_ab_plata": 88,
 })
 widget._on_result(0, gateway.all_tariffs(), None)
-assert widget.table.rowCount() == 3
-assert widget.table.item(2, 1).text() == "Новый тариф"
-assert widget.table.item(2, 4).text() == "88 BYN"
+assert widget.table.rowCount() == 2  # Belarus country filter is still active.
+assert sorted(widget.table.item(i, 1).text() for i in range(widget.table.rowCount())) == [
+    "BYN Новый тариф", "BYN Тест Беларусь",
+]
+assert sorted(widget.table.item(i, 5).text() for i in range(widget.table.rowCount())) == [
+    "75 BYN", "88 BYN",
+]
 widget.close()
 app.processEvents()
 print("CORE TESTS BILLING ALL TARIFFS DYNAMIC CATALOG OK")
