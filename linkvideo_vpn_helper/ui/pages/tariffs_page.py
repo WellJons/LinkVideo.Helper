@@ -223,6 +223,7 @@ class TariffCatalogDialog(QDialog):
 class TariffsPage(QWidget):
     searchReady = Signal(int, object, object)
     operationReady = Signal(int, str, object, object)
+    openVpnCreate = Signal(str)
 
     def __init__(self, parent=None, *, gateway: BillingGateway | None = None,
                  settings: QSettings | None = None):
@@ -245,8 +246,8 @@ class TariffsPage(QWidget):
         )
         self.page_layout = root
         root.addWidget(PageHeader(
-            "Тарифы",
-            "Поиск клиентов Беларуси и Казахстана, просмотр услуг и управление тарифами.",
+            "Клиенты и тарифы",
+            "Поиск абонентов, услуги, тарифы и создание VPN-клиентов по странам.",
         ))
         self.billing_login = BillingLoginPanel(self.settings, self)
         root.addWidget(self.billing_login)
@@ -259,6 +260,8 @@ class TariffsPage(QWidget):
         clients_layout.setContentsMargins(12, 12, 12, 12)
         clients_layout.setSpacing(12)
         self.workspace_tabs.addTab(self.clients_tab, "Поиск клиента")
+        self.create_clients_tab = self._make_client_creation()
+        self.workspace_tabs.addTab(self.create_clients_tab, "Создать клиента")
         self.all_tariffs_page = BillingAllTariffsWidget(self.gateway, self)
         self.workspace_tabs.addTab(self.all_tariffs_page, "Все тарифы")
         root.addWidget(self.workspace_tabs, 1)
@@ -389,6 +392,76 @@ class TariffsPage(QWidget):
             self.empty_hint.setText(
                 "Войдите в корпоративный биллинг, чтобы искать клиентов."
             )
+
+    def _make_client_creation(self) -> QWidget:
+        """Actual VPN creation uses the existing verified RouterOS workflow.
+
+        Creating a *billing account* is a different write operation:
+        no CRM POST endpoint/permissions have yet been established.
+        """
+        host = QWidget()
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+        card = Card(kind="hero")
+        form = QVBoxLayout(card)
+        form.setContentsMargins(20, 18, 20, 18)
+        form.setSpacing(12)
+        title = QLabel("Создание клиента")
+        title.setObjectName("SectionTitle")
+        form.addWidget(title)
+        note = QLabel(
+            "VPN-клиент создаётся на MikroTik через уже существующий инструмент "
+            "Helper. Выберите страну — программа откроет форму с подходящим "
+            "VPN-сервером. Это не создаёт договор или лицевой счёт в биллинге."
+        )
+        note.setObjectName("Muted")
+        note.setWordWrap(True)
+        form.addWidget(note)
+        self.create_country = QComboBox()
+        self.create_country.setObjectName("BillingCreateCountry")
+        for country in ("Россия", "Казахстан", "Беларусь"):
+            self.create_country.addItem(country, country)
+        self.create_country.setMinimumHeight(44)
+        form.addWidget(self.create_country)
+        self.create_vpn_btn = QPushButton("Создать VPN-клиента")
+        self.create_vpn_btn.setObjectName("OpenRegionalVpnCreator")
+        self.create_vpn_btn.setProperty("role", "primary")
+        self.create_vpn_btn.setMinimumHeight(44)
+        self.create_vpn_btn.clicked.connect(
+            lambda: self.openVpnCreate.emit(self.create_country.currentData())
+        )
+        form.addWidget(self.create_vpn_btn)
+        layout.addWidget(card)
+
+        billing = Card()
+        detail = QVBoxLayout(billing)
+        detail.setContentsMargins(20, 18, 20, 18)
+        detail.setSpacing(10)
+        billing_title = QLabel("Новый клиент в биллинге")
+        billing_title.setObjectName("SectionTitle")
+        detail.addWidget(billing_title)
+        explanation = QLabel(
+            "У нового биллинга подтверждены API поиска, просмотра услуг и "
+            "каталога тарифов. API регистрации лицевого счёта ещё не "
+            "подтверждён: создание в CRM из Helper пока отключено, чтобы "
+            "исключить ошибочные договоры и повторные записи."
+        )
+        explanation.setObjectName("Muted")
+        explanation.setWordWrap(True)
+        detail.addWidget(explanation)
+        self.create_crm_btn = QPushButton("Создать лицевой счёт в CRM")
+        self.create_crm_btn.setObjectName("BillingCreateAccountUnavailable")
+        self.create_crm_btn.setEnabled(False)
+        self.create_crm_btn.setToolTip("Нужен подтверждённый API создания клиента в биллинге")
+        detail.addWidget(self.create_crm_btn)
+        open_crm = QPushButton("Открыть биллинг в браузере")
+        open_crm.setObjectName("BillingCreateInBrowser")
+        open_crm.clicked.connect(self._open_billing)
+        detail.addWidget(open_crm)
+        layout.addWidget(billing)
+        layout.addStretch(1)
+        return host
 
     def _on_billing_session_changed(self, logged_in: bool):
         """Bind CRM login to the existing verified read-only API workflows."""
