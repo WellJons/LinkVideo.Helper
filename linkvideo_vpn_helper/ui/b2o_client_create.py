@@ -139,14 +139,14 @@ class B2OClientCreationWidget(QWidget):
         self.phone.setPlaceholderText("Необязательно")
         self.account_type = QComboBox()
         self.account_type.setObjectName("B2OCreateAccountType")
-        # The captured successful request contained "account_type": "1".
-        # The human name of this enum is unknown: do not invent "individual/legal".
-        self.account_type.addItem("Как при создании в B2O (код 1)", "1")
+        # Successful browser creation sent account_type="1". The original UI
+        # offers "Обычный" and "Бизнес"; business numeric ID has NOT been seen.
+        self.account_type.addItem("Обычный", "1")
+        self.account_type.addItem("Бизнес", "business-unverified")
         self.account_type.setCurrentIndex(0)
-        self.account_type.setEnabled(False)
         self.account_type.setToolTip(
-            "Код 1 подтверждён запросом из админки. "
-            "Как он называется в списке типов B2O, пока не установлено."
+            "Для «Обычного» используется подтверждённый код 1. "
+            "Для «Бизнеса» нужен пример запроса с выбранным типом."
         )
         for label, field in (
             ("Имя *", self.name), ("Логин *", self.login),
@@ -157,9 +157,9 @@ class B2OClientCreationWidget(QWidget):
         form.addLayout(fields)
 
         self.message = QLabel(
-            "Новый биллинг и B2O используют разные сессии. "
-            "Для создания нужен вход в B2O. Тип аккаунта (код 1) "
-            "и флаги автоматически выставлены по успешному примеру."
+            "Для «Обычного» клиента применяется подтверждённый код 1. "
+            "Код «Бизнеса» пока не показан в Network; создавать его наугад нельзя. "
+            "При HTTP 400 проверьте также, не остался ли логин в биллинге."
         )
         self.message.setObjectName("Muted")
         self.message.setWordWrap(True)
@@ -204,7 +204,7 @@ class B2OClientCreationWidget(QWidget):
         self.country.currentIndexChanged.connect(self._refresh_create_enabled)
         self.in_billing.toggled.connect(self._refresh_create_enabled)
         self.cross_share.toggled.connect(self._refresh_create_enabled)
-        self.account_type.currentIndexChanged.connect(self._refresh_create_enabled)
+        self.account_type.currentIndexChanged.connect(self._account_type_changed)
         for field in (self.name, self.login, self.password, self.phone):
             field.textChanged.connect(self._refresh_create_enabled)
         self.login.textChanged.connect(self._reset_creation_lock_for_new_login)
@@ -213,6 +213,20 @@ class B2OClientCreationWidget(QWidget):
     def _country_changed(self, *_):
         self._attempt += 1
         self.access_status.set_status("Доступ не проверен", "neutral")
+
+    def _account_type_changed(self, *_):
+        if self.account_type.currentData() == "business-unverified":
+            self.message.setText(
+                "Для «Бизнеса» пока не подтверждён код account_type. "
+                "Нужен Payload успешного создания такого клиента в B2O. "
+                "До этого отправка отключена, чтобы не создать неправильный тип."
+            )
+        else:
+            self.message.setText(
+                "Выбран «Обычный» (код 1, ранее получен успешный ответ B2O). "
+                "Если сервер вернёт HTTP 400, смотрите подсказку о проверке полей."
+            )
+        self._refresh_create_enabled()
 
     def _reset_creation_lock_for_new_login(self, *_):
         # A distinct login is required before a second POST after success/uncertainty.
@@ -359,12 +373,10 @@ class B2OClientCreationWidget(QWidget):
     def _set_form_busy(self, busy: bool):
         for field in (
             self.country, self.in_billing, self.cross_share, self.name,
-            self.login, self.password, self.phone,
+            self.login, self.password, self.phone, self.account_type,
             self.generate_password, self.show_password, self.check_access,
         ):
             field.setEnabled(not busy)
-        # Only a single enum has been verified: no misleading dropdown.
-        self.account_type.setEnabled(False)
 
     def _toggle_password_visibility(self, visible: bool):
         mode = QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
