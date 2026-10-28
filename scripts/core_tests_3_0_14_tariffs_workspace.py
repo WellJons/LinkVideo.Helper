@@ -26,7 +26,10 @@ assert "QDesktopServices.openUrl(QUrl(BILLING_LOGIN_URL))" in page_source
 assert "API не подключён" in page_source
 assert "QWebEngineView" not in page_source
 assert "requests.post" not in page_source
-assert "QLineEdit" not in page_source
+assert "TariffLoginSearch" in page_source
+assert "ChangeTariffDialog" in page_source
+assert "validate_client(result)" in page_source
+assert "gateway.change_tariff(change)" in page_source
 assert "QNetworkAccessManager" not in page_source
 assert '("tariffs", "₽", "Тарифы"' in main_source
 assert 'elif key == "tariffs":' in main_source
@@ -42,11 +45,17 @@ app = QApplication.instance() or QApplication([])
 page = TariffsPage()
 assert page.page_layout is not None
 assert page.api_status.text() == "API не подключён"
+assert page.login is not None
+assert page.services_table.columnCount() == 7
 assert isinstance(page.open_billing, QPushButton)
 assert page.open_billing.text() == "Открыть биллинг"
 assert page.open_billing.isEnabled()
 assert not page.task.isVisible()
 assert page.findChild(QPushButton, "OpenBillingButton") is page.open_billing
+page.login.setText("lkz_testclient")
+page._find_client()
+assert "API не подключён" in page.task.title.text()
+assert page.client is None
 page.close()
 app.processEvents()
 print("CORE TESTS TARIFFS PLACEHOLDER SAFE CRM LAUNCH OK")
