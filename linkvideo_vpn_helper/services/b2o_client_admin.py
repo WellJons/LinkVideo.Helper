@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-"""B2O operator client creation: confirmed endpoint, pending payload schema.
+"""B2O operator clients: explicit opt-in creation via the verified RU payload.
 
-POST /operators/{id}/clients returned 200 with JSON {"id_account": N}.
-The *request body* and permissions remain unknown; no write may occur
-until the captured request payload is reviewed and mapped explicitly.
+Other operators, account type IDs and option combinations remain read-only.
+Network errors after sending a POST can leave an unknown creation outcome.
 """
 
+import json
 import re
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
@@ -87,8 +89,28 @@ class B2OClientDraft:
             raise ValueError("Номер телефона слишком длинный")
         if not self.account_type:
             raise ValueError("Выберите тип аккаунта")
-        # The enum values/ids and payload keys are not confirmed yet;
-        # this is validation of the local draft, not a write contract.
+        # Check validates basic input. Only verified_payload authorises writes.
+
+    def verified_payload(self) -> dict[str, str | int]:
+        """Precisely match the single captured 2026-10-28 RU POST variant."""
+        self.check()
+        if self.country != "Россия":
+            raise ValueError("Создание через API пока подтверждено только для России")
+        if self.account_type != "1":
+            raise ValueError("Для создания подтверждён только тип аккаунта 1")
+        if not self.create_in_billing:
+            raise ValueError("Пока подтверждено создание только с опцией «Завести в биллинг»")
+        if self.cross_sharing:
+            raise ValueError("Создание с общим доступом к камерам пока не подтверждено")
+        return {
+            "account_type": "1",
+            "client_name": self.name.strip(),
+            "cross_sharing_enabled": 0,
+            "login": self.login.strip(),
+            "password": self.password,
+            "phone": self.phone.strip(),
+            "push_to_billing": 1,
+        }
 
 
 class B2OOperatorReadOnly:
@@ -130,3 +152,65 @@ class B2OOperatorReadOnly:
         if returned_operator is not None and str(returned_operator) != str(operator):
             raise ValueError("B2O вернул настройки другого оператора")
         return response
+
+
+class B2OCreationOutcomeUnknown(RuntimeError):
+    """POST may have been processed; user must check B2O before retrying."""
+
+
+@dataclass(frozen=True)
+class B2OCreatedClient:
+    id_account: int
+    read_back_verified: bool
+
+
+class B2OOperatorClientManager(B2OOperatorReadOnly):
+    """Single non-retrying POST followed by a separate read-back GET."""
+
+    def create_client(self, draft: B2OClientDraft, token: str | None = None) -> B2OCreatedClient:
+        payload = draft.verified_payload()  # Reject unverified options before any network I/O.
+        provided = token if token is not None else self.b2o.token()
+        if not provided:
+            raise PermissionError("Войдите в B2O перед созданием клиента")
+        url = BASE_URL + creation_path(draft.country)
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Accept": "application/json, text/plain, */*",
+                "Content-Type": "application/json",
+                "Origin": ADMIN_URL,
+                "Referer": ADMIN_URL + "/clients",
+                "User-Agent": "LinkVideo.Helper/2.0",
+                "Token": provided,
+            },
+            method="POST",
+        )
+        # NEVER retry a POST automatically. Do not emit payload, token or response
+        # into logs, exceptions or diagnostic UI; they may contain credentials.
+        try:
+            with urllib.request.urlopen(request, timeout=25) as reply:
+                raw = reply.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as exc:
+            if exc.code >= 500:
+                raise B2OCreationOutcomeUnknown(
+                    "B2O вернул ошибку сервера. Проверьте клиента в админке перед повтором."
+                ) from None
+            raise RuntimeError(f"B2O отклонил создание: HTTP {exc.code}") from None
+        except (urllib.error.URLError, TimeoutError, OSError):
+            raise B2OCreationOutcomeUnknown(
+                "Связь прервалась. Клиент мог быть создан: проверьте админку перед повтором."
+            ) from None
+        try:
+            account_id = created_account_id(json.loads(raw))
+        except (ValueError, TypeError):
+            raise B2OCreationOutcomeUnknown(
+                "Ответ на POST не подтвердил ID. Проверьте клиента в админке перед повтором."
+            ) from None
+        try:
+            read_back = self.read_client(draft.country, account_id, token=provided)
+            verified = read_back.get("login") == draft.login.strip()
+        except Exception:
+            # A successful POST must not be retried merely because GET failed.
+            verified = False
+        return B2OCreatedClient(account_id, verified)
