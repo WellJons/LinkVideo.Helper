@@ -178,28 +178,34 @@ class B2OClientCreationWidget(QWidget):
         actions.addWidget(self.create_button, 1)
         actions.addWidget(self.open_admin)
         form.addLayout(actions)
-        root.addWidget(card)
-
+        # Place credentials directly below the create controls, not as a large
+        # separate panel far below the form.
         self.result_card = Card(subtle=True)
         self.result_card.setObjectName("B2OCreatedClientResult")
         result_layout = QVBoxLayout(self.result_card)
-        result_layout.setContentsMargins(16, 14, 16, 16)
-        result_layout.setSpacing(10)
+        result_layout.setContentsMargins(14, 12, 14, 12)
+        result_layout.setSpacing(7)
+        result_header = QHBoxLayout()
         result_title = QLabel("Данные для отправки клиенту")
         result_title.setObjectName("CardTitle")
-        result_layout.addWidget(result_title)
+        result_header.addWidget(result_title)
+        result_header.addStretch(1)
+        self.copy_credentials = QPushButton("Скопировать")
+        self.copy_credentials.setObjectName("B2OCopyCreatedClient")
+        self.copy_credentials.setToolTip("Скопировать готовое сообщение с логином и паролем")
+        self.copy_credentials.setMinimumHeight(36)
+        self.copy_credentials.clicked.connect(self._copy_created_credentials)
+        result_header.addWidget(self.copy_credentials)
+        result_layout.addLayout(result_header)
         self.result_text = QTextEdit()
         self.result_text.setObjectName("B2OCreatedClientCopyText")
         self.result_text.setReadOnly(True)
-        self.result_text.setMinimumHeight(128)
-        self.result_text.setMaximumHeight(180)
+        self.result_text.setMinimumHeight(105)
+        self.result_text.setMaximumHeight(122)
         result_layout.addWidget(self.result_text)
-        self.copy_credentials = QPushButton("Скопировать данные")
-        self.copy_credentials.setObjectName("B2OCopyCreatedClient")
-        self.copy_credentials.clicked.connect(self._copy_created_credentials)
-        result_layout.addWidget(self.copy_credentials)
         self.result_card.hide()
-        root.addWidget(self.result_card)
+        form.addWidget(self.result_card)
+        root.addWidget(card)
         root.addStretch(1)
         self.country.currentIndexChanged.connect(self._refresh_create_enabled)
         self.in_billing.toggled.connect(self._refresh_create_enabled)
@@ -232,6 +238,7 @@ class B2OClientCreationWidget(QWidget):
         # A distinct login is required before a second POST after success/uncertainty.
         self._created = False
         self._outcome_unknown = False
+        self.create_button.setText("Создать клиента у оператора")
         self._refresh_create_enabled()
 
     def _refresh_create_enabled(self, *_):
@@ -324,8 +331,9 @@ class B2OClientCreationWidget(QWidget):
                     submitted.login, submitted.password
                 )
                 self.result_text.setPlainText(self._result_message)
-                self.copy_credentials.setText("Скопировать данные")
+                self.copy_credentials.setText("Скопировать")
                 self.result_card.show()
+            self.create_button.setText("✓ Клиент создан")
             if result.read_back_verified:
                 self.message.setText(
                     f"Клиент создан в B2O: ID {result.id_account}. "
