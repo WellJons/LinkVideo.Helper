@@ -4,7 +4,7 @@ import threading
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QBoxLayout, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
+    QBoxLayout, QCheckBox, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
 
 from linkvideo_vpn_helper.services.errors import classify_exception
@@ -85,6 +85,13 @@ class SettingsPage(QWidget):
             btn.clicked.connect(lambda checked=False, k=key: self._theme_changed(k))
             self._theme_buttons[key] = btn
         al.addLayout(self.theme_grid)
+        self.animations_enabled = QCheckBox("Плавные анимации интерфейса")
+        self.animations_enabled.setToolTip("Плавное появление страниц и короткая анимация при неверном пароле.")
+        self.animations_enabled.setChecked(bool(self.settings.value("ui/animations_enabled", True, bool)))
+        self.animations_enabled.toggled.connect(
+            lambda enabled: self.settings.setValue("ui/animations_enabled", enabled)
+        )
+        al.addWidget(self.animations_enabled)
         al.addStretch(1)
         self.appearance_card = appearance
 
