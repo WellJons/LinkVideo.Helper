@@ -16,11 +16,12 @@ from PySide6.QtWidgets import QApplication, QLineEdit
 
 from linkvideo_vpn_helper.services.b2o_client_admin import (
     ADMIN_URL, BASE_URL, B2OClientDraft, B2OOperatorReadOnly,
-    B2OOperatorClientManager, B2OCreationOutcomeUnknown, B2OCreatedClient,
+    B2OOperatorClientManager, B2OCreationOutcomeUnknown, B2OCreationRejected,
+    B2OCreatedClient,
     operator_for_country, settings_path, creation_path, created_account_id,
 )
 from linkvideo_vpn_helper.ui.b2o_client_create import (
-    B2OClientCreationWidget, client_credentials_message,
+    B2OClientCreationWidget, client_credentials_message, safe_b2o_error_code,
 )
 
 
@@ -62,6 +63,9 @@ class FakeB2O:
 
     def token(self):
         return self.session_token
+
+    def clear_token(self):
+        self.session_token = ""
 
     def request_json(self, url, token):
         assert token == self.session_token
@@ -136,6 +140,9 @@ assert verified_draft.verified_payload() == expected_payload
 assert type(verified_draft.verified_payload()["account_type"]) is str
 assert type(verified_draft.verified_payload()["push_to_billing"]) is int
 assert type(verified_draft.verified_payload()["cross_sharing_enabled"]) is int
+assert B2OClientDraft(**{
+    **verified_draft.__dict__, "password": "Ab1234"
+}).verified_payload()["password"] == "Ab1234"
 
 for forbidden in (
     {"country": "Казахстан"}, {"country": "Беларусь"},
@@ -204,6 +211,29 @@ with patch("urllib.request.urlopen", return_value=FakeReply(b'{}')) as urlopen:
     else:
         raise AssertionError("POST without ID treated as success")
     assert urlopen.call_count == 1, "Must never retry uncertain POST"
+# Rejections must preserve the numeric HTTP code without revealing server body.
+for status in (400, 401, 403, 409, 422):
+    fake.session_token = "fictional-B2O-token"
+    body = b'{"message":"user private data and secret password"}'
+    error = urllib.error.HTTPError(
+        BASE_URL + "/operators/241/clients", status, "rejected", {}, None,
+    )
+    with patch("urllib.request.urlopen", side_effect=error) as urlopen:
+        try:
+            manager.create_client(verified_draft)
+        except B2OCreationRejected as exc:
+            assert exc.status_code == status
+            assert f"HTTP {status}" in str(exc)
+            assert "private data" not in str(exc)
+            if status == 401:
+                assert not fake.session_token
+        else:
+            raise AssertionError(f"Expected a safe rejection for HTTP {status}")
+        assert urlopen.call_count == 1
+assert safe_b2o_error_code(RuntimeError("B2O: HTTP 403 при запросе данных")) == "HTTP 403"
+assert safe_b2o_error_code(ValueError("failure")) == "ValueError"
+
+fake.session_token = "fictional-B2O-token"
 with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("fictional timeout")) as urlopen:
     try:
         manager.create_client(verified_draft)
@@ -227,22 +257,28 @@ with tempfile.TemporaryDirectory() as temp:
     widget.login.setText("demo_operator_01")
     widget.generate_password.click()
     first_password = widget.password.text()
-    assert len(first_password) == 18
+    assert len(first_password) == 9
+    assert first_password.isalnum()
+    assert any(ch.islower() for ch in first_password)
+    assert any(ch.isupper() for ch in first_password)
+    assert any(ch.isdigit() for ch in first_password)
     widget.generate_password.click()
-    assert len(widget.password.text()) == 18
+    assert len(widget.password.text()) == 9
     assert widget.password.text() != first_password, "Password generator must generate a new value"
     widget.show_password.setChecked(True)
     assert widget.password.echoMode() == QLineEdit.EchoMode.Normal
     widget.show_password.setChecked(False)
     assert widget.password.echoMode() == QLineEdit.EchoMode.Password
-    widget.account_type.setCurrentIndex(1)
+    assert widget.account_type.count() == 1
+    assert widget.account_type.currentData() == "1"
+    assert not widget.account_type.isEnabled()
     assert widget.draft().country == "Казахстан"
     widget.draft().check()
     assert not widget.create_button.isEnabled(), "Non-RU POST must remain disabled"
     widget._on_access(widget._attempt, "Казахстан", True, None)
     assert not widget.create_button.isEnabled()
     widget.country.setCurrentIndex(0)
-    widget.in_billing.setChecked(True)
+    assert widget.in_billing.isChecked(), "The only verified billing combination should be default"
     assert widget.create_button.isEnabled(), "Verified RU POST form should be enabled"
     widget.cross_share.setChecked(True)
     assert not widget.create_button.isEnabled(), "Unverified sharing flag must block"
@@ -279,6 +315,16 @@ with tempfile.TemporaryDirectory() as temp:
     assert widget.create_button.isEnabled()
     widget.login.setText("another-client")
     assert not widget.create_button.isEnabled(), "Returning to unknown-outcome login must stay blocked"
+    widget.login.setText("test-error-client")
+    widget._pending_draft = widget.draft()
+    widget._on_created(None, "HTTP 403: нет прав на создание клиента в B2O")
+    assert "HTTP 403" in widget.message.text()
+    assert "нет прав" in widget.message.text()
+    widget._pending_draft = widget.draft()
+    widget._on_created(None, "preflight:HTTP 401")
+    assert "POST не отправлялся" in widget.message.text()
+    assert "HTTP 401" in widget.message.text()
+    assert not widget.account_type.isEnabled()
     widget.close()
 app.processEvents()
 
