@@ -23,7 +23,7 @@ class BillingLoginPanel(Card):
     def __init__(self, settings: QSettings | None = None, parent=None, *,
                  login_checker=None, credential_store: BillingCredentialStore | None = None):
         super().__init__(kind="hero", parent=parent)
-        self.setObjectName("BillingLoginPanel")
+        self.setProperty("billingLoginPanel", True)
         self.settings = settings if settings is not None else QSettings("LinkVideo", "LinkVideo.Helper")
         self.store = credential_store or BillingCredentialStore(self.settings)
         self.checker = login_checker or check_billing_login
@@ -75,7 +75,7 @@ class BillingLoginPanel(Card):
         buttons.setSpacing(8)
         self.remember = QCheckBox("Запомнить через Windows DPAPI")
         self.remember.setObjectName("BillingRemember")
-        self.remember.setChecked(bool(stored.password))
+        self.remember.setChecked(True)
         self.show_password = QCheckBox("Показать")
         self.show_password.toggled.connect(lambda checked: self.password.setEchoMode(
             QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
