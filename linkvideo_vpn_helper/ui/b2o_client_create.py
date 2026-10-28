@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-"""B2O operator client form: known POST route, unknown request body.
-
-No POST until the exact captured payload and option identifiers are verified.
-"""
+"""B2O operator client form. Writes restricted to the captured RU payload."""
 
 import secrets
 import string
@@ -13,27 +10,32 @@ from PySide6.QtCore import QSettings, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QVBoxLayout, QWidget,
+    QMessageBox, QPushButton, QVBoxLayout, QWidget,
 )
 
 from linkvideo_vpn_helper.services.archive_service_core import B2OService
 from linkvideo_vpn_helper.services.b2o_client_admin import (
-    B2OClientDraft, B2OOperatorReadOnly, operator_admin_url,
-    operator_for_country,
+    B2OClientDraft, B2OCreationOutcomeUnknown, B2OOperatorClientManager,
+    operator_admin_url, operator_for_country,
 )
 from linkvideo_vpn_helper.ui.components import Card, StatusPill
 
 
 class B2OClientCreationWidget(QWidget):
     accessReady = Signal(int, str, object, object)
+    createReady = Signal(object, object)
 
     def __init__(self, settings: QSettings, parent=None, b2o_service=None):
         super().__init__(parent)
         self.settings = settings
         self.b2o = b2o_service or B2OService(settings)
-        self.api = B2OOperatorReadOnly(self.b2o)
+        self.api = B2OOperatorClientManager(self.b2o)
         self._attempt = 0
+        self._creating = False
+        self._created = False
+        self._outcome_unknown = False
         self.accessReady.connect(self._on_access)
+        self.createReady.connect(self._on_created)
         self._build()
 
     def _build(self):
@@ -112,11 +114,9 @@ class B2OClientCreationWidget(QWidget):
         self.phone.setPlaceholderText("Необязательно")
         self.account_type = QComboBox()
         self.account_type.setObjectName("B2OCreateAccountType")
-        # Display suggestions only. Numeric ids and accepted values must be
-        # confirmed from the actual admin form before any write is enabled.
-        self.account_type.addItems([
-            "Выберите тип аккаунта", "Физическое лицо", "Юридическое лицо",
-        ])
+        # Only type "1" was observed in a successful B2O POST.
+        self.account_type.addItem("Выберите тип аккаунта", "")
+        self.account_type.addItem("Тип аккаунта 1 (подтверждён)", "1")
         self.account_type.setCurrentIndex(0)
         for label, field in (
             ("Имя *", self.name), ("Логин *", self.login),
@@ -127,9 +127,9 @@ class B2OClientCreationWidget(QWidget):
         form.addLayout(fields)
 
         self.message = QLabel(
-            "Маршрут POST создания клиента подтверждён. Осталось проверить "
-            "отправляемый Payload и идентификаторы типов аккаунта. "
-            "До этого отправка отключена."
+            "Создание через API подтверждено для России, типа 1, "
+            "с включённым «Завести в биллинг» и выключенным общим доступом. "
+            "Другие сочетания пока недоступны."
         )
         self.message.setObjectName("Muted")
         self.message.setWordWrap(True)
@@ -137,11 +137,9 @@ class B2OClientCreationWidget(QWidget):
         actions = QHBoxLayout()
         self.create_button = QPushButton("Создать клиента у оператора")
         self.create_button.setProperty("role", "primary")
-        self.create_button.setObjectName("B2OCreateClientDisabled")
+        self.create_button.setObjectName("B2OCreateClient")
         self.create_button.setEnabled(False)
-        self.create_button.setToolTip(
-            "POST /operators/{id}/clients подтверждён; ожидается точный Payload и значения параметров"
-        )
+        self.create_button.clicked.connect(self._start_create)
         self.open_admin = QPushButton("Открыть админку B2O")
         self.open_admin.setObjectName("B2OOpenOperatorAdmin")
         self.open_admin.clicked.connect(
@@ -152,6 +150,14 @@ class B2OClientCreationWidget(QWidget):
         form.addLayout(actions)
         root.addWidget(card)
         root.addStretch(1)
+        self.country.currentIndexChanged.connect(self._refresh_create_enabled)
+        self.in_billing.toggled.connect(self._refresh_create_enabled)
+        self.cross_share.toggled.connect(self._refresh_create_enabled)
+        self.account_type.currentIndexChanged.connect(self._refresh_create_enabled)
+        for field in (self.name, self.login, self.password, self.phone):
+            field.textChanged.connect(self._refresh_create_enabled)
+        self.login.textChanged.connect(self._reset_creation_lock_for_new_login)
+        self._refresh_create_enabled()
 
     def _country_changed(self, *_):
         self._attempt += 1
@@ -169,7 +175,7 @@ class B2OClientCreationWidget(QWidget):
             login=self.login.text().strip(),
             password=self.password.text(),
             phone=self.phone.text().strip(),
-            account_type=self.account_type.currentText() if self.account_type.currentIndex() > 0 else "",
+            account_type=str(self.account_type.currentData() or ""),
             create_in_billing=self.in_billing.isChecked(),
             cross_sharing=self.cross_share.isChecked(),
         )
