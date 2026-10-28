@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QApplication
 
 from linkvideo_vpn_helper.services.b2o_client_admin import (
     ADMIN_URL, BASE_URL, B2OClientDraft, B2OOperatorReadOnly,
-    operator_for_country, settings_path,
+    operator_for_country, settings_path, creation_path, created_account_id,
 )
 from linkvideo_vpn_helper.ui.b2o_client_create import B2OClientCreationWidget
 
@@ -25,6 +25,20 @@ assert settings_path("Россия") == "/operators/241/settings"
 assert settings_path("Казахстан") == "/operators/1721/settings"
 assert settings_path("Беларусь") == "/operators/1741/settings"
 assert ADMIN_URL == "https://operator.b2o.goodline.info"
+assert creation_path("Россия") == "/operators/241/clients"
+assert creation_path("Казахстан") == "/operators/1721/clients"
+assert creation_path("Беларусь") == "/operators/1741/clients"
+assert created_account_id({"id_account": 12345}) == 12345
+assert created_account_id({"id_account": "12345"}) == 12345
+for bad_response in ({}, {"id_account": None}, {"id_account": 0},
+                     {"id_account": "-2"}, {"id_account": True}, {"id_account": "5.2"},
+                     [], {"id_account": "0011"}):
+    try:
+        created_account_id(bad_response)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Wrongly accepted invalid creation response")
 
 for value in ("", "Germany", "admin"):
     try:
@@ -47,7 +61,11 @@ class FakeB2O:
         assert token == self.session_token
         assert url.startswith(BASE_URL)
         self.requests.append(url)
-        return {"id_operator": url.split("/operators/")[1].split("/")[0], "timezone": 7}
+        if url.endswith("/settings"):
+            return {"id_operator": url.split("/operators/")[1].split("/")[0], "timezone": 7}
+        if url.endswith("/clients/12345"):
+            return {"id_account": 12345, "login": "fictional-client"}
+        raise AssertionError("Unexpected B2O GET path")
 
 
 fake = FakeB2O()
@@ -56,6 +74,14 @@ for country in ("Россия", "Казахстан", "Беларусь"):
     out = client.check_access(country)
     assert str(out["id_operator"]) == str(operator_for_country(country))
 assert len(fake.requests) == 3
+assert client.read_client("Россия", 12345)["id_account"] == 12345
+for invalid_id in (0, -1, True, 10**20):
+    try:
+        client.read_client("Россия", invalid_id)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Unexpected account id accepted")
 fake.session_token = ""
 try:
     client.check_access("Россия")
