@@ -129,6 +129,7 @@ dialog.close()
 
 page = TariffsPage(gateway=gateway)
 assert not page.catalog_btn.isEnabled()  # cannot search before selecting a client
+page.client = client
 page._render_client(client)
 assert page.catalog_btn.isEnabled()
 page._set_busy(True)
