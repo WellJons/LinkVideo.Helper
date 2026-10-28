@@ -8,6 +8,7 @@ Instantiate only after IT confirms the browser's actual request header.
 """
 
 import re
+from urllib.parse import quote, unquote
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -15,7 +16,7 @@ import requests
 
 from linkvideo_vpn_helper.services.billing_auth_contract import BILLING_API_ORIGIN
 from linkvideo_vpn_helper.services.billing_gateway import (
-    BillingNotConfigured, BillingPermissionDenied, BillingValidationError,
+    BillingNotConfigured, BillingPermissionDenied, BillingValidationError, validate_login,
 )
 
 
@@ -62,7 +63,7 @@ class BillingTokenTransport:
         return bool(self.token and self.header_mode)
 
     def _headers(self):
-        if not self.header_mode:
+        if self.header_mode not in ("token", "authorization_bearer", "authorization_raw"):
             raise BillingNotConfigured(
                 "Для запросов клиентов ещё не подтверждён заголовок CRM token/Authorization."
             )
@@ -75,6 +76,14 @@ class BillingTokenTransport:
     def get_json(self, path: str) -> dict:
         if not isinstance(path, str) or not any(p.fullmatch(path) for p in _ALLOWED_ROUTES):
             raise BillingValidationError("Запрошен неподдерживаемый адрес CRM.")
+        # Reject double-decoding or encoded path separators even when the
+        # route regex otherwise matches. A login is one path segment.
+        if path.startswith("/api/accounts/search/"):
+            encoded_login = path.rsplit("/", 1)[-1]
+            decoded_login = unquote(encoded_login)
+            validate_login(decoded_login)
+            if quote(decoded_login, safe="") != encoded_login:
+                raise BillingValidationError("Некорректное кодирование логина CRM.")
         headers = self._headers()
         try:
             response = self._session.get(
