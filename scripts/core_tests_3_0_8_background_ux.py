@@ -15,13 +15,11 @@ assert "class _UpdateBridge(QObject)" in update_ux
 assert "progress = Signal(int, str)" in update_ux
 assert "BusyDialog" in update_ux
 assert '"Проверяю обновления"' in update_ux
-assert '"Скачиваю патч"' in update_ux
 assert '"Скачиваю обновление"' in update_ux
 assert "progress_callback=progress" in update_ux
 assert "bridge.progress.emit" in update_ux
-assert "_lv_silent_patch_progress" in update_ux
-assert "_lv_silent_patch_finished" in update_ux
-assert "progress_callback=progress" in silent
+assert "stage_patch(" not in silent
+assert "trigger_staged_patch(" not in silent
 
 assert 'dialog.setProperty("lvBackgroundWait", True)' in update_ux
 assert 'dialog.property("lvBackgroundWait")' in cancel_guard
