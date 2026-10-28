@@ -64,6 +64,7 @@ for invalid in (
     "/api/accounts/../../auth/login", "/auth/login", "/api/accounts/725?x=1",
     "https://attacker.test", "//attacker.test/hello",
     "/api/tariffs/create/1", "/api/accounts/725/cameras/delete",
+    "/api/accounts/search/%2Fadmin", "/api/accounts/search/%252Fadmin",
 ):
     before = len(session.calls)
     try:
@@ -72,6 +73,14 @@ for invalid in (
     except BillingValidationError:
         pass
     assert len(session.calls) == before
+
+transport.header_mode = "unverified_header"
+try:
+    transport.get_json("/api/accounts/725")
+    raise AssertionError("Unverified header mode accepted")
+except BillingNotConfigured:
+    pass
+transport.header_mode = "authorization_raw"
 
 session.code = 401
 try:
