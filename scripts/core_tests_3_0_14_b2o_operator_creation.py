@@ -18,7 +18,7 @@ from PySide6.QtWidgets import QApplication, QLineEdit
 from linkvideo_vpn_helper.services.b2o_client_admin import (
     ADMIN_URL, BASE_URL, B2OClientDraft, B2OOperatorReadOnly,
     B2OOperatorClientManager, B2OCreationOutcomeUnknown, B2OCreationRejected,
-    B2OCreatedClient, safe_b2o_validation_hint,
+    B2OCreatedClient, VERIFIED_CREATE_CROSS_SHARING, safe_b2o_validation_hint,
     operator_for_country, settings_path, creation_path, created_account_id,
 )
 from linkvideo_vpn_helper.ui.b2o_client_create import (
@@ -33,6 +33,7 @@ assert settings_path("Россия") == "/operators/241/settings"
 assert settings_path("Казахстан") == "/operators/1721/settings"
 assert settings_path("Беларусь") == "/operators/1741/settings"
 assert ADMIN_URL == "https://operator.b2o.goodline.info"
+assert VERIFIED_CREATE_CROSS_SHARING == {"Россия": 0, "Казахстан": 1}
 assert creation_path("Россия") == "/operators/241/clients"
 assert creation_path("Казахстан") == "/operators/1721/clients"
 assert creation_path("Беларусь") == "/operators/1741/clients"
@@ -122,7 +123,9 @@ for changed in (
     else:
         raise AssertionError(f"Invalid draft accepted: {tuple(changed)}")
 
-# The captured successful POST supports only Russia, type "1", billing=1, sharing=0.
+# Observed successful POSTs:
+# Russia, operator 241, type "1", billing=1, sharing=0.
+# Kazakhstan, operator 1721, type "1", billing=1, sharing=1.
 verified_draft = B2OClientDraft(
     country="Россия", name="Тест", login="fictional-client",
     password="fictional-password", phone="70000000000",
@@ -144,6 +147,15 @@ assert type(verified_draft.verified_payload()["cross_sharing_enabled"]) is int
 assert B2OClientDraft(**{
     **verified_draft.__dict__, "password": "Ab1234"
 }).verified_payload()["password"] == "Ab1234"
+
+kz_draft = B2OClientDraft(**{
+    **verified_draft.__dict__, "country": "Казахстан", "cross_sharing": True,
+})
+expected_kz_payload = {
+    **expected_payload, "cross_sharing_enabled": 1,
+}
+assert kz_draft.verified_payload() == expected_kz_payload
+assert type(kz_draft.verified_payload()["cross_sharing_enabled"]) is int
 
 for forbidden in (
     {"country": "Казахстан"}, {"country": "Беларусь"},
@@ -192,6 +204,39 @@ with patch("urllib.request.urlopen", side_effect=mock_post):
     assert result == B2OCreatedClient(12345, True)
 assert len(posts) == 1
 assert fake.requests[-1].endswith("/operators/241/clients/12345")
+
+kz_posts = []
+
+def mock_post_kz(request, timeout):
+    assert timeout == 25
+    assert request.get_method() == "POST"
+    assert request.full_url == BASE_URL + "/operators/1721/clients"
+    assert request.get_header("Token") == fake.session_token
+    assert request.get_header("Content-type") == "application/json"
+    assert json.loads(request.data.decode("utf-8")) == expected_kz_payload
+    kz_posts.append(request)
+    return FakeReply()
+
+with patch("urllib.request.urlopen", side_effect=mock_post_kz):
+    kz_result = manager.create_client(kz_draft)
+    assert kz_result == B2OCreatedClient(12345, True)
+assert len(kz_posts) == 1
+assert fake.requests[-1].endswith("/operators/1721/clients/12345")
+
+# Reject unsupported variants before ANY POST, even for authenticated KZ.
+for unsupported_kz in (
+    {"cross_sharing": False}, {"create_in_billing": False},
+    {"account_type": "business-unverified"}, {"country": "Беларусь"},
+):
+    draft = B2OClientDraft(**{**kz_draft.__dict__, **unsupported_kz})
+    with patch("urllib.request.urlopen") as urlopen:
+        try:
+            manager.create_client(draft)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"Unverified KZ variant accepted: {unsupported_kz}")
+        urlopen.assert_not_called()
 
 with patch("urllib.request.urlopen", side_effect=mock_post):
     try:
@@ -286,13 +331,26 @@ with tempfile.TemporaryDirectory() as temp:
     assert widget.account_type.isEnabled()
     assert widget.draft().country == "Казахстан"
     widget.draft().check()
-    assert not widget.create_button.isEnabled(), "Non-RU POST must remain disabled"
+    assert widget.cross_share.isChecked(), "KZ must default to observed cross-sharing=1"
+    assert widget.create_button.isEnabled(), "Verified KZ POST should be enabled"
+    assert widget.draft().verified_payload() == {
+        "account_type": "1", "client_name": "Пример",
+        "cross_sharing_enabled": 1, "login": "demo_operator_01",
+        "password": widget.password.text(), "phone": "",
+        "push_to_billing": 1,
+    }
     assert "1721" in widget.message.text()
-    assert "POST" in widget.message.text()
-    assert "нет POST API" in widget.create_button.text()
     widget._on_access(widget._attempt, "Казахстан", True, None)
-    assert "1721" in widget.message.text(), "GET access must not imply write support"
+    assert widget.create_button.isEnabled()
+    widget.cross_share.setChecked(False)
+    assert not widget.create_button.isEnabled(), "Unknown KZ sharing=0 must be blocked"
+    assert "общий доступ" in widget.message.text()
+    widget.cross_share.setChecked(True)
+    assert widget.create_button.isEnabled()
+    widget.in_billing.setChecked(False)
     assert not widget.create_button.isEnabled()
+    widget.in_billing.setChecked(True)
+    assert widget.create_button.isEnabled()
     widget.country.setCurrentIndex(2)
     assert "1741" in widget.message.text()
     assert not widget.create_button.isEnabled()
@@ -300,7 +358,8 @@ with tempfile.TemporaryDirectory() as temp:
     assert "1741" in widget.message.text()
     assert not widget.create_button.isEnabled()
     widget.country.setCurrentIndex(0)
-    assert widget.in_billing.isChecked(), "The only verified billing combination should be default"
+    assert not widget.cross_share.isChecked()
+    assert widget.in_billing.isChecked()
     assert widget.create_button.isEnabled(), "Verified RU POST form should be enabled"
     widget.account_type.setCurrentIndex(1)
     assert widget.draft().account_type == "business-unverified"
