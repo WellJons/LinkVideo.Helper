@@ -88,6 +88,7 @@ def main() -> None:
         def print(self, path, params=None):
             raise RouterOSAPIError("not enough permissions")
 
+    FakeRouterOS.plans = {"vpn01": (None, full), "vpn02": (None, full)}
     try:
         verify_routeros_user(
             "evstegneev.na", "correct", ["vpn01", "vpn02"],
