@@ -77,6 +77,36 @@ class PageHeader(QWidget):
         root.addWidget(self.subtitle)
 
 
+class WorkflowStep(QWidget):
+    """Consistent numbered heading for multi-step operator workflows.
+
+    Presentational only: the controls beneath it keep their original signals
+    and validation. Works with the active palette in all Helper themes.
+    """
+
+    def __init__(self, number: int, title: str, hint: str = "", parent=None):
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        marker = QLabel(str(number))
+        marker.setObjectName("StepNumber")
+        marker.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        marker.setFixedSize(27, 27)
+        layout.addWidget(marker, 0, Qt.AlignmentFlag.AlignTop)
+        labels = QVBoxLayout()
+        labels.setSpacing(3)
+        heading = QLabel(title)
+        heading.setObjectName("SectionTitle")
+        labels.addWidget(heading)
+        if hint:
+            description = QLabel(hint)
+            description.setObjectName("TinyMuted")
+            description.setWordWrap(True)
+            labels.addWidget(description)
+        layout.addLayout(labels, 1)
+
+
 class SectionHeader(QWidget):
     def __init__(self, title: str, subtitle: str = "", parent=None):
         super().__init__(parent)
