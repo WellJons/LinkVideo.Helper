@@ -104,6 +104,24 @@ assert len(secondary.menu().actions()) == 4
 assert not any(item.isEnabled() for item in secondary.menu().actions())
 assert page.info_values["country"].text() == "Казахстан"
 
+# The account detail endpoint has no cameras array. Empty services are not
+# proof that the customer has zero services, until the cameras endpoint runs.
+from linkvideo_vpn_helper.services.billing_response_parser import parse_account_detail
+detail = parse_account_detail(
+    {"success": True, "response": [{
+        "login": "lkz_demo_0001", "account_name": "Demo Holder",
+        "balance": 0, "status_name": "Активный",
+        "registration_date": "2026-10-13T00:00:00+07:00",
+    }]},
+    account_id=286, country="Казахстан",
+    expected_login="lkz_demo_0001",
+)
+page._render_client(detail)
+assert page.client_heading.text() == "Demo Holder"
+assert page.metric_values["services"].text() == "—"
+assert "ещё не загружен" in page.services_hint.text()
+
+
 dialog = ChangeTariffDialog(service, (TariffOption("tariff_test_a", service.tariff_name), option))
 assert dialog.tariff.count() == 2
 dialog.tariff.setCurrentIndex(1)
