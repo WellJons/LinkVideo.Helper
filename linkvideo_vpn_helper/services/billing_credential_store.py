@@ -57,6 +57,10 @@ class BillingCredentialStore:
         self.settings.remove(f"{self.PREFIX}/password_dpapi")
         self.settings.sync()
 
+    def b2o_login_name(self) -> str:
+        """B2O saves its login, but never saves the B2O password."""
+        return str(self.settings.value("b2o/login", "", str) or "").strip()
+
     def helper_credentials(self) -> StoredBillingLogin:
         """Opt-in ONLY: read old Helper settings, without copying by default."""
         username = str(self.settings.value("username", "", str) or "")
