@@ -108,7 +108,7 @@ class BillingLoginPanel(Card):
         buttons.setSpacing(8)
         self.remember = QCheckBox("Запомнить через Windows DPAPI")
         self.remember.setObjectName("BillingRemember")
-        self.remember.setChecked(True)
+        self.remember.setChecked(bool(stored.password))
         self.show_password = QCheckBox("Показать")
         self.show_password.toggled.connect(lambda checked: self.password.setEchoMode(
             QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
@@ -176,6 +176,24 @@ class BillingLoginPanel(Card):
             widget.setEnabled(not busy)
         self.submit.setText("Выполняется вход…" if busy else "Войти")
         self.logout_btn.setEnabled(not busy and bool(self._token))
+
+    def auto_login_remembered(self) -> bool:
+        """Re-authenticate once on startup with DPAPI-saved CRM credentials.
+
+        A CRM token is intentionally never persisted. Automatic login only
+        occurs when the user previously opted in to password storage.
+        """
+        if self._busy or self._token:
+            return False
+        saved = self.store.load()
+        if not saved.username or not saved.password:
+            return False
+        if (self.username.text().strip() != saved.username
+                or self.password.text() != saved.password):
+            return False
+        self.remember.setChecked(True)
+        self._login()
+        return True
 
     def _login(self):
         if self._busy:
