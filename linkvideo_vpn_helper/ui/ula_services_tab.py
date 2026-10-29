@@ -26,10 +26,21 @@ def _safe_error(error: Exception) -> str:
     # from third-party errors into screenshots, UI, logs or support reports.
     if isinstance(error, (ValueError, TypeError, UlaReadError)):
         return str(error)[:170]
-    codes = re.findall(r"\b(?:ORA|DPY|DPI)-\d{4,5}\b", str(error))
+    codes = re.findall(r"\\b(?:ORA|DPY|DPI)-\\d{4,5}\\b", str(error))
     if codes:
-        return "Ошибка Oracle " + ", ".join(list(dict.fromkeys(codes))[:3])
-    return "Не удалось выполнить запрос Oracle. Проверьте подключение и права пользователя."
+        code = codes[0]
+        explanations = {
+            "ORA-01017": "Неверные учётные данные Oracle или вход запрещён.",
+            "ORA-12505": "Oracle Listener не распознал указанный SID.",
+            "ORA-12514": "Oracle Listener не распознал указанное имя службы.",
+            "ORA-12541": "Oracle Listener недоступен по этому адресу и порту.",
+            "ORA-12170": "Превышено время ожидания подключения.",
+            "DPY-3010": "Старая версия Oracle требует режим Thick (64-битный Instant Client).",
+            "DPY-3001": "Сервер требует сетевое шифрование Oracle; попробуйте Thick-режим.",
+            "DPI-1047": "Не найдены библиотеки 64-битного Oracle Instant Client.",
+        }
+        return f"{code}: {explanations.get(code, 'Проверьте сеть, Oracle и права доступа.')}"
+    return "Запрос Oracle завершился ошибкой без известного кода. Проверьте подключение и права."
 
 
 class UlaServicesTab(QWidget):
