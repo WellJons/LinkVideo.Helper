@@ -21,7 +21,7 @@ from linkvideo_vpn_helper.services.billing_credential_store import BillingCreden
 from linkvideo_vpn_helper.services.billing_gateway import BillingClient, BillingService
 from linkvideo_vpn_helper.ui.billing_login_panel import BillingLoginPanel
 from linkvideo_vpn_helper.ui.pages.tariffs_page import (
-    TariffsPage, format_history_timestamp,
+    TariffsPage, format_history_timestamp, admin_camera_label,
 )
 from linkvideo_vpn_helper.ui import billing_login_panel as login_module
 
@@ -29,6 +29,8 @@ assert format_history_timestamp("2026-07-07T00:01:38+07:00") == "07.07.2026 00:0
 assert format_history_timestamp("2026-10-28T19:47:15+07:00") == "28.10.2026 19:47:15"
 assert format_history_timestamp("2026-07-07T00:01:38Z") == "07.07.2026 00:01:38"
 assert format_history_timestamp("") == "—"
+assert admin_camera_label("Беларусь", "280535") == "linkvideoby_280535"
+assert admin_camera_label("Казахстан", "299341") == "299341"
 
 app = QApplication.instance() or QApplication([])
 with tempfile.TemporaryDirectory() as tmp:
@@ -79,7 +81,7 @@ with tempfile.TemporaryDirectory() as tmp:
     page._render_client(client)
     thumbs = page.findChildren(QLabel, "BillingCameraPreview")
     assert thumbs and thumbs[0].width() >= 100
-    assert any("ID админки: 280535" in x.text() for x in page.findChildren(QLabel))
+    assert any("ID админки: linkvideoby_280535" in x.text() for x in page.findChildren(QLabel))
     actions = page.findChild(QPushButton, "BillingCameraOtherActions")
     assert actions.text() == "Действия" and len(actions.menu().actions()) == 4
 
