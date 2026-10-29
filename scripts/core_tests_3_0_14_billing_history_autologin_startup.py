@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QCoreApplication, QEvent, QSettings
 from PySide6.QtWidgets import QApplication, QDialog, QFrame, QLabel, QPushButton, QScrollArea
 
 from linkvideo_vpn_helper.services.billing_credential_store import BillingCredentialStore
@@ -48,6 +48,8 @@ with tempfile.TemporaryDirectory() as tmp:
     panel = BillingLoginPanel(settings, login_checker=checker, credential_store=store)
     assert not panel.auto_login_remembered()
     panel.close()
+    panel.deleteLater()
+    app.processEvents()
     store.save("demo.crm", "fakepass", remember=True)
     panel = BillingLoginPanel(settings, login_checker=checker, credential_store=store)
     assert panel.auto_login_remembered()
@@ -61,6 +63,8 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "fictional-ram-only-token" not in Path(tmp, "prefs.ini").read_text()
     assert not panel.auto_login_remembered()
     panel.close()
+    panel.deleteLater()
+    app.processEvents()
 
     class FakeGateway:
         configured = True
@@ -100,7 +104,11 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "07.07.2026 00:01:38" in texts
     assert any("Стартовый 90" in x and "ЮЛ 30 дней" in x for x in texts)
     assert not any("+07:00" in x for x in texts)
+    dialog = None
     page.close()
+    page.deleteLater()
+    app.processEvents()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     app.processEvents()
 
 source = (Path(__file__).resolve().parents[1] /
