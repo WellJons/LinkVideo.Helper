@@ -1,0 +1,165 @@
+name: Promote verified LinkVideo.Helper 3.0.14
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/promote-3.0.14-once.yml']
+permissions:
+  contents: write
+  actions: write
+concurrency:
+  group: promote-linkvideo-helper-3.0.14
+  cancel-in-progress: false
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PINNED_SHA: 83ce2dc02bd4200cebfd962183a965f33443afb3
+      RC_SHA256: 8c61f7dd146d83557a6bf582dd03b1995ae6ba7cb7e6ea8815e504bccd291453
+      STABLE_TAG: v3.0.14
+    steps:
+      - name: Validate the exact successful RC before any publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          test "$(gh run view 40838802532 --repo "$repo" --json conclusion --jq '.conclusion')" = success
+          rc_tag_sha="$(gh api "repos/$repo/git/ref/tags/rc-3.0.14" --jq '.object.sha')"
+          test "$rc_tag_sha" = "$PINNED_SHA" || {
+            echo "RC tag moved since Windows verification; refusing stable publication"; exit 1;
+          }
+          gh api "repos/$repo/releases/tags/rc-3.0.14" > "$RUNNER_TEMP/rc-release.json"
+          python3 - "$RUNNER_TEMP/rc-release.json" "$PINNED_SHA" "$RC_SHA256" <<'PY'
+          import json, sys
+          x=json.load(open(sys.argv[1], encoding='utf-8'))
+          assert x['prerelease'] and not x['draft'], "unverified RC release state"
+          assert "Commit: " + sys.argv[2] in x['body'], "unverified source commit"
+          assets=[a for a in x['assets'] if a['name']=='LinkVideo.Helper_Setup_3.0.14_RC.exe']
+          assert len(assets)==1 and assets[0]['digest']=='sha256:'+sys.argv[3], "RC installer digest mismatch"
+          PY
+          mkdir -p "$RUNNER_TEMP/rc"
+          gh release download rc-3.0.14 --repo "$repo" --pattern verification.json --dir "$RUNNER_TEMP/rc"
+          python3 - "$RUNNER_TEMP/rc/verification.json" "$PINNED_SHA" "$RC_SHA256" <<'PY'
+          import json,sys
+          r=json.load(open(sys.argv[1],encoding='utf-8-sig'))
+          assert r['version']=='3.0.14'
+          assert r['source_commit']==sys.argv[2]
+          assert r['setup_sha256'].lower()==sys.argv[3]
+          assert r['exact_setup_self_test']=='passed'
+          assert r['python_release_preflight']=='passed'
+          PY
+          echo "Verified exact RC commit and setup digest."
+
+      - name: Create immutable-target stable version tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          if gh api "repos/$repo/git/ref/tags/$STABLE_TAG" > "$RUNNER_TEMP/stable-ref.json" 2>/dev/null; then
+            actual="$(jq -r '.object.sha' "$RUNNER_TEMP/stable-ref.json")"
+            test "$actual" = "$PINNED_SHA" || {
+              echo "An existing stable tag points to a different commit"; exit 1;
+            }
+          else
+            gh api -X POST "repos/$repo/git/refs" -f "ref=refs/tags/$STABLE_TAG" -f "sha=$PINNED_SHA" >/dev/null
+          fi
+          test "$(gh api "repos/$repo/git/ref/tags/$STABLE_TAG" --jq '.object.sha')" = "$PINNED_SHA"
+
+      - name: Build and verify final tagged Windows release
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          if gh release view "$STABLE_TAG" --repo "$repo" --json isDraft --jq '.isDraft' >/dev/null 2>&1; then
+            echo "Final release already exists; it must be a draft with verified assets."
+          else
+            started="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            gh workflow run windows-build.yml --repo "$repo" --ref "$STABLE_TAG"
+            run_id=""
+            for attempt in $(seq 1 45); do
+              run_id="$(gh run list --repo "$repo" --workflow windows-build.yml --event workflow_dispatch --limit 25 --json databaseId,createdAt,headSha | jq -r --arg since "$started" --arg sha "$PINNED_SHA" '[.[] | select(.createdAt >= $since and .headSha == $sha) | .databaseId] | first // empty')"
+              if [ -n "$run_id" ]; then break; fi
+              sleep 5
+            done
+            test -n "$run_id" || { echo "Could not find dispatched Windows build"; exit 1; }
+            echo "Final Windows build run: $run_id"
+            gh run watch "$run_id" --repo "$repo" --exit-status --interval 20
+          fi
+
+      - name: Verify final draft assets and release
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          test "$(gh release view "$STABLE_TAG" --repo "$repo" --json isDraft --jq '.isDraft')" = true || {
+            echo "Refusing to alter an already published source release"; exit 1;
+          }
+          test "$(gh release view "$STABLE_TAG" --repo "$repo" --json isPrerelease --jq '.isPrerelease')" = false
+          mkdir -p "$RUNNER_TEMP/final"
+          gh release download "$STABLE_TAG" --repo "$repo" --dir "$RUNNER_TEMP/final" --pattern verification.json --pattern LinkVideo.Helper_Setup.exe
+          python3 - "$RUNNER_TEMP/final/verification.json" "$RUNNER_TEMP/final/LinkVideo.Helper_Setup.exe" "$PINNED_SHA" <<'PY'
+          import hashlib,json, pathlib,sys
+          report=json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8-sig'))
+          setup=pathlib.Path(sys.argv[2])
+          actual=hashlib.sha256(setup.read_bytes()).hexdigest()
+          assert report['version']=='3.0.14'
+          assert report['source_commit']==sys.argv[3]
+          assert report['setup_sha256'].lower()==actual
+          assert report['setup_product_version']=='3.0.14'
+          for field in ('exact_setup_self_test','python_release_preflight','ruff_critical','go_vet','patch_pipeline_compile'):
+              assert report[field]=='passed',field
+          print('VERIFIED_SHA256='+actual)
+          PY
+
+      - name: Publish final source release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release edit "$STABLE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false \
+            --title 'LinkVideo.Helper 3.0.14' \
+            --notes 'Стабильная версия LinkVideo.Helper 3.0.14. VPN, восстановление учёток, обновлённый интерфейс, клиенты и тарифы, B2O, Новый Агент и превью камер. Проверка Windows Release Gate пройдена. Обновление распространяется через официальный канал LinkVideo.Helper.Updates.'
+
+      - name: Publish public channel through existing verified workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          started="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          gh workflow run publish-public-update.yml --repo "$repo" --ref main -f tag="$STABLE_TAG"
+          run_id=""
+          for attempt in $(seq 1 45); do
+            run_id="$(gh run list --repo "$repo" --workflow publish-public-update.yml --event workflow_dispatch --limit 25 --json databaseId,createdAt | jq -r --arg since "$started" '[.[] | select(.createdAt >= $since) | .databaseId] | first // empty')"
+            if [ -n "$run_id" ]; then break; fi
+            sleep 5
+          done
+          test -n "$run_id" || { echo "Could not find public update workflow"; exit 1; }
+          echo "Public updater run: $run_id"
+          gh run watch "$run_id" --repo "$repo" --exit-status --interval 20
+
+      - name: Verify official update manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Read current GitHub API blob, not the stale raw.githubusercontent cache.
+          for attempt in $(seq 1 10); do
+            gh api repos/WellJons/LinkVideo.Helper.Updates/contents/update-manifest.json \
+              --jq '.content' | base64 -d > "$RUNNER_TEMP/public-update.json"
+            if python3 - "$RUNNER_TEMP/public-update.json" <<'PY'
+import json,sys
+x=json.load(open(sys.argv[1],encoding='utf-8'))
+assert x['version']=='3.0.14'
+PY
+            then break; fi
+            if [ "$attempt" = 10 ]; then exit 1; fi
+            sleep 5
+          done
+          python3 - "$RUNNER_TEMP/public-update.json" <<'PY'
+          import json,sys
+          x=json.load(open(sys.argv[1],encoding='utf-8'))
+          assert x['version']=='3.0.14'
+          assert x['download_url']=='https://github.com/WellJons/LinkVideo.Helper.Updates/releases/download/v3.0.14/LinkVideo.Helper_Setup.exe'
+          assert len(x['sha256'])==64
+          assert x.get('mandatory') is False
+          print("Public manifest verified: "+x['version']+" "+x['sha256'])
+          PY
