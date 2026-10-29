@@ -147,7 +147,9 @@ def find_oracle_client(config_dir: str | Path = "") -> Path | None:
                         add(child)
                         add(child / "bin")
             except OSError:
-                pass
+                # Optional Oracle installation directory may be inaccessible.
+                # Continue with other explicitly identified search locations.
+                continue
 
     for folder in candidates:
         dll = folder / "oci.dll"
