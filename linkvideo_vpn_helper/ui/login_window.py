@@ -4,11 +4,11 @@ from dataclasses import dataclass
 from pathlib import Path
 import threading
 
-from PySide6.QtCore import QEasingCurve, QObject, QPoint, QPropertyAnimation, QSettings, Qt, QTimer, Signal
+from PySide6.QtCore import QEasingCurve, QObject, QPoint, QPropertyAnimation, QRect, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPainterPath
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QSizePolicy, QVBoxLayout, QWidget,
+    QSizePolicy, QScrollArea, QVBoxLayout, QWidget,
 )
 
 from linkvideo_vpn_helper.services.routeros_login_verification import (
@@ -148,6 +148,7 @@ class LoginWindow(QDialog):
         form.setObjectName("LoginForm")
         form.setMaximumWidth(480)
         form.setMinimumWidth(370)
+        form.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         fl = QVBoxLayout(form)
         fl.setContentsMargins(32, 30, 32, 28)
         fl.setSpacing(11)
@@ -218,7 +219,7 @@ class LoginWindow(QDialog):
         error_l.setSpacing(8)
         error_icon = QLabel("!")
         error_icon.setFixedWidth(15)
-        error_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        error_icon.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
         self.error = QLabel("")
         self.error.setObjectName("DangerText")
         self.error.setWordWrap(True)
@@ -230,7 +231,19 @@ class LoginWindow(QDialog):
         fl.addWidget(self.error_banner)
         stage_l.addWidget(form, 0, Qt.AlignmentFlag.AlignHCenter)
         stage_l.addStretch(1)
-        root.addWidget(stage, 6)
+        # The login form can grow when a multi-line VPN error is returned.
+        # Containing it in a scrollable stage prevents QVBoxLayout from
+        # compressing and clipping the last lines at small heights / high DPI.
+        self.stage_scroll = QScrollArea()
+        self.stage_scroll.setObjectName("LoginStageScroll")
+        self.stage_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.stage_scroll.setWidgetResizable(True)
+        self.stage_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.stage_scroll.verticalScrollBar().setSingleStep(28)
+        self.stage_scroll.setWidget(stage)
+        root.addWidget(self.stage_scroll, 6)
 
         self.password.returnPressed.connect(self._submit)
         self.login.returnPressed.connect(lambda: self.password.setFocus())
@@ -245,17 +258,41 @@ class LoginWindow(QDialog):
         super().resizeEvent(event)
         if hasattr(self, "brand_panel"):
             self.brand_panel.setVisible(self.width() >= 875)
+        if hasattr(self, "error") and self.error_banner.isVisible():
+            self._resize_login_error(self.error.text())
 
     def _status(self, message: str, *, danger: bool = False):
         self.error.setText(message if danger else "")
-        self.error_banner.setVisible(bool(message) and danger)
         if danger and message:
-            # Recalculate word wrap and frame geometry on the current theme.
-            self.error.updateGeometry()
-            self.error_banner.updateGeometry()
-            self.error_banner.layout().activate()
+            # QLabel's wrapped height hint is not always propagated before a
+            # nested frame is laid out. Measure the real text at the current
+            # width and reserve enough height for the complete error.
+            self._resize_login_error(message)
+        else:
+            self.error.setMinimumHeight(0)
+            self.error_banner.setMinimumHeight(0)
+        self.error_banner.setVisible(bool(message) and danger)
         self.status_message.setText(message if not danger else "")
         self.status_message.setVisible(bool(message) and not danger)
+        if danger and message:
+            QTimer.singleShot(
+                0, lambda: self.stage_scroll.ensureWidgetVisible(self.error, 0, 18)
+            )
+
+    def _resize_login_error(self, message: str):
+        # Use the actual label width (and frame padding) rather than a fixed
+        # four-line banner. Dynamic word-wrapping also supports font scaling.
+        width = max(190, self.error.width(), self.error_banner.width() - 56)
+        bounds = self.error.fontMetrics().boundingRect(
+            QRect(0, 0, width, 20000), Qt.TextFlag.TextWordWrap, message
+        )
+        label_height = max(44, bounds.height() + 12)
+        self.error.setMinimumHeight(label_height)
+        self.error_banner.setMinimumHeight(label_height + 24)
+        self.error.updateGeometry()
+        self.error_banner.updateGeometry()
+        self.error_banner.layout().activate()
+        self.stage_scroll.widget().updateGeometry()
 
     def _clear_login_error(self, *_args):
         if self._pending:
