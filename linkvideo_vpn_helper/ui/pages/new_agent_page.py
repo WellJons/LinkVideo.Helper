@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 from PySide6.QtCore import Signal, Qt, QTimer
-from PySide6.QtGui import QGuiApplication, QPixmap
+from PySide6.QtGui import QGuiApplication, QIntValidator, QPixmap
 from PySide6.QtWidgets import (
     QAbstractSpinBox, QBoxLayout, QComboBox, QDialog, QGridLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget,
@@ -211,14 +211,33 @@ class NewAgentPage(QWidget):
         self.bitrate_current = QLabel("Получение текущего битрейта…")
         self.bitrate_current.setObjectName("Muted")
         bitrate_l.addWidget(self.bitrate_current)
+        # QSpinBox with hidden arrows rendered an empty white strip on
+        # Windows under the app theme. Keep it as a hidden validated numeric
+        # model for existing API/test callers; use a visible QLineEdit instead.
         self.bitrate = QSpinBox()
         self.bitrate.setObjectName("NewAgentBitrate")
         self.bitrate.setRange(1, 100000)
         self.bitrate.setValue(1024)
-        self.bitrate.setSuffix(" Кбит/с")
         self.bitrate.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        self.bitrate.setMinimumHeight(44)
+        self.bitrate.hide()
         bitrate_l.addWidget(self.bitrate)
+        self._bitrate_input_editing = False
+        bitrate_entry = QHBoxLayout()
+        bitrate_entry.setSpacing(9)
+        self.bitrate_input = QLineEdit("1024")
+        self.bitrate_input.setObjectName("NewAgentBitrateInput")
+        self.bitrate_input.setValidator(QIntValidator(1, 100000, self))
+        self.bitrate_input.setPlaceholderText("Например, 2048")
+        self.bitrate_input.setMinimumHeight(42)
+        self.bitrate_input.setFixedWidth(150)
+        self.bitrate_input.setToolTip("Битрейт основного потока от 1 до 100000 Кбит/с")
+        self.bitrate_input.textEdited.connect(self._on_bitrate_text_edited)
+        bitrate_entry.addWidget(self.bitrate_input)
+        bitrate_unit = QLabel("Кбит/с")
+        bitrate_unit.setObjectName("Muted")
+        bitrate_entry.addWidget(bitrate_unit)
+        bitrate_entry.addStretch(1)
+        bitrate_l.addLayout(bitrate_entry)
         preset_label = QLabel("Быстрый выбор битрейта")
         preset_label.setObjectName("TinyMuted")
         bitrate_l.addWidget(preset_label)
@@ -444,13 +463,15 @@ class NewAgentPage(QWidget):
         for tile in self.rotation_buttons:
             tile.setEnabled(found and not self._busy)
         self.bitrate.setEnabled(found and not self._busy)
+        self.bitrate_input.setEnabled(found and not self._busy)
         for _, preset in self.bitrate_presets:
             preset.setEnabled(found and not self._busy)
         ready = found and not self._busy and bool(action)
         if action == "rotation":
             ready = ready and self._image_enhance is not None
         if action == "bitrate":
-            ready = ready and self._video_streams is not None
+            ready = (ready and self._video_streams is not None
+                     and self.bitrate_input.hasAcceptableInput())
         self.ok_btn.setEnabled(ready)
 
     def _sync_rotation_buttons(self, *_):
@@ -462,8 +483,21 @@ class NewAgentPage(QWidget):
             tile.style().unpolish(tile)
             tile.style().polish(tile)
 
+    def _on_bitrate_text_edited(self, text: str):
+        if self.bitrate_input.hasAcceptableInput():
+            self._bitrate_input_editing = True
+            try:
+                self.bitrate.setValue(int(text))
+            finally:
+                self._bitrate_input_editing = False
+        self._sync_actions()
+
     def _sync_bitrate_presets(self, *_):
         current = self.bitrate.value()
+        if not self._bitrate_input_editing:
+            value_text = str(current)
+            if self.bitrate_input.text() != value_text:
+                self.bitrate_input.setText(value_text)
         for rate, tile in self.bitrate_presets:
             active = current == rate
             tile.setChecked(active)
@@ -577,7 +611,9 @@ class NewAgentPage(QWidget):
         value = args[action]
         if action == "rotation" and self._image_enhance is None:
             return
-        if action == "bitrate" and self._video_streams is None:
+        if action == "bitrate" and (
+            self._video_streams is None or not self.bitrate_input.hasAcceptableInput()
+        ):
             return
         check = ConfirmDialog(
             "Подтвердить настройки камеры",
