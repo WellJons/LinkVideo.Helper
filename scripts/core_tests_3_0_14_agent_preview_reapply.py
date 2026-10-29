@@ -55,6 +55,24 @@ with patch("linkvideo_vpn_helper.services.agent_b2o_preview.fetch_camera_preview
 regional = FakeB2O({1741: [{"id_camera": "89", "serialNumber": SERIAL}]})
 assert b2o_camera_for_serial(SERIAL, TOKEN, regional) == ("Беларусь", "89")
 assert len(regional.calls) == 2
+class DetailB2O:
+    def __init__(self):
+        self.reads = []
+
+    def request_json(self, url, token, headers, timeout):
+        assert token == TOKEN
+        self.reads.append(url)
+        if url.endswith("/operators/241/cameras"):
+            return {"data": [{"id_camera": 888}]}  # No serial in list row.
+        if url.endswith("/operators/241/cameras/888"):
+            return {"data": {"serial_number": SERIAL}}
+        return {"data": []}
+
+
+detail_b2o = DetailB2O()
+assert b2o_camera_for_serial(SERIAL, TOKEN, detail_b2o) == ("Россия", "888")
+assert len(detail_b2o.reads) == 2
+
 unknown = FakeB2O({241: [{"id_camera": 23, "serial_number": "WRONG"}]})
 assert b2o_camera_for_serial(SERIAL, TOKEN, unknown) is None
 for invalid in ("", "../password", "x" * 120):
