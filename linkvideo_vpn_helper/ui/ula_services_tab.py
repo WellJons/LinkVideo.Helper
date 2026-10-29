@@ -211,7 +211,12 @@ class UlaServicesTab(QWidget):
         self.message = QLabel("Подключение не выполняется автоматически. Выберите Ula.ini и введите пароль.")
         self.message.setObjectName("TinyMuted")
         self.message.setWordWrap(True)
-        root.addWidget(self.message)
+        # Show result/error feedback immediately below the page header,
+        # never below the long client and service tables outside the viewport.
+        self.message.setObjectName("UlaStatusMessage")
+        self.message.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.message.setMinimumHeight(34)
+        root.insertWidget(1, self.message)
         root.addStretch(1)
 
     def _import_ini(self):
@@ -244,7 +249,12 @@ class UlaServicesTab(QWidget):
         self._generation += 1
         number = self._generation
         self.state.set_status("Запрос…", "warning")
-        self.message.setText("Обращение к Oracle выполняется в фоновом потоке.")
+        action_name = {
+            "connect": "Проверка подключения",
+            "find": "Поиск клиента",
+            "services": "Загрузка услуг",
+        }.get(action, "Запрос Oracle")
+        self.message.setText(f"{action_name}: выполняется запрос…")
         for b in (self.import_button, self.test_button, self.find_button, self.fetch_button):
             b.setEnabled(False)
 
@@ -314,7 +324,12 @@ class UlaServicesTab(QWidget):
             b.setEnabled(True)
         if error:
             self.state.set_status("Ошибка", "warning")
-            self.message.setText(str(error))
+            action_name = {
+                "connect": "Подключение",
+                "find": "Поиск клиента",
+                "services": "Получение услуг",
+            }.get(action, "Oracle")
+            self.message.setText(f"{action_name}: {error}")
             return
         self.state.set_status("Подключено", "success")
         if action == "connect":
