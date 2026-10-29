@@ -157,6 +157,8 @@ assert not navigation_icon("new_agent").isNull()
 page = NewAgentPage(None, creds, service=service)
 assert page.findChild(QPushButton, "NewAgentFind") is not None
 assert page.findChild(QComboBox, "NewAgentAction") is not None
+assert len(page.action_buttons) == 3
+assert page.action_combo.isHidden()
 assert page.camera is None and page.actions_card.isHidden()
 page._on_ready(page._generation, "found", camera)
 assert page.camera is camera
@@ -164,7 +166,9 @@ assert page.camera_card.isHidden() is False
 assert page.result_summary.isHidden() is False
 assert page.copy_btn.isEnabled()
 assert serial in page.info.text()
-page.action_combo.setCurrentIndex(page.action_combo.findData("time"))
+next(tile for code, tile in page.action_buttons if code == "time").click()
+assert page.action_combo.currentData() == "time"
+assert next(tile for code, tile in page.action_buttons if code == "time").isChecked()
 assert page.timezone.currentData() == 7
 assert page.timezone.count() == 27
 assert page.ok_btn.isEnabled()
