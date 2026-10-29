@@ -93,7 +93,7 @@ def _oci_architecture(dll: Path) -> str:
             if not 64 <= offset <= 1024 * 1024:
                 return "unknown"
             f.seek(offset)
-            if f.read(4) != b"PE\\x00\\x00":
+            if f.read(4) != b"PE\x00\x00":
                 return "unknown"
             machine = struct.unpack("<H", f.read(2))[0]
         return {0x8664: "x64", 0x014c: "x86", 0xaa64: "arm64"}.get(machine, "unknown")
