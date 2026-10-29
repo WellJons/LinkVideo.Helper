@@ -10,7 +10,7 @@ import threading
 from datetime import date, datetime
 
 from PySide6.QtCore import QDate, QSettings, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QPixmap
+from PySide6.QtGui import QColor, QDesktopServices, QIntValidator, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QAbstractItemView, QAbstractSpinBox, QCalendarWidget, QCheckBox, QComboBox, QDateEdit,
     QDialog, QFormLayout, QMenu, QGridLayout, QHeaderView, QHBoxLayout,
@@ -220,7 +220,22 @@ class TariffCatalogDialog(QDialog):
         self.archive_days.setMinimumWidth(110)
         self.archive_days.setSpecialValueText("Любой срок")
         self.archive_days.setToolTip("Введите точное число дней; 0 — любой срок")
-        filter_row.addWidget(self.archive_days)
+        # Keep the existing QSpinBox as the validated filter model, but do not
+        # render its native Windows editor. With NoButtons it could show as an
+        # empty white strip even when the filter value was 7/14/30.
+        self.archive_days.hide()
+        self.archive_days_input = QLineEdit()
+        self.archive_days_input.setObjectName("TariffCatalogArchiveDaysInput")
+        self.archive_days_input.setPlaceholderText("Любой срок")
+        self.archive_days_input.setValidator(QIntValidator(0, 3660, self))
+        self.archive_days_input.setMaxLength(4)
+        self.archive_days_input.setFixedWidth(108)
+        self.archive_days_input.setMinimumHeight(42)
+        self.archive_days_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.archive_days_input.setToolTip("Количество дней хранения; пусто или 0 — любой срок")
+        self.archive_days_input.textEdited.connect(self._archive_days_input_changed)
+        self.archive_days.valueChanged.connect(self._archive_days_value_changed)
+        filter_row.addWidget(self.archive_days_input)
         main_l.addLayout(filter_row)
         quick_row = QHBoxLayout()
         quick_row.setSpacing(6)
@@ -384,6 +399,19 @@ class TariffCatalogDialog(QDialog):
             root.addLayout(actions)
         else:
             root.addWidget(close, 0, Qt.AlignmentFlag.AlignRight)
+
+    def _archive_days_input_changed(self, text: str):
+        # Only numeric user input changes the underlying filter. Empty input
+        # means "any retention period"; invalid intermediate text is ignored.
+        if text == "":
+            self.archive_days.setValue(0)
+        elif self.archive_days_input.hasAcceptableInput():
+            self.archive_days.setValue(int(text))
+
+    def _archive_days_value_changed(self, days: int):
+        visible = str(days) if days else ""
+        if self.archive_days_input.text() != visible:
+            self.archive_days_input.setText(visible)
 
     def _fill_rows(self, tariffs):
         selected = select_tariffs(
