@@ -136,6 +136,14 @@ class AgentService:
             response.raise_for_status()
             payload = response.json()
             page_rows = self._camera_rows(payload)
+            if not isinstance(payload, (dict, list)):
+                raise ValueError(f"agent-vcore {server}: некорректный формат списка камер.")
+            if isinstance(payload, dict) and payload and not page_rows and not any(
+                isinstance(payload.get(key), (list, dict))
+                for key in ("cameras", "cameraList", "camera_list", "items",
+                            "records", "data", "result", "list")
+            ):
+                raise ValueError(f"agent-vcore {server}: неизвестный формат ответа со списком камер.")
             new_count = 0
             for row in page_rows:
                 serial = self._serial_from_row(row)
