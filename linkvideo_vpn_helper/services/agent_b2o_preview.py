@@ -21,6 +21,17 @@ SERIAL_FIELDS = ("serial_number", "serialNumber", "SerialNumber",
                  "camera_serial", "camera_serial_number", "serial", "sn")
 
 
+def _has_serial_field(row: dict[str, Any]) -> bool:
+    if not isinstance(row, dict):
+        return False
+    records = [row]
+    for field in ("device", "camera", "agent"):
+        if isinstance(row.get(field), dict):
+            records.append(row[field])
+    return any(str(record.get(field) or "").strip()
+               for record in records for field in SERIAL_FIELDS)
+
+
 def _matching_id(row: dict[str, Any], serial: str) -> str:
     if not isinstance(row, dict):
         return ""
@@ -50,6 +61,7 @@ def b2o_camera_for_serial(serial: str, token: str, b2o: B2OService) -> tuple[str
     for operator, country in PREVIEW_OPERATORS:
         url = B2OService.CAMERAS_URL.format(operator=operator)
         try:
+            detail_checks = 0
             for page in range(1, 5):
                 payload = b2o.request_json(
                     url, token,
@@ -66,6 +78,32 @@ def b2o_camera_for_serial(serial: str, token: str, b2o: B2OService) -> tuple[str
                     camera_id = _matching_id(row, serial)
                     if camera_id:
                         return country, camera_id
+                    if not isinstance(row, dict) or _has_serial_field(row):
+                        continue
+                    # Search may omit the serial number in its brief rows.
+                    # Read at most three exact camera details and accept only
+                    # a verified serial; never assume a fuzzy search hit.
+                    candidate = str(row.get("id_camera") or "").strip()
+                    if not CAMERA_ID_PATTERN.fullmatch(candidate) or detail_checks >= 3:
+                        continue
+                    detail_checks += 1
+                    try:
+                        detail = b2o.request_json(
+                            B2OService.CAMERA_URL.format(
+                                operator=operator, camera=candidate
+                            ), token, {}, 12,
+                        )
+                        if not isinstance(detail, dict):
+                            continue
+                        data = detail.get("data", detail)
+                        details = data if isinstance(data, list) else [data]
+                        for record in details:
+                            if isinstance(record, dict) and _matching_id(
+                                {**record, "id_camera": candidate}, serial
+                            ):
+                                return country, candidate
+                    except Exception:
+                        continue
                 if len(items) < 50:
                     break
         except Exception:
