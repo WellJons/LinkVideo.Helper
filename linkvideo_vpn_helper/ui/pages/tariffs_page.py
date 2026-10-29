@@ -39,6 +39,7 @@ from linkvideo_vpn_helper.ui.components import (
 from linkvideo_vpn_helper.ui.dialogs import ConfirmDialog, style_helper_dialog
 from linkvideo_vpn_helper.ui.billing_login_panel import BillingLoginPanel
 from linkvideo_vpn_helper.ui.billing_all_tariffs import BillingAllTariffsWidget
+from linkvideo_vpn_helper.ui.ula_services_tab import UlaServicesTab
 
 
 BILLING_LOGIN_URL = "https://crm.linkvideo.ru/login"
@@ -611,6 +612,8 @@ class TariffsPage(QWidget):
         self.workspace_tabs.addTab(self.create_clients_tab, "Создать клиента")
         self.all_tariffs_page = BillingAllTariffsWidget(self.gateway, self)
         self.workspace_tabs.addTab(self.all_tariffs_page, "Все тарифы")
+        self.ula_services_tab = UlaServicesTab(self)
+        self.workspace_tabs.addTab(self.ula_services_tab, "Россия · Ula (тест)")
         root.addWidget(self.workspace_tabs, 1)
         root = clients_layout
 
