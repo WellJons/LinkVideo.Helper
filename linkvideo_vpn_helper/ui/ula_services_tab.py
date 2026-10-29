@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from linkvideo_vpn_helper.services.ula_connection import (
-    UlaConnectionDetails, create_ula_gateway, read_ula_ini,
+    UlaConnectionDetails, create_ula_gateway, read_ula_ini, ula_radius_configured,
 )
 from linkvideo_vpn_helper.services.ula_oracle_gateway import UlaReadError
 from linkvideo_vpn_helper.ui.components import Card, StatusPill
@@ -54,6 +54,7 @@ class UlaServicesTab(QWidget):
         self._generation = 0
         self._busy = False
         self._hits = ()
+        self._ula_config_dir = ""
         self._build()
         self.operationFinished.connect(self._finished)
 
@@ -114,7 +115,7 @@ class UlaServicesTab(QWidget):
         self.password = QLineEdit()
         self.password.setObjectName("UlaOraclePassword")
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
-        self.password.setPlaceholderText("Пароль учётной записи Oracle")
+        self.password.setPlaceholderText("Пароль сотрудника, используемый в Ula")
         self.password.setToolTip("Пароль не сохраняется и не отправляется в логи.")
         self.password.returnPressed.connect(self._test_connection)
 
@@ -134,9 +135,20 @@ class UlaServicesTab(QWidget):
 
         self.thick_client = QLineEdit()
         self.thick_client.setObjectName("UlaOracleInstantClient")
-        self.thick_client.setPlaceholderText("Необязательно: папка 64-bit Oracle Instant Client (для старых БД)")
-        self.thick_client.setToolTip("Oracle Thin не требует клиентских DLL; Thick — только при необходимости.")
-        setup.addWidget(self.thick_client)
+        self.thick_client.setPlaceholderText(
+            "Oracle Instant Client x64 (папка с oci.dll; необходим для RADIUS)"
+        )
+        self.thick_client.setToolTip(
+            "Для штатной авторизации Ula через RADIUS нужен Oracle Thick "
+            "с 64-битным Instant Client; 32-битный клиент Ula не подходит."
+        )
+        client_row = QHBoxLayout()
+        client_row.addWidget(self.thick_client, 1)
+        self.select_client_button = QPushButton("Обзор…")
+        self.select_client_button.setObjectName("UlaSelectOracleClient")
+        self.select_client_button.clicked.connect(self._choose_client_dir)
+        client_row.addWidget(self.select_client_button)
+        setup.addLayout(client_row)
 
         self.test_button = QPushButton("Проверить соединение")
         self.test_button.setObjectName("UlaTestConnection")
@@ -231,6 +243,14 @@ class UlaServicesTab(QWidget):
         root.insertWidget(1, self.message)
         root.addStretch(1)
 
+    def _choose_client_dir(self):
+        folder = QFileDialog.getExistingDirectory(
+            self, "Папка 64-битного Oracle Instant Client с oci.dll",
+            self.thick_client.text().strip() or str(Path.home()),
+        )
+        if folder:
+            self.thick_client.setText(folder)
+
     def _import_ini(self):
         file, _ = QFileDialog.getOpenFileName(
             self, "Выберите Ula.ini", str(Path.home()), "Ula.ini (Ula.ini);;INI (*.ini)"
@@ -246,7 +266,17 @@ class UlaServicesTab(QWidget):
         self.port.setText(str(settings.port))
         self.sid.setText(settings.sid)
         self.username.setText(settings.username)
-        self.message.setText("Параметры из Ula.ini загружены. Пароль необходимо ввести отдельно.")
+        self._ula_config_dir = str(Path(file).parent)
+        if ula_radius_configured(self._ula_config_dir):
+            self.message.setText(
+                "В конфигурации Ula найден RADIUS. Введите свой обычный пароль Ula "
+                "и выберите папку 64-битного Oracle Instant Client (oci.dll). "
+                "Администраторская учётная запись не нужна."
+            )
+        else:
+            self.message.setText(
+                "Параметры из Ula.ini загружены. Введите пароль сотрудника Ula."
+            )
 
     def _details(self):
         return UlaConnectionDetails(
@@ -267,7 +297,8 @@ class UlaServicesTab(QWidget):
             "services": "Загрузка услуг",
         }.get(action, "Запрос Oracle")
         self.message.setText(f"{action_name}: выполняется запрос…")
-        for b in (self.import_button, self.test_button, self.find_button, self.fetch_button):
+        for b in (self.import_button, self.select_client_button, self.test_button,
+                  self.find_button, self.fetch_button):
             b.setEnabled(False)
 
         def worker():
@@ -281,7 +312,8 @@ class UlaServicesTab(QWidget):
     def _make_gateway(self):
         return self._gateway_factory(
             self._details(), self.password.text(),
-            thick_client_dir=self.thick_client.text().strip()
+            thick_client_dir=self.thick_client.text().strip(),
+            config_dir=self._ula_config_dir,
         )
 
     def _test_connection(self):
@@ -332,7 +364,8 @@ class UlaServicesTab(QWidget):
         if generation != self._generation:
             return
         self._busy = False
-        for b in (self.import_button, self.test_button, self.find_button, self.fetch_button):
+        for b in (self.import_button, self.select_client_button, self.test_button,
+                  self.find_button, self.fetch_button):
             b.setEnabled(True)
         if error:
             self.state.set_status("Ошибка", "warning")
