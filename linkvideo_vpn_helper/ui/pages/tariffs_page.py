@@ -1391,7 +1391,9 @@ class TariffsPage(QWidget):
         client = self.client
         chosen_day = when.date().toPython()
         operator_comment = comment.text().strip()
-        fingerprint = (client.id, service.id, new_status, chosen_day, operator_comment)
+        # A changed comment must not bypass duplicate-write protection after
+        # an unknown response to the same status/date operation.
+        fingerprint = (client.id, service.id, new_status, chosen_day)
         if fingerprint in self._unknown_status_changes:
             self.task.warning(
                 "Проверьте статус",
