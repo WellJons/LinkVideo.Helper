@@ -46,6 +46,7 @@ class Session:
     def __init__(self):
         self.calls = []
         self.put_result = {"success": True, "response": 0}
+        self.transferred = False
     def get(self, url, **kwargs):
         self.calls.append(("GET", url, kwargs))
         if url.endswith("/accounts/149"):
@@ -56,10 +57,15 @@ class Session:
         if url.endswith("/accounts/149/cameras"):
             return Response({"success": True, "response": []})
         if url.endswith("/accounts/333/cameras"):
-            return Response({"success": True, "response": []})
+            rows = [] if self.transferred else [{
+                "id_camera": "304", "id_camera_vc": "299341",
+                "short_name": "Камера 1", "status": "0",
+            }]
+            return Response({"success": True, "response": rows})
         raise AssertionError("Unexpected GET: "+url)
     def put(self, url, **kwargs):
         self.calls.append(("PUT", url, kwargs))
+        self.transferred = self.put_result.get("success") is True and self.put_result.get("response") == 0
         return Response(self.put_result)
     def close(self):
         pass
@@ -113,6 +119,7 @@ for bad_recipient, bad_camera, move in (
         raise AssertionError("Unsafe transfer unexpectedly allowed")
     assert len([x for x in session.calls if x[0] == "PUT"]) == before
 
+session.transferred = False
 session.put_result = {"success": True, "response": 1}
 try:
     gateway.transfer_camera(client, "304", recipient)
