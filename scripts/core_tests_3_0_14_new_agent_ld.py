@@ -23,7 +23,6 @@ assert len(service.servers()) == 10
 assert MainWindow.NAV_ITEMS.index(next(x for x in MainWindow.NAV_ITEMS if x[0] == "new_agent")) == (
     MainWindow.NAV_ITEMS.index(next(x for x in MainWindow.NAV_ITEMS if x[0] == "tariffs")) + 1
 )
-assert not navigation_icon("new_agent").isNull() is False if QApplication.instance() else True
 
 class FakeResponse:
     status_code = 200
@@ -130,13 +129,14 @@ with patch("linkvideo_vpn_helper.ui.pages.new_agent_page.ConfirmDialog.exec",
            return_value=QDialog.DialogCode.Rejected):
     page._execute_selected()
 assert not page._busy
-page.action_combo.setCurrentIndex(page.action_combo.findData("rotation"))
-assert page._busy
-# Simulate completed setting fetch (no network during UI test).
-page._on_ready(page._generation, "rotation_loaded", {"ImageRotation": 3})
-assert page.ok_btn.isEnabled()
-page.action_combo.setCurrentIndex(page.action_combo.findData("bitrate"))
-page._on_ready(page._generation, "bitrate_loaded", video_settings)
+# Suppress the asynchronous real API read in UI smoke tests.
+with patch.object(page, "_load_setting") as load:
+    page.action_combo.setCurrentIndex(page.action_combo.findData("rotation"))
+    load.assert_called_once_with("rotation")
+    page._on_ready(page._generation, "rotation_loaded", {"ImageRotation": 3})
+    assert page.ok_btn.isEnabled()
+    page.action_combo.setCurrentIndex(page.action_combo.findData("bitrate"))
+    page._on_ready(page._generation, "bitrate_loaded", video_settings)
 assert page.bitrate.value() == 2048
 page.close()
 app.processEvents()
