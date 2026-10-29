@@ -125,6 +125,7 @@ app = QApplication.instance() or QApplication([])
 page = TariffsPage(gateway=gateway)
 page.client = client
 page._render_client(client)
+assert page.billing_dialog.property("helperModal") is True
 assert len(page._preview_widgets) == 1
 assert "44" in page._preview_widgets
 page._on_camera_preview(page._preview_generation, "333", "44", None)
@@ -136,6 +137,13 @@ with patch.object(QDialog, "exec", return_value=QDialog.DialogCode.Accepted):
 history = page.findChild(QTableWidget, "BillingCameraHistoryTable")
 assert history is not None and history.rowCount() == 1
 assert history.item(0, 5).text() == "Выключен"
+assert history.parentWidget().property("helperModal") is True
+with patch.object(QDialog, "exec", return_value=QDialog.DialogCode.Rejected):
+    page._change_camera_status(camera)
+    page._transfer_camera_preview(camera)
+for name in ("BillingCameraStatusDialog", "BillingTransferCameraDialog"):
+    modal = page.findChild(QDialog, name)
+    assert modal is not None and modal.property("helperModal") is True, name
 page.close()
 app.processEvents()
 print("CORE TESTS BILLING STATUS HISTORY AND B2O CAMERA PREVIEW CONTRACT OK")
