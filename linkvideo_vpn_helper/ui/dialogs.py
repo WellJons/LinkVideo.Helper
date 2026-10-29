@@ -7,21 +7,37 @@ from linkvideo_vpn_helper.services.server_registry import ServerRegistry
 from linkvideo_vpn_helper.ui.components import Card, CounterControl, StatusPill
 
 
+def style_helper_dialog(dialog: QDialog) -> QDialog:
+    """Shared branded Qt dialog surface; uses current global light/dark theme."""
+    dialog.setProperty("helperModal", True)
+    dialog.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    dialog.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
+    return dialog
+
+
 class ConfirmDialog(QDialog):
     def __init__(self, title: str, text: str, confirm_text: str = "Продолжить", danger: bool = False, parent=None):
         super().__init__(parent)
+        style_helper_dialog(self)
         self.setWindowTitle(title)
-        self.setMinimumWidth(440)
+        self.setMinimumWidth(480)
         root = QVBoxLayout(self)
-        root.setContentsMargins(20, 20, 20, 20)
-        root.setSpacing(14)
+        root.setContentsMargins(22, 22, 22, 20)
+        root.setSpacing(15)
         head = QLabel(title)
         head.setObjectName("SectionTitle")
+        head.setWordWrap(True)
+        body_card = Card(subtle=True)
+        body_card.setObjectName("DialogBody")
+        body_layout = QVBoxLayout(body_card)
+        body_layout.setContentsMargins(16, 14, 16, 14)
         body = QLabel(text)
-        body.setObjectName("Muted")
+        body.setObjectName("DialogDescription")
         body.setWordWrap(True)
+        body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        body_layout.addWidget(body)
         root.addWidget(head)
-        root.addWidget(body)
+        root.addWidget(body_card)
         row = QHBoxLayout()
         row.addStretch(1)
         cancel = QPushButton("Отмена")
@@ -37,6 +53,7 @@ class ConfirmDialog(QDialog):
 class AddServerDialog(QDialog):
     def __init__(self, registry: ServerRegistry, parent=None):
         super().__init__(parent)
+        style_helper_dialog(self)
         self.registry = registry
         self.server = None
         self.setWindowTitle("Добавить VPN-сервер")
@@ -67,6 +84,7 @@ class AddServerDialog(QDialog):
         pl.addWidget(self.preview_country)
         self.error = QLabel("")
         self.error.setObjectName("DangerText")
+        self.error.setWordWrap(True)
         buttons = QHBoxLayout()
         buttons.addStretch(1)
         cancel = QPushButton("Отмена")
@@ -114,6 +132,7 @@ class AddServerDialog(QDialog):
 class CountDialog(QDialog):
     def __init__(self, title: str, label: str, value: int = 1, minimum: int = 1, maximum: int = 14, parent=None):
         super().__init__(parent)
+        style_helper_dialog(self)
         self.setWindowTitle(title)
         self.setMinimumWidth(400)
         root = QVBoxLayout(self)
@@ -146,6 +165,7 @@ class CountDialog(QDialog):
 class PasswordDialog(QDialog):
     def __init__(self, generated: str, parent=None):
         super().__init__(parent)
+        style_helper_dialog(self)
         self.setWindowTitle("Смена пароля")
         self.setMinimumWidth(460)
         root = QVBoxLayout(self)
@@ -155,6 +175,7 @@ class PasswordDialog(QDialog):
         title.setObjectName("SectionTitle")
         info = QLabel("Пароль отображается открыто — его можно сверить перед применением.")
         info.setObjectName("Muted")
+        info.setWordWrap(True)
         self.input = QLineEdit(generated)
         row = QHBoxLayout()
         row.addStretch(1)
@@ -177,6 +198,7 @@ class PasswordDialog(QDialog):
 class B2OLoginDialog(QDialog):
     def __init__(self, saved_login: str = "", parent=None):
         super().__init__(parent)
+        style_helper_dialog(self)
         self.setWindowTitle("Авторизация B2O")
         self.setMinimumWidth(470)
         root = QVBoxLayout(self)
