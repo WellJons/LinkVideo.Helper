@@ -242,6 +242,31 @@ def get_theme_style(key: str = "rose_milk") -> str:
     QLabel#InfoText {{ color: {c['info']}; font-weight: 650; }}
 
 
+    /* Consistent themed operation dialogs across the whole desktop app.
+       A dialog opts in with helperModal=true and uses current light/dark colors. */
+    QDialog[helperModal="true"] {{
+        background: {c['panel']};
+        border: 1px solid {c['border2']};
+        border-radius: 16px;
+    }}
+    QDialog[helperModal="true"] QLabel#SectionTitle {{
+        font-size: 19px; font-weight: 750; color: {c['text']};
+    }}
+    QDialog[helperModal="true"] QLabel#DialogDescription {{
+        color: {c['text']}; font-size: 13px;
+    }}
+    QDialog[helperModal="true"] QFrame#DialogBody {{
+        background: {c['panel2']}; border: 1px solid {c['border']};
+        border-radius: 12px;
+    }}
+    QDialog[helperModal="true"] QPushButton {{
+        min-height: 42px;
+    }}
+    QScrollArea#LoginStageScroll,
+    QScrollArea#LoginStageScroll > QWidget > QWidget {{
+        background: transparent; border: none;
+    }}
+
     /* Modal operation state */
     QDialog#BusyDialog {{ background: transparent; }}
     QFrame#BusyDialogCard {{
