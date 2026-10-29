@@ -47,10 +47,10 @@ jobs:
         shell: pwsh
         run: ./scripts/verify_release.ps1
 
-      # RC builds do not use Actions artifacts. One private draft RC is replaced
-      # in-place, so quota and historical build clutter are not part of the
-      # release chain.
-      - name: Create or update private RC draft
+      # RC builds remain outside the stable updater channel. After all
+      # release checks pass, publish a prerelease installer that users can
+      # download directly for manual verification.
+      - name: Publish downloadable RC prerelease
         if: startsWith(github.ref, 'refs/heads/rc/')
         shell: pwsh
         env:
@@ -72,7 +72,7 @@ jobs:
           if ([string]$verification.setup_sha256 -ne $hash) {
             throw "RC verification SHA-256 does not match the uploaded Setup"
           }
-          $body = "Временная приватная RC-сборка LinkVideo.Helper $version.`n`nCommit: $env:GITHUB_SHA`nSHA-256: $hash`n`nСледующая успешная RC-проверка заменяет этот файл."
+          $body = "Тестовая RC-сборка LinkVideo.Helper $version.`n`nCommit: $env:GITHUB_SHA`nSHA-256: $hash`n`nСледующая успешная RC-проверка заменяет этот файл."
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -82,9 +82,9 @@ jobs:
           gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag $setup $report --repo $env:GITHUB_REPOSITORY --clobber
-            gh release edit $tag --repo $env:GITHUB_REPOSITORY --draft --prerelease --title "LinkVideo.Helper $version RC" --notes $body
+            gh release edit $tag --repo $env:GITHUB_REPOSITORY --draft=false --prerelease --title "LinkVideo.Helper $version RC" --notes $body
           } else {
-            gh release create $tag $setup $report --repo $env:GITHUB_REPOSITORY --draft --prerelease --target $env:GITHUB_SHA --title "LinkVideo.Helper $version RC" --notes $body
+            gh release create $tag $setup $report --repo $env:GITHUB_REPOSITORY --prerelease --target $env:GITHUB_SHA --title "LinkVideo.Helper $version RC" --notes $body
           }
 
       # A real version tag is the final private draft gate. Public publication is

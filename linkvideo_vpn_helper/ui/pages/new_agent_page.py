@@ -3,21 +3,25 @@ from __future__ import annotations
 """Camera settings for LD devices found through authenticated agent-vcore."""
 
 import threading
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Signal, Qt, QTimer
+from PySide6.QtGui import QGuiApplication, QPixmap
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+    QBoxLayout, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QSpinBox, QVBoxLayout, QWidget,
 )
 
 from linkvideo_vpn_helper.services.agent_service import AgentCamera, AgentService
+from linkvideo_vpn_helper.services.archive_service_core import B2OService
+from linkvideo_vpn_helper.services.agent_b2o_preview import load_b2o_preview_for_serial
 from linkvideo_vpn_helper.ui.components import (
-    Card, PageHeader, StatusPill, TaskStatus, build_page_scaffold,
+    Card, PageHeader, StatusPill, TaskStatus, WorkflowStep, button_feedback, build_page_scaffold,
 )
 from linkvideo_vpn_helper.ui.dialogs import ConfirmDialog
 
 
 class NewAgentPage(QWidget):
     operationReady = Signal(int, str, object)
+    cameraPreviewReady = Signal(int, str, object)
     ACTIONS = (
         ("Выберите действие", ""),
         ("Настроить дату, время и NTP", "time"),
@@ -38,31 +42,35 @@ class NewAgentPage(QWidget):
         self.camera: AgentCamera | None = None
         self._busy = False
         self._generation = 0
+        self._preview_request = 0
         self._image_enhance = None
         self._video_streams = None
         self.operationReady.connect(self._on_ready)
+        self.cameraPreviewReady.connect(self._on_preview_ready)
         self._build()
 
     def _build(self):
-        _, _, outer = build_page_scaffold(
-            self, max_width=1190, min_width=760, margins=26, spacing=14
+        scroll, canvas, outer = build_page_scaffold(
+            self, max_width=1360, min_width=760, margins=28, spacing=16
         )
+        self.page_scroll = scroll
+        self.page_canvas = canvas
         outer.addWidget(PageHeader(
             "Новый Агент",
             "Поиск LD-камер по серийному номеру и управление настройками через agent-vcore."
         ))
 
-        search = Card(kind="hero")
-        search.setObjectName("NewAgentSearchCard")
-        root = QVBoxLayout(search)
-        root.setContentsMargins(20, 18, 20, 18)
-        root.setSpacing(12)
-        heading = QLabel("Найти камеру")
-        heading.setObjectName("SectionTitle")
-        root.addWidget(heading)
-        hint = QLabel("Укажите serial_number камеры. Сервер агента определится автоматически.")
-        hint.setObjectName("Muted")
-        root.addWidget(hint)
+        self.workspace = QBoxLayout(QBoxLayout.Direction.LeftToRight)
+        self.workspace.setSpacing(16)
+        form = Card(kind="hero")
+        root = QVBoxLayout(form)
+        root.setContentsMargins(22, 20, 22, 22)
+        root.setSpacing(15)
+
+        root.addWidget(WorkflowStep(
+            1, "Поиск камеры",
+            "Укажите серийный номер LD-камеры. Сервер агента определится автоматически."
+        ))
         row = QHBoxLayout()
         row.setSpacing(9)
         self.serial = QLineEdit()
@@ -79,17 +87,15 @@ class NewAgentPage(QWidget):
         row.addWidget(self.serial, 1)
         row.addWidget(self.find_btn)
         root.addLayout(row)
-        outer.addWidget(search)
 
-        self.camera_card = Card()
-        self.camera_card.setObjectName("NewAgentCameraCard")
+        self.camera_card = Card(kind="success")
         cam = QVBoxLayout(self.camera_card)
-        cam.setContentsMargins(20, 16, 20, 16)
-        cam.setSpacing(10)
+        cam.setContentsMargins(16, 14, 16, 14)
+        cam.setSpacing(9)
         cam_top = QHBoxLayout()
         cam_title = QLabel("Найденная камера")
-        cam_title.setObjectName("SectionTitle")
-        self.camera_pill = StatusPill("Подключена", "success")
+        cam_title.setObjectName("CardTitle")
+        self.camera_pill = StatusPill("Камера найдена", "success")
         cam_top.addWidget(cam_title, 1)
         cam_top.addWidget(self.camera_pill)
         cam.addLayout(cam_top)
@@ -98,20 +104,17 @@ class NewAgentPage(QWidget):
         self.info.setWordWrap(True)
         self.info.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         cam.addWidget(self.info)
-        outer.addWidget(self.camera_card)
+        root.addWidget(self.camera_card)
 
-        self.actions_card = Card(kind="hero")
+        self.actions_card = QWidget()
         self.actions_card.setObjectName("NewAgentActionsCard")
         work = QVBoxLayout(self.actions_card)
-        work.setContentsMargins(20, 17, 20, 19)
+        work.setContentsMargins(0, 4, 0, 0)
         work.setSpacing(12)
-        heading = QLabel("Настройки камеры")
-        heading.setObjectName("SectionTitle")
-        work.addWidget(heading)
-        caption = QLabel("Выберите параметр. Текущее значение загрузится до изменения.")
-        caption.setObjectName("Muted")
-        caption.setWordWrap(True)
-        work.addWidget(caption)
+        work.addWidget(WorkflowStep(
+            2, "Настройки камеры",
+            "Выберите параметр. Текущее значение загрузится перед изменением."
+        ))
         self.action_combo = QComboBox()
         self.action_combo.setObjectName("NewAgentAction")
         self.action_combo.setMinimumHeight(43)
@@ -123,7 +126,9 @@ class NewAgentPage(QWidget):
         time_l = QVBoxLayout(self.time_row)
         time_l.setContentsMargins(14, 12, 14, 12)
         time_l.setSpacing(8)
-        time_l.addWidget(QLabel("Часовой пояс камеры"))
+        tz_label = QLabel("Часовой пояс камеры")
+        tz_label.setObjectName("TinyMuted")
+        time_l.addWidget(tz_label)
         self.timezone = QSpinBox()
         self.timezone.setObjectName("NewAgentTimezone")
         self.timezone.setRange(-12, 14)
@@ -131,7 +136,7 @@ class NewAgentPage(QWidget):
         self.timezone.setSuffix(" UTC")
         self.timezone.setMinimumHeight(43)
         time_l.addWidget(self.timezone)
-        ntp = QLabel("Синхронизация времени с ntp.goodline.info · каждые 3600 секунд")
+        ntp = QLabel("Синхронизация с ntp.goodline.info · каждые 3600 секунд")
         ntp.setObjectName("TinyMuted")
         ntp.setWordWrap(True)
         time_l.addWidget(ntp)
@@ -169,26 +174,189 @@ class NewAgentPage(QWidget):
         work.addWidget(self.bitrate_row)
 
         button_row = QHBoxLayout()
+        self.refresh_setting_btn = QPushButton("Обновить настройки")
+        self.refresh_setting_btn.setObjectName("NewAgentReloadSettings")
+        self.refresh_setting_btn.clicked.connect(self._refresh_selected_setting)
+        button_row.addWidget(self.refresh_setting_btn)
         button_row.addStretch(1)
         self.ok_btn = QPushButton("Применить настройки")
         self.ok_btn.setObjectName("NewAgentApply")
         self.ok_btn.setProperty("role", "primary")
-        self.ok_btn.setMinimumHeight(43)
+        self.ok_btn.setMinimumHeight(46)
         self.ok_btn.clicked.connect(self._execute_selected)
         button_row.addWidget(self.ok_btn)
         work.addLayout(button_row)
-        outer.addWidget(self.actions_card)
+        root.addWidget(self.actions_card)
 
         self.status = TaskStatus()
         self.status.setObjectName("NewAgentStatus")
         self.status.hide()
-        outer.addWidget(self.status)
-        outer.addStretch(1)
+        root.addWidget(self.status)
+        root.addStretch(1)
+        self.workspace.addWidget(form, 6)
 
+        self.result = Card()
+        side = QVBoxLayout(self.result)
+        side.setContentsMargins(22, 20, 22, 22)
+        side.setSpacing(12)
+        result_title = QLabel("Статус и данные")
+        result_title.setObjectName("SectionTitle")
+        side.addWidget(result_title)
+        result_hint = QLabel(
+            "Здесь отображаются найденная камера, её сервер и результат последнего действия."
+        )
+        result_hint.setObjectName("Muted")
+        result_hint.setWordWrap(True)
+        side.addWidget(result_hint)
+
+        self.preview_label = QLabel("Превью появится после поиска")
+        self.preview_label.setObjectName("NewAgentCameraPreview")
+        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_label.setWordWrap(True)
+        self.preview_label.setMinimumHeight(190)
+        self.preview_label.setMaximumHeight(245)
+        self.preview_label.setStyleSheet(
+            "QLabel#NewAgentCameraPreview { background: palette(alternate-base);"
+            " color: palette(mid); border: 1px solid palette(midlight);"
+            " border-radius: 10px; padding: 7px; }"
+        )
+        self.preview_label.hide()
+        side.addWidget(self.preview_label)
+        self.preview_btn = QPushButton("Обновить кадр")
+        self.preview_btn.setObjectName("NewAgentRefreshPreview")
+        self.preview_btn.setEnabled(False)
+        self.preview_btn.hide()
+        self.preview_btn.clicked.connect(self._start_preview)
+        side.addWidget(self.preview_btn, 0, Qt.AlignmentFlag.AlignRight)
+
+        self.result_empty = Card(subtle=True)
+        self.result_empty.setObjectName("CreateResultEmpty")
+        empty = QVBoxLayout(self.result_empty)
+        empty.setContentsMargins(14, 30, 14, 30)
+        empty.setSpacing(9)
+        empty.addStretch(1)
+        self.result_symbol = QLabel("◇")
+        self.result_symbol.setObjectName("CreateEmptySymbol")
+        self.result_symbol.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty.addWidget(self.result_symbol)
+        self.side_result_title = QLabel("Камера ещё не выбрана")
+        self.side_result_title.setObjectName("CardTitle")
+        self.side_result_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.side_result_title.setWordWrap(True)
+        empty.addWidget(self.side_result_title)
+        self.side_result_hint = QLabel("Введите серийный номер и нажмите «Найти камеру»")
+        self.side_result_hint.setObjectName("TinyMuted")
+        self.side_result_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.side_result_hint.setWordWrap(True)
+        empty.addWidget(self.side_result_hint)
+        empty.addStretch(1)
+        self.result_empty.setMinimumHeight(230)
+        side.addWidget(self.result_empty, 1)
+
+        self.result_summary = Card(subtle=True)
+        summary_l = QVBoxLayout(self.result_summary)
+        summary_l.setContentsMargins(16, 15, 16, 15)
+        summary_l.setSpacing(8)
+        self.summary_status = StatusPill("Камера подключена", "success")
+        summary_l.addWidget(self.summary_status, 0, Qt.AlignmentFlag.AlignLeft)
+        self.summary_data = QLabel("")
+        self.summary_data.setObjectName("Value")
+        self.summary_data.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.summary_data.setWordWrap(True)
+        summary_l.addWidget(self.summary_data)
+        side.addWidget(self.result_summary, 1)
+        self.copy_btn = QPushButton("Копировать данные")
+        self.copy_btn.setObjectName("NewAgentCopy")
+        self.copy_btn.clicked.connect(self._copy_data)
+        self.copy_btn.setEnabled(False)
+        side.addWidget(self.copy_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        self.workspace.addWidget(self.result, 4)
+
+        outer.addLayout(self.workspace)
+        outer.addStretch(1)
         self.action_combo.currentIndexChanged.connect(self._action_changed)
         self.camera_card.hide()
         self.actions_card.hide()
+        self.result_summary.hide()
         self._action_changed()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "workspace"):
+            direction = (
+                QBoxLayout.Direction.TopToBottom if self.width() < 1060
+                else QBoxLayout.Direction.LeftToRight
+            )
+            self.workspace.setDirection(direction)
+
+    def _start_preview(self):
+        if not self.camera:
+            return
+        token = ""
+        if self.settings is not None:
+            token = str(self.settings.value("b2o/token", "", str) or "").strip()
+        self._preview_request += 1
+        generation = self._preview_request
+        serial = self.camera.serial_number
+        self.preview_label.setPixmap(QPixmap())
+        self.preview_label.setText("Загрузка превью…")
+        self.preview_label.show()
+        self.preview_btn.show()
+        self.preview_btn.setEnabled(True)
+        if not token:
+            self.preview_label.setText(
+                "Для превью войдите в B2O в разделе «Скачать архив»."
+            )
+            return
+
+        def work():
+            try:
+                # B2O authorization is reused; only an exact serial match is accepted.
+                result = load_b2o_preview_for_serial(
+                    serial, token, B2OService(self.settings)
+                )
+            except Exception:
+                result = None
+            self.cameraPreviewReady.emit(generation, serial, result)
+        self._spawn(work)
+
+    def _on_preview_ready(self, request_id, serial, payload):
+        if (request_id != self._preview_request or self.camera is None
+                or self.camera.serial_number != serial):
+            return
+        if payload is not None:
+            country, camera_id, raw = payload
+            if isinstance(raw, bytes):
+                pixmap = QPixmap()
+                if pixmap.loadFromData(raw):
+                    self.preview_label.setPixmap(pixmap.scaled(
+                        self.preview_label.size(),
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    ))
+                    self.preview_label.setToolTip(
+                        f"B2O: {country} · ID камеры {camera_id}"
+                    )
+                    self.preview_label.setText("")
+                    return
+        self.preview_label.setPixmap(QPixmap())
+        self.preview_label.setText(
+            "Превью недоступно. Проверьте авторизацию B2O и наличие камеры у оператора."
+        )
+
+    def _copy_data(self):
+        if not self.camera:
+            return
+        camera = self.camera
+        text = (
+            f"Серийный номер: {camera.serial_number}\n"
+            f"Agent-vcore: {camera.server}\n"
+            f"Устройство: {camera.vendor or '—'} · {camera.model or '—'}\n"
+            f"Версия агента: {camera.version_text}\n"
+            f"Подключение: {camera.connect_time or '—'}"
+        )
+        QGuiApplication.clipboard().setText(text)
+        button_feedback(self.copy_btn)
 
     def _sync_actions(self):
         found = self.camera is not None
@@ -197,7 +365,11 @@ class NewAgentPage(QWidget):
         self.serial.setEnabled(not self._busy)
         self.camera_card.setVisible(found)
         self.actions_card.setVisible(found)
+        self.copy_btn.setEnabled(found)
         self.action_combo.setEnabled(found and not self._busy)
+        self.refresh_setting_btn.setEnabled(
+            found and not self._busy and action in ("rotation", "bitrate")
+        )
         self.timezone.setEnabled(found and not self._busy)
         self.rotation_combo.setEnabled(found and not self._busy)
         self.bitrate.setEnabled(found and not self._busy)
@@ -224,6 +396,12 @@ class NewAgentPage(QWidget):
                 self._load_setting("bitrate")
         self._sync_actions()
 
+    def _refresh_selected_setting(self):
+        if self.camera and not self._busy:
+            action = self.action_combo.currentData()
+            if action in ("rotation", "bitrate"):
+                self._load_setting(action)
+
     def _set_busy(self, busy: bool, title="", detail=""):
         self._busy = busy
         if busy:
@@ -243,6 +421,10 @@ class NewAgentPage(QWidget):
             self.status.warning("Не указан серийный номер", "Введите serial_number камеры LD.")
             return
         self._generation += 1
+        self._preview_request += 1
+        self.preview_label.hide()
+        self.preview_btn.hide()
+        self.preview_btn.setEnabled(False)
         request_id = self._generation
         self.camera = None
         self._image_enhance = None
@@ -250,13 +432,19 @@ class NewAgentPage(QWidget):
         self.action_combo.blockSignals(True)
         self.action_combo.setCurrentIndex(0)
         self.action_combo.blockSignals(False)
+        self.result_summary.hide()
+        self.result_empty.show()
+        self.result_symbol.setText("…")
+        self.side_result_title.setText("Поиск камеры")
+        self.side_result_hint.setText("Запрашиваю список камер на agent-vcore")
         self._set_busy(True, "Поиск камеры", "Проверяю список agent-vcore.")
         def work():
             try:
                 payload = self.service.find_camera(serial)
                 self.operationReady.emit(request_id, "found", payload)
             except Exception as exc:
-                self.operationReady.emit(request_id, "error", ("Камера не найдена", str(exc)))
+                label = "Камера не найдена" if isinstance(exc, LookupError) else "Поиск не завершён"
+                self.operationReady.emit(request_id, "error", (label, str(exc)))
         self._spawn(work)
 
     def _load_setting(self, action):
@@ -311,6 +499,7 @@ class NewAgentPage(QWidget):
         self._set_busy(True, title, camera.serial_number)
         def work():
             try:
+                fresh = None
                 if action == "time":
                     replies = self.service.configure_time(camera, value)
                     detail = "Time → NTP → SyncMode · HTTP " + ", ".join(
@@ -319,10 +508,18 @@ class NewAgentPage(QWidget):
                 elif action == "rotation":
                     before, after = self.service.set_image_rotation(camera, old_image, value)
                     detail = f"Ориентация: {self._rotation_label(before)} → {self._rotation_label(after)}"
+                    try:
+                        fresh = self.service.get_image_enhance(camera)
+                    except Exception:
+                        fresh = None  # A read error does not undo a confirmed write.
                 else:
                     before, after = self.service.set_bitrate(camera, old_video, value)
                     detail = f"Битрейт: {before} → {after} Кбит/с"
-                self.operationReady.emit(request_id, "done", (title, detail))
+                    try:
+                        fresh = self.service.get_video_streams(camera)
+                    except Exception:
+                        fresh = None
+                self.operationReady.emit(request_id, "done", (title, detail, action, fresh))
             except Exception as exc:
                 self.operationReady.emit(request_id, "error", ("Настройки не применены", str(exc)))
         self._spawn(work)
@@ -348,7 +545,17 @@ class NewAgentPage(QWidget):
                 f"Устройство: {c.vendor or '—'} · {c.model or '—'}\n"
                 f"Версия агента: {c.version_text} · Подключение: {c.connect_time or '—'}"
             )
+            self.result_empty.hide()
+            self.result_summary.show()
+            self.summary_status.set_status("Камера найдена", "success")
+            self.summary_data.setText(
+                f"Сервер\n{c.server}\n\n"
+                f"Устройство\n{c.vendor or '—'} · {c.model or '—'}\n\n"
+                f"Статус\nПодключена\n\n"
+                f"Версия агента\n{c.version_text}"
+            )
             self.status.done("Камера найдена", c.serial_number)
+            self._start_preview()
         elif kind == "rotation_loaded":
             self._image_enhance = payload
             value = int(payload.get("ImageRotation", -1))
@@ -368,13 +575,41 @@ class NewAgentPage(QWidget):
                 self._video_streams = None
                 self.status.error("Ошибка чтения битрейта", str(exc))
         elif kind == "done":
-            title, detail = payload
+            title, detail, action, fresh = payload
             self.status.done(title + " · выполнено", detail)
-            if self.action_combo.currentData() == "rotation":
-                self._image_enhance = None
-            if self.action_combo.currentData() == "bitrate":
-                self._video_streams = None
+            self.summary_status.set_status("Настройки применены", "success")
+            if action == "rotation":
+                self._image_enhance = fresh
+                if isinstance(fresh, dict):
+                    rotation = int(fresh.get("ImageRotation", -1))
+                    self.rotation_current.setText(
+                        "Сейчас: " + self._rotation_label(rotation)
+                    )
+                    idx = self.rotation_combo.findData(rotation)
+                    if idx >= 0:
+                        self.rotation_combo.setCurrentIndex(idx)
+                self._start_preview()
+            elif action == "bitrate":
+                self._video_streams = fresh
+                if isinstance(fresh, dict):
+                    try:
+                        rate = int(self.service._main_video_encode_info(fresh)["BitRate"])
+                        self.bitrate_current.setText(f"Сейчас: {rate} Кбит/с")
+                        self.bitrate.setValue(rate)
+                    except (TypeError, KeyError, ValueError):
+                        self._video_streams = None
+            if action in ("rotation", "bitrate") and fresh is None:
+                # Re-read current state without repeating camera discovery.
+                QTimer.singleShot(0, lambda name=action: self._load_setting(name))
         else:
             title, detail = payload
             self.status.error(title, detail)
+            if self.camera is None:
+                self.result_summary.hide()
+                self.result_empty.show()
+                self.result_symbol.setText("×")
+                self.side_result_title.setText(title)
+                self.side_result_hint.setText(detail)
+            else:
+                self.summary_status.set_status("Ошибка операции", "danger")
         self._sync_actions()
