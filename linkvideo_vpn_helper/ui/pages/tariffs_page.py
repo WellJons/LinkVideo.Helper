@@ -316,6 +316,24 @@ class TariffCatalogDialog(QDialog):
 
         root.addWidget(tabs, 1)
         if service is not None:
+            # Original CRM has a comment field, but observed tariff PUT only
+            # sends "date". Do not silently discard typed comments.
+            comment_row = QVBoxLayout()
+            comment_row.setSpacing(4)
+            comment_row.addWidget(QLabel("Комментарий (необязательно)"))
+            self.comment_edit = QLineEdit()
+            self.comment_edit.setObjectName("BillingTariffComment")
+            self.comment_edit.setMaxLength(500)
+            self.comment_edit.setPlaceholderText("Причина изменения тарифа")
+            comment_row.addWidget(self.comment_edit)
+            disclaimer = QLabel(
+                "Передача комментариев ещё не подтверждена в API. "
+                "С комментарием программа не отправит изменение."
+            )
+            disclaimer.setObjectName("TinyMuted")
+            disclaimer.setWordWrap(True)
+            comment_row.addWidget(disclaimer)
+            root.addLayout(comment_row)
             note = QLabel(
                 "Изменение будет отправлено в биллинг после отдельного подтверждения."
             )
@@ -466,7 +484,7 @@ class TariffCatalogDialog(QDialog):
         tariff = self._visible_tariffs[row]
         return validate_tariff_change(
             client, self.service, TariffOption(tariff.id, tariff.name),
-            self._chosen_date.toPython(), "",
+            self._chosen_date.toPython(), self.comment_edit.text().strip(),
         )
 
     def _copy_selection(self):
@@ -1286,7 +1304,7 @@ class TariffsPage(QWidget):
         style_helper_dialog(dialog)
         dialog.setObjectName("BillingCameraStatusDialog")
         dialog.setWindowTitle(f"{verb} камеру · LinkVideo.Helper")
-        dialog.resize(550, 415)
+        dialog.resize(550, 485)
         dialog.setMinimumWidth(510)
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(22, 20, 22, 20)
@@ -1339,6 +1357,19 @@ class TariffsPage(QWidget):
         when.setMinimumDate(QDate.currentDate())
         when.setMinimumHeight(43)
         layout.addWidget(when)
+        layout.addWidget(QLabel("Комментарий (необязательно)"))
+        comment = QLineEdit()
+        comment.setObjectName("BillingCameraStatusComment")
+        comment.setMaxLength(500)
+        comment.setPlaceholderText("Причина изменения статуса")
+        layout.addWidget(comment)
+        comment_note = QLabel(
+            "Комментарий пока не поддержан подтверждённым API-запросом. "
+            "Если заполнить его, операция не будет отправлена."
+        )
+        comment_note.setObjectName("TinyMuted")
+        comment_note.setWordWrap(True)
+        layout.addWidget(comment_note)
         help_text = QLabel(
             "Изменение статуса будет отправлено в биллинг только "
             "после подтверждения."
@@ -1359,6 +1390,13 @@ class TariffsPage(QWidget):
         actions.addWidget(submit)
         layout.addLayout(actions)
         if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        if comment.text().strip():
+            self.task.warning(
+                "Комментарий не отправлен",
+                "CRM-запрос статуса подтверждён только с полями status и date. "
+                "Для комментария требуется уточнить параметр API."
+            )
             return
         client = self.client
         chosen_day = when.date().toPython()
@@ -1991,6 +2029,12 @@ class TariffsPage(QWidget):
         if tariff is None:
             self.task.warning("Неверный тариф", "Тариф другой страны.")
             return
+        if example.comment:
+            self.task.warning(
+                "Комментарий не отправлен",
+                "Неизвестен параметр комментария в API изменения тарифа."
+            )
+            return
         changes = tuple(
             validate_tariff_change(
                 client, service, TariffOption(tariff.id, tariff.name),
@@ -2067,6 +2111,13 @@ class TariffsPage(QWidget):
             return
         if service not in client.services or change.client_id != client.id or change.service_id != service.id:
             self.task.warning("Камера изменилась", "Повторно откройте клиента.")
+            return
+        if change.comment:
+            self.task.warning(
+                "Комментарий не отправлен",
+                "Смена тарифа с комментарием не выполняется: "
+                "его поле отсутствует в подтверждённом PUT-запросе."
+            )
             return
         choice = next((t for t in visible_tariffs if t.id == change.tariff_id), None)
         if choice is None or choice.country != client.country:
