@@ -286,11 +286,13 @@ jobs:
         run: |
           TAG="${{ steps.release.outputs.tag }}"
           VERSION="${{ steps.release.outputs.version }}"
-          MANIFEST_URL="https://raw.githubusercontent.com/$UPDATES_REPO/main/update-manifest.json"
+          API_URL="repos/$UPDATES_REPO/contents/update-manifest.json"
           DOWNLOAD_URL="https://github.com/$UPDATES_REPO/releases/download/$TAG/$SETUP_NAME"
           VERIFIED=0
           for attempt in {1..12}; do
-            if curl --fail --silent --show-error --location "$MANIFEST_URL?release=$TAG&attempt=$attempt" -o /tmp/update-manifest.json \
+            # GitHub API reflects the committed manifest even while the raw CDN
+            # still serves an older cached response.
+            if gh api "$API_URL" --jq '.content' | base64 -d > /tmp/update-manifest.json \
               && python3 - "$VERSION" "$DOWNLOAD_URL" "$SETUP_SHA256" <<'PY'
           import json
           import pathlib
