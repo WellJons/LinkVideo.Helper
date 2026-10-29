@@ -1110,15 +1110,17 @@ class TariffsPage(QWidget):
             thumb = QLabel("Нет\nпревью")
             thumb.setObjectName("BillingCameraPreview")
             thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            thumb.setFixedSize(70, 58)
+            thumb.setFixedSize(104, 72)
             thumb.setToolTip(
                 f"B2O ID камеры: {service.camera_vc_id or 'неизвестен'}. "
                 "Получаем миниатюру через preview_path."
             )
             self._preview_widgets[service.id] = thumb
             thumb.setStyleSheet(
-                "QLabel#BillingCameraPreview { background: #e9edf2; "
-                "color: #7b8591; border: 1px solid #dce1e7; border-radius: 7px; }"
+                "QLabel#BillingCameraPreview {"
+                "background: palette(alternate-base); color: palette(mid);"
+                "border: 1px solid palette(midlight); border-radius: 10px;"
+                "padding: 2px; }"
             )
             cam_row.addWidget(thumb)
             details = QVBoxLayout()
@@ -1133,7 +1135,7 @@ class TariffsPage(QWidget):
             details.addLayout(title_row)
             tariff_label = QLabel(
                 f"Тариф: {service.tariff_name or '—'}"
-                f"   ·   ID камеры: {service.camera_id}"
+                f"   ·   ID админки: {service.camera_vc_id or '—'}"
             )
             tariff_label.setObjectName("Muted")
             tariff_label.setWordWrap(True)
@@ -1157,11 +1159,11 @@ class TariffsPage(QWidget):
                 lambda _checked=False, srv=service: self._request_service_catalog(srv)
             )
             cam_row.addWidget(change_button)
-            other = QPushButton("⋯")
+            other = QPushButton("Действия ▾")
             other.setObjectName("BillingCameraOtherActions")
-            other.setToolTip("Отключить, передать, история изменений")
+            other.setToolTip("Статус камеры, передача и история изменений")
             other.setProperty("role", "soft")
-            other.setFixedWidth(42)
+            other.setMinimumWidth(104)
             other.setMinimumHeight(42)
             popup = QMenu(other)
             for label in ("Включить / отключить", "Передать камеру", "История изменений", "Скидка"):
