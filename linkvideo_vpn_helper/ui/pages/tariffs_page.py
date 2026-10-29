@@ -36,7 +36,7 @@ from linkvideo_vpn_helper.services.billing_gateway import (
 from linkvideo_vpn_helper.ui.components import (
     Card, PageHeader, StatusPill, TaskStatus, build_page_scaffold,
 )
-from linkvideo_vpn_helper.ui.dialogs import ConfirmDialog
+from linkvideo_vpn_helper.ui.dialogs import ConfirmDialog, style_helper_dialog
 from linkvideo_vpn_helper.ui.billing_login_panel import BillingLoginPanel
 from linkvideo_vpn_helper.ui.billing_all_tariffs import BillingAllTariffsWidget
 
@@ -53,6 +53,7 @@ class ChangeTariffDialog(QDialog):
 
     def __init__(self, service: BillingService, options: tuple[TariffOption, ...], parent=None):
         super().__init__(parent)
+        style_helper_dialog(self)
         self.setWindowTitle("Сменить тариф")
         self.setMinimumWidth(450)
         self.setObjectName("ChangeTariffDialog")
@@ -117,6 +118,7 @@ class TariffCatalogDialog(QDialog):
                  parent=None, *, service: BillingService | None = None,
                  selected_count: int = 1):
         super().__init__(parent)
+        style_helper_dialog(self)
         self.setObjectName("TariffCatalogDialog")
         self.setWindowTitle("Подбор тарифа" if service else "Справочник тарифов")
         self.resize(850, 630 if service else 600)
@@ -377,6 +379,7 @@ class TariffCatalogDialog(QDialog):
     def _open_date_calendar(self):
         """Standalone calendar, never clipped by a popup/scroll area."""
         picker = QDialog(self)
+        style_helper_dialog(picker)
         picker.setObjectName("TariffStandaloneCalendar")
         picker.setWindowTitle("Дата изменения тарифа")
         picker.setMinimumSize(410, 350)
@@ -396,6 +399,7 @@ class TariffCatalogDialog(QDialog):
         cancel = QPushButton("Отмена")
         cancel.clicked.connect(picker.reject)
         confirm = QPushButton("Выбрать дату")
+        confirm.setProperty("role", "primary")
         confirm.clicked.connect(picker.accept)
         buttons.addWidget(cancel)
         buttons.addWidget(confirm)
@@ -493,6 +497,7 @@ class TariffsPage(QWidget):
         # entered into the same styled form, but an unrelated B2O token cannot
         # simply be reused against the CRM host.
         self.billing_dialog = QDialog(self)
+        style_helper_dialog(self.billing_dialog)
         self.billing_dialog.setObjectName("BillingAuthenticationDialog")
         self.billing_dialog.setWindowTitle("Вход в биллинг LinkVideo")
         self.billing_dialog.setMinimumWidth(660)
@@ -904,6 +909,7 @@ class TariffsPage(QWidget):
     def _choose_billing_account(self, hits: tuple[BillingSearchHit, ...]):
         """Always require explicit selection when one login has several accounts."""
         dialog = QDialog(self)
+        style_helper_dialog(dialog)
         dialog.setObjectName("BillingChooseAccountDialog")
         dialog.setWindowTitle("Выберите аккаунт и страну")
         dialog.setMinimumSize(560, 320)
@@ -1235,6 +1241,7 @@ class TariffsPage(QWidget):
             )
             return
         dialog = QDialog(self)
+        style_helper_dialog(dialog)
         dialog.setObjectName("BillingCameraStatusDialog")
         dialog.setWindowTitle(f"{verb} камеру")
         dialog.setMinimumWidth(450)
@@ -1326,6 +1333,7 @@ class TariffsPage(QWidget):
 
     def _show_camera_history(self, service: BillingService, rows):
         dialog = QDialog(self)
+        style_helper_dialog(dialog)
         dialog.setObjectName("BillingCameraHistoryDialog")
         dialog.setWindowTitle(f"История · {service.camera_name}")
         dialog.resize(850, 530)
@@ -1364,6 +1372,7 @@ class TariffsPage(QWidget):
         # Search endpoint has been captured, but the final transfer request has
         # not. Allow recipient discovery without claiming or sending a transfer.
         dialog = QDialog(self)
+        style_helper_dialog(dialog)
         dialog.setObjectName("BillingTransferCameraDialog")
         dialog.setWindowTitle(f"Передать камеру · {service.camera_name}")
         dialog.setMinimumSize(530, 320)
