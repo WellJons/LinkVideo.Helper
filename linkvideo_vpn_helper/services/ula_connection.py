@@ -3,6 +3,7 @@ from __future__ import annotations
 """Ula Oracle desktop connection: operator-supplied, never persisted secrets."""
 
 import configparser
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -54,22 +55,65 @@ def read_ula_ini(filename: str | Path) -> UlaConnectionDetails:
     return result.validated()
 
 
-def create_ula_gateway(details: UlaConnectionDetails, password: str, *, thick_client_dir: str = ""):
+def ula_radius_configured(config_dir: str | Path) -> bool:
+    """Detect the external authentication selected by the original Ula client.
+
+    Never parse passwords or other files: we only inspect the named Oracle
+    Net setting that determines the required driver mode.
+    """
+    if not config_dir:
+        return False
+    path = Path(config_dir) / "sqlnet.ora"
+    if not path.is_file():
+        return False
+    try:
+        text = path.read_text(encoding="ascii", errors="replace")
+    except OSError:
+        return False
+    return bool(re.search(
+        r"^\\s*SQLNET\\.AUTHENTICATION_SERVICES\\s*=\\s*\\(\\s*RADIUS\\s*\\)",
+        text, flags=re.IGNORECASE | re.MULTILINE,
+    ))
+
+
+def create_ula_gateway(
+    details: UlaConnectionDetails, password: str, *,
+    thick_client_dir: str = "", config_dir: str = "",
+):
     """Create a gateway with lazy driver/connection; does not connect yet.
 
     Password stays in memory only; callers must discard this gateway after use.
-    64-bit Oracle Instant Client 19+ may be required for older DB servers.
+    For RADIUS, use the operator's existing Ula.sqlnet.ora in OCI Thick
+    mode; Thin deliberately cannot authenticate through RADIUS.
     """
     details = details.validated()
     if not isinstance(password, str) or not password:
-        raise ValueError("Укажите пароль Oracle для проверки подключения.")
+        raise ValueError("Введите пароль учётной записи Ula.")
+    from linkvideo_vpn_helper.services.ula_oracle_gateway import UlaReadError
+    radius = ula_radius_configured(config_dir)
+    if radius and not thick_client_dir:
+        raise UlaReadError(
+            "В Ula используется RADIUS. Для авторизации выберите папку "
+            "64-битного Oracle Instant Client 19 (с файлом oci.dll) "
+            "и повторите вход с обычными данными Ula."
+        )
+    if thick_client_dir:
+        lib_dir = Path(thick_client_dir)
+        if not (lib_dir.is_dir() and (lib_dir / "oci.dll").is_file()):
+            raise UlaReadError(
+                "Выберите папку 64-битного Oracle Instant Client, "
+                "содержащую файл oci.dll."
+            )
     try:
         import oracledb
     except ImportError as exc:
         raise RuntimeError("В сборке отсутствует python-oracledb.") from exc
 
     if thick_client_dir:
-        oracledb.init_oracle_client(lib_dir=thick_client_dir)
+        opts = {"lib_dir": str(Path(thick_client_dir).resolve())}
+        if config_dir:
+            opts["config_dir"] = str(Path(config_dir).resolve())
+        oracledb.init_oracle_client(**opts)
 
     dsn = oracledb.makedsn(details.host, details.port, sid=details.sid)
 
