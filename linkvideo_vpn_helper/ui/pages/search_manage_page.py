@@ -320,6 +320,25 @@ class SearchManagePage(QWidget):
         sfl.addWidget(self.task)
         self.page_layout.addWidget(self.search_form)
 
+        # The full search occupies the top of the page only while browsing.
+        # Client details replace it with a single compact navigation row.
+        self.compact_search = Card(subtle=True)
+        compact = QHBoxLayout(self.compact_search)
+        compact.setContentsMargins(13, 7, 13, 7)
+        compact.setSpacing(10)
+        self.compact_search_label = QLabel("Открыта карточка клиента")
+        self.compact_search_label.setObjectName("Value")
+        compact.addWidget(self.compact_search_label, 1)
+        self.new_search_btn = QPushButton("← К поиску")
+        self.new_search_btn.setObjectName("SearchCompactReturn")
+        self.new_search_btn.setProperty("role", "soft")
+        self.new_search_btn.setMinimumHeight(36)
+        self.new_search_btn.clicked.connect(self._return_to_search)
+        compact.addWidget(self.new_search_btn)
+        self.compact_search.hide()
+        self.page_layout.addWidget(self.compact_search)
+        self._search_form_anim = None
+
         self.workspace = QWidget()
         workspace_l = QHBoxLayout(self.workspace)
         workspace_l.setContentsMargins(0, 0, 0, 0)
@@ -450,9 +469,55 @@ class SearchManagePage(QWidget):
         self.page_layout.addWidget(self.workspace, 1)
         self._panel_anim = None
 
+    def _return_to_search(self):
+        self._close_client_view()
+        self.query.setFocus()
+        self.query.selectAll()
+
+    def _toggle_search_workspace(self, compact: bool):
+        if self._search_form_anim is not None:
+            self._search_form_anim.stop()
+            self._search_form_anim = None
+        self.compact_search.setVisible(compact)
+        if compact:
+            subject = self.current.login if self.current else (
+                self._deleted_current.login if self._deleted_current else ""
+            )
+            self.compact_search_label.setText(
+                f"Клиент {subject} · карточка и управление" if subject
+                else "Открыта карточка клиента"
+            )
+        self.search_form.show()
+        self.search_form.setMinimumHeight(0)
+        natural_height = max(110, self.search_form.sizeHint().height())
+        animate = bool(QSettings("LinkVideo", "LinkVideo.Helper").value(
+            "ui/animations_enabled", True, bool
+        ))
+        if not animate:
+            self.search_form.setVisible(not compact)
+            self.search_form.setMaximumHeight(16777215)
+            return
+        start_height = max(0, self.search_form.height()) if compact else 0
+        if not compact:
+            self.search_form.setMaximumHeight(0)
+        animation = QPropertyAnimation(self.search_form, b"maximumHeight", self)
+        animation.setDuration(200)
+        animation.setStartValue(start_height)
+        animation.setEndValue(0 if compact else natural_height)
+        animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        if compact:
+            animation.finished.connect(self.search_form.hide)
+        else:
+            animation.finished.connect(
+                lambda: self.search_form.setMaximumHeight(16777215)
+            )
+        self._search_form_anim = animation
+        animation.start()
+
     def _open_client_view(self):
         if not self.current:
             return
+        self._toggle_search_workspace(True)
         self.detail_route_title.setText("Управление аккаунтом")
         self.client_task.hide()
         self.left_card.hide()
@@ -469,6 +534,7 @@ class SearchManagePage(QWidget):
         self.detail_panel.hide()
         self.client_info_card.hide()
         self.left_card.show()
+        self._toggle_search_workspace(False)
         self.left_card.setMaximumWidth(16777215)
         self.results_title.setText("Результаты")
         self.open_hint.setText("Клик — открыть карточку")
@@ -813,6 +879,7 @@ class SearchManagePage(QWidget):
         record = self._deleted_current
         if record is None:
             return
+        self._toggle_search_workspace(True)
         self.detail_route_title.setText(f"Удалённый клиент {record.login}")
         self.client_task.hide()
         self.client_info_card.hide()
