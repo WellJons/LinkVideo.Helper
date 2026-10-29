@@ -145,6 +145,13 @@ class BillingEditableGateway(BillingReadOnlyGateway):
         confirmed = self.find_client_by_hit(recipient)
         if confirmed.id != recipient.id or confirmed.country != recipient.country:
             raise BillingPermissionDenied("Получатель изменился. Повторите поиск.")
+        # A former owner may have transferred/deleted the camera since the
+        # UI rendered. Verify live ownership before sending a destructive PUT.
+        current_source = self.refresh_client(client)
+        if not any(s.id == camera_id for s in current_source.services):
+            raise BillingPermissionDenied(
+                "Камера уже не принадлежит отправителю. Обновите клиента."
+            )
         response = self._transport.put_camera_owner(
             camera_id, client.id, recipient.id, move_in_vc=move_in_vc
         )
