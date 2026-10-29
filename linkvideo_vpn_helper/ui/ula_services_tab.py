@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from linkvideo_vpn_helper.services.ula_connection import (
-    UlaConnectionDetails, create_ula_gateway, read_ula_ini, ula_radius_configured,
+    UlaConnectionDetails, create_ula_gateway, find_oracle_client, read_ula_ini, ula_radius_configured,
 )
 from linkvideo_vpn_helper.services.ula_oracle_gateway import UlaReadError
 from linkvideo_vpn_helper.ui.components import Card, StatusPill
@@ -85,9 +85,17 @@ class UlaServicesTab(QWidget):
 
         connection = Card()
         setup = QVBoxLayout(connection)
-        title = QLabel("Подключение к Oracle Ula")
+        title = QLabel("Вход в Ula / Oracle")
         title.setObjectName("SectionTitle")
         setup.addWidget(title)
+        guide = QLabel(
+            "Импортируйте Ula.ini из установленной Ula. Параметры Oracle и "
+            "совместимый клиент определяются автоматически, если доступны. "
+            "Пароль от окна Ula не обязательно является паролем Oracle/RADIUS."
+        )
+        guide.setWordWrap(True)
+        guide.setObjectName("Muted")
+        setup.addWidget(guide)
 
         row = QHBoxLayout()
         self.import_button = QPushButton("Импортировать Ula.ini")
@@ -97,6 +105,28 @@ class UlaServicesTab(QWidget):
         row.addStretch(1)
         setup.addLayout(row)
 
+        password_row = QHBoxLayout()
+        password_label = QLabel("Пароль Oracle / RADIUS")
+        password_row.addWidget(password_label)
+        self.password = QLineEdit()
+        self.password.setObjectName("UlaOraclePassword")
+        self.password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password.setPlaceholderText("Пароль для Oracle/RADIUS (не обязательно от окна Ula)")
+        self.password.setToolTip("Пароль остаётся в памяти на время работы; в файлы и логи не записывается.")
+        self.password.returnPressed.connect(self._test_connection)
+        password_row.addWidget(self.password, 1)
+        setup.addLayout(password_row)
+
+        self.more_button = QPushButton("Расширенные настройки Oracle…")
+        self.more_button.setObjectName("UlaOracleAdvancedToggle")
+        self.more_button.clicked.connect(self._toggle_advanced)
+        setup.addWidget(self.more_button)
+
+        self.advanced_panel = QWidget()
+        self.advanced_panel.setObjectName("UlaOracleAdvancedPanel")
+        advanced_layout = QVBoxLayout(self.advanced_panel)
+        advanced_layout.setContentsMargins(0, 0, 0, 0)
+        advanced_layout.setSpacing(8)
         grid = QGridLayout()
         grid.setSpacing(8)
         self.host = QLineEdit()
@@ -112,13 +142,6 @@ class UlaServicesTab(QWidget):
         self.username = QLineEdit()
         self.username.setObjectName("UlaOracleUsername")
         self.username.setPlaceholderText("UserName из Ula.ini")
-        self.password = QLineEdit()
-        self.password.setObjectName("UlaOraclePassword")
-        self.password.setEchoMode(QLineEdit.EchoMode.Password)
-        self.password.setPlaceholderText("Пароль подключения Oracle / RADIUS (может отличаться от входа Ula)")
-        self.password.setToolTip("Пароль не сохраняется и не отправляется в логи.")
-        self.password.returnPressed.connect(self._test_connection)
-
         grid.addWidget(QLabel("Сервер"), 0, 0)
         grid.addWidget(self.host, 0, 1)
         grid.addWidget(QLabel("Порт"), 0, 2)
@@ -127,11 +150,9 @@ class UlaServicesTab(QWidget):
         grid.addWidget(self.sid, 1, 1)
         grid.addWidget(QLabel("Пользователь"), 1, 2)
         grid.addWidget(self.username, 1, 3)
-        grid.addWidget(QLabel("Пароль"), 2, 0)
-        grid.addWidget(self.password, 2, 1, 1, 3)
         grid.setColumnStretch(1, 2)
         grid.setColumnStretch(3, 1)
-        setup.addLayout(grid)
+        advanced_layout.addLayout(grid)
 
         self.thick_client = QLineEdit()
         self.thick_client.setObjectName("UlaOracleInstantClient")
@@ -148,7 +169,9 @@ class UlaServicesTab(QWidget):
         self.select_client_button.setObjectName("UlaSelectOracleClient")
         self.select_client_button.clicked.connect(self._choose_client_dir)
         client_row.addWidget(self.select_client_button)
-        setup.addLayout(client_row)
+        advanced_layout.addLayout(client_row)
+        self.advanced_panel.hide()
+        setup.addWidget(self.advanced_panel)
 
         self.test_button = QPushButton("Проверить соединение")
         self.test_button.setObjectName("UlaTestConnection")
@@ -243,6 +266,13 @@ class UlaServicesTab(QWidget):
         root.insertWidget(1, self.message)
         root.addStretch(1)
 
+    def _toggle_advanced(self):
+        self.advanced_panel.setVisible(not self.advanced_panel.isVisible())
+        self.more_button.setText(
+            "Скрыть настройки Oracle" if self.advanced_panel.isVisible()
+            else "Расширенные настройки Oracle…"
+        )
+
     def _choose_client_dir(self):
         folder = QFileDialog.getExistingDirectory(
             self, "Папка 64-битного Oracle Instant Client с oci.dll",
@@ -268,16 +298,20 @@ class UlaServicesTab(QWidget):
         self.username.setText(settings.username)
         self._ula_config_dir = str(Path(file).parent)
         if ula_radius_configured(self._ula_config_dir):
+            detected = find_oracle_client(self._ula_config_dir)
+            status = (
+                "Совместимый Oracle Client x64 обнаружен автоматически."
+                if detected else
+                "Oracle Client x64 не найден автоматически. При необходимости откройте расширенные настройки."
+            )
             self.message.setText(
-                "В конфигурации Ula найден RADIUS. Выберите 64-битный Oracle Client "
-                "(oci.dll). В Ula.ini указан пользователь подключения Oracle, "
-                "а не обязательно ваш логин для входа в Ula. "
-                "Администраторская учётная запись не требуется."
+                "В Ula.ini найден RADIUS. " + status +
+                " Учётная запись Oracle из Ula.ini может отличаться от сотрудника Ula."
             )
         else:
             self.message.setText(
-                "Параметры из Ula.ini загружены. Нужен пароль подключения Oracle, "
-                "который может отличаться от пароля входа в Ula."
+                "Параметры из Ula.ini загружены. Если для входа в Ula используется "
+                "отдельный пароль, он может не подходить для прямого подключения Oracle."
             )
 
     def _details(self):
