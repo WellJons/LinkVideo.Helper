@@ -36,6 +36,7 @@ def _safe_error(error: Exception) -> str:
             "ORA-12541": "Oracle Listener недоступен по этому адресу и порту.",
             "ORA-12170": "Превышено время ожидания подключения.",
             "DPY-3010": "Старая версия Oracle требует режим Thick (64-битный Instant Client).",
+            "DPY-3016": "В сборке отсутствует криптографическая библиотека Oracle Thin; обновите LinkVideo.Helper RC.",
             "DPY-3001": "Сервер требует сетевое шифрование Oracle; попробуйте Thick-режим.",
             "DPI-1047": "Не найдены библиотеки 64-битного Oracle Instant Client.",
         }
