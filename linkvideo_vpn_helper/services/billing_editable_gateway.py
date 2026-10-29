@@ -17,6 +17,7 @@ from linkvideo_vpn_helper.services.billing_gateway import (
 from linkvideo_vpn_helper.services.billing_readonly_gateway import BillingReadOnlyGateway
 from linkvideo_vpn_helper.services.billing_catalog import filter_tariffs_for_client
 from linkvideo_vpn_helper.services.billing_response_parser import attach_cameras_to_client
+from linkvideo_vpn_helper.services.billing_search_parser import BillingSearchHit
 from linkvideo_vpn_helper.services.billing_token_transport import (
     BillingTokenTransport, BillingWriteOutcomeUnknown,
 )
@@ -121,6 +122,46 @@ class BillingEditableGateway(BillingReadOnlyGateway):
         except Exception:
             fresh = None
         return parsed, fresh
+
+    def transfer_camera(
+        self, client: BillingClient, camera_id: str, recipient: BillingSearchHit,
+        *, move_in_vc: bool = False,
+    ) -> tuple[dict, BillingClient | None]:
+        """Transfer billing ownership to a separately verified account ID.
+
+        The captured operation is only for move_in_vc='0'. It does not imply
+        physical B2O camera reparenting; require more evidence for that option.
+        """
+        self._owned_camera(client, camera_id)
+        if not isinstance(recipient, BillingSearchHit):
+            raise BillingValidationError("Выберите аккаунт из результатов поиска.")
+        if client.id == recipient.id:
+            raise BillingValidationError("Аккаунт получателя совпадает с текущим.")
+        if client.country != recipient.country:
+            raise BillingPermissionDenied(
+                "Перенос между странами не подтверждён API."
+            )
+        # Read back the exact selected recipient before mutating the camera.
+        confirmed = self.find_client_by_hit(recipient)
+        if confirmed.id != recipient.id or confirmed.country != recipient.country:
+            raise BillingPermissionDenied("Получатель изменился. Повторите поиск.")
+        response = self._transport.put_camera_owner(
+            camera_id, client.id, recipient.id, move_in_vc=move_in_vc
+        )
+        # Observed contract: {"success":true,"response":0}.
+        # Zero is not a failure and must not be interpreted as falsy.
+        if response.get("success") is not True or (
+            type(response.get("response")) is not int or response["response"] != 0
+        ):
+            raise BillingWriteOutcomeUnknown(
+                "Биллинг не вернул ожидаемое подтверждение передачи. "
+                "Проверьте владельца камеры перед повтором."
+            )
+        try:
+            fresh = self.refresh_client(client)
+        except Exception:
+            fresh = None
+        return response, fresh
 
     def refresh_client(self, client: BillingClient) -> BillingClient:
         """Read current camera services by the already selected stable CRM ID."""
