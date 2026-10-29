@@ -108,7 +108,7 @@ class BillingLoginPanel(Card):
         buttons.setSpacing(8)
         self.remember = QCheckBox("Запомнить через Windows DPAPI")
         self.remember.setObjectName("BillingRemember")
-        self.remember.setChecked(bool(stored.password))
+        self.remember.setChecked(True)
         self.show_password = QCheckBox("Показать")
         self.show_password.toggled.connect(lambda checked: self.password.setEchoMode(
             QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
