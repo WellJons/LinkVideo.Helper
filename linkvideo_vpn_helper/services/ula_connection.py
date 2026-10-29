@@ -3,6 +3,9 @@ from __future__ import annotations
 """Ula Oracle desktop connection: operator-supplied, never persisted secrets."""
 
 import configparser
+import os
+import struct
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -79,6 +82,80 @@ def ula_radius_configured(config_dir: str | Path) -> bool:
     return False
 
 
+def _oci_architecture(dll: Path) -> str:
+    """Read the PE machine field without loading or executing an untrusted DLL."""
+    try:
+        with dll.open("rb") as f:
+            if f.read(2) != b"MZ":
+                return "unknown"
+            f.seek(0x3c)
+            offset = struct.unpack("<I", f.read(4))[0]
+            if not 64 <= offset <= 1024 * 1024:
+                return "unknown"
+            f.seek(offset)
+            if f.read(4) != b"PE\\x00\\x00":
+                return "unknown"
+            machine = struct.unpack("<H", f.read(2))[0]
+        return {0x8664: "x64", 0x014c: "x86", 0xaa64: "arm64"}.get(machine, "unknown")
+    except (OSError, ValueError, struct.error):
+        return "unknown"
+
+
+def find_oracle_client(config_dir: str | Path = "") -> Path | None:
+    """Locate an already installed 64-bit OCI; never search the whole drive.
+
+    Search only the Ula install, configured Oracle paths and normal program
+    locations. The PE header check avoids loading a 32-bit Ula OCI into the
+    64-bit Helper. It does not guarantee that client dependencies exist.
+    """
+    seen: set[str] = set()
+    candidates: list[Path] = []
+
+    def add(folder):
+        if folder:
+            p = Path(folder).expanduser()
+            key = os.path.normcase(str(p.absolute())).casefold()
+            if key not in seen:
+                seen.add(key)
+                candidates.append(p)
+
+    if config_dir:
+        ula = Path(config_dir)
+        add(ula)
+        add(ula / "bin")
+        add(ula.parent / "bin")
+    add(Path(sys.executable).parent)
+    if getattr(sys, "_MEIPASS", None):
+        add(sys._MEIPASS)
+    home = os.environ.get("ORACLE_HOME")
+    if home:
+        add(Path(home) / "bin")
+        add(home)
+    for part in os.environ.get("PATH", "").split(os.pathsep):
+        add(part)
+
+    # Probe a single directory level only; avoid a recursive filesystem scan.
+    for env_name in ("ProgramFiles", "ProgramW6432"):
+        root = os.environ.get(env_name)
+        if not root:
+            continue
+        for base in (Path(root) / "Oracle", Path(root) / "oracle"):
+            add(base)
+            try:
+                for child in sorted(base.iterdir()):
+                    if child.is_dir():
+                        add(child)
+                        add(child / "bin")
+            except OSError:
+                pass
+
+    for folder in candidates:
+        dll = folder / "oci.dll"
+        if dll.is_file() and _oci_architecture(dll) == "x64":
+            return folder.resolve()
+    return None
+
+
 def create_ula_gateway(
     details: UlaConnectionDetails, password: str, *,
     thick_client_dir: str = "", config_dir: str = "",
@@ -94,29 +171,41 @@ def create_ula_gateway(
         raise ValueError("Введите пароль учётной записи Ula.")
     from linkvideo_vpn_helper.services.ula_oracle_gateway import UlaReadError
     radius = ula_radius_configured(config_dir)
-    if radius and not thick_client_dir:
-        raise UlaReadError(
-            "В Ula используется RADIUS. Для авторизации выберите папку "
-            "64-битного Oracle Instant Client 19 (с файлом oci.dll) "
-            "и повторите вход с обычными данными Ula."
-        )
-    if thick_client_dir:
-        lib_dir = Path(thick_client_dir)
-        if not (lib_dir.is_dir() and (lib_dir / "oci.dll").is_file()):
+    # A Ula installation often contains a 32-bit OCI. Never try to load that
+    # DLL into the 64-bit Helper. Prefer an existing compatible installation.
+    lib_dir = Path(thick_client_dir) if thick_client_dir else None
+    if lib_dir is not None:
+        dll = lib_dir / "oci.dll"
+        if not dll.is_file():
+            raise UlaReadError("Выбранная папка не содержит oci.dll.")
+        if _oci_architecture(dll) != "x64":
             raise UlaReadError(
-                "Выберите папку 64-битного Oracle Instant Client, "
-                "содержащую файл oci.dll."
+                "Выбрана несовместимая oci.dll (нужен x64). "
+                "32-битную библиотеку установленной Ula загрузить в Helper нельзя."
+            )
+    elif radius:
+        lib_dir = find_oracle_client(config_dir)
+        if lib_dir is None:
+            raise UlaReadError(
+                "Ula использует RADIUS, но подходящий Oracle Client x64 на этом ПК "
+                "не обнаружен. 32-битный клиент Ula несовместим с Helper x64. "
+                "Проверьте установленный клиент; при наличии выберите его в дополнительных настройках."
             )
     try:
         import oracledb
     except ImportError as exc:
         raise RuntimeError("В сборке отсутствует python-oracledb.") from exc
 
-    if thick_client_dir:
-        opts = {"lib_dir": str(Path(thick_client_dir).resolve())}
+    if lib_dir is not None:
+        opts = {"lib_dir": str(lib_dir.resolve())}
         if config_dir:
             opts["config_dir"] = str(Path(config_dir).resolve())
-        oracledb.init_oracle_client(**opts)
+        try:
+            oracledb.init_oracle_client(**opts)
+        except Exception:
+            # Client initialization is process-global; changing OCI libraries
+            # after initialization requires restarting the application.
+            raise
 
     dsn = oracledb.makedsn(details.host, details.port, sid=details.sid)
 
