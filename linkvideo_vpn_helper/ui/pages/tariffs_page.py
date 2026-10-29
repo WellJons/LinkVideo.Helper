@@ -60,6 +60,11 @@ def admin_camera_label(country: str, vc_id: str) -> str:
     return value
 
 
+def currency_for_client(country: str) -> str:
+    """Present currency only when the selected CRM country establishes it."""
+    return {"Беларусь": "BYN", "Казахстан": "₸"}.get(country, "")
+
+
 def format_history_timestamp(value: str) -> str:
     """CRM sends ISO timestamps with offsets; display local wall time only."""
     source = str(value or "").strip()
@@ -1120,9 +1125,10 @@ class TariffsPage(QWidget):
             check.toggled.connect(self._update_bulk_button)
             self.camera_checks[service.id] = check
             cam_row.addWidget(check)
-            thumb = QLabel("Нет\nпревью")
+            thumb = QLabel("Нет превью")
             thumb.setObjectName("BillingCameraPreview")
             thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            thumb.setWordWrap(True)
             thumb.setFixedSize(104, 72)
             thumb.setToolTip(
                 f"B2O ID камеры: {service.camera_vc_id or 'неизвестен'}. "
@@ -1154,7 +1160,9 @@ class TariffsPage(QWidget):
             tariff_label.setWordWrap(True)
             details.addWidget(tariff_label)
             if service.total_text:
-                total_label = QLabel(f"Итого: {service.total_text}")
+                currency = currency_for_client(client.country)
+                suffix = f" {currency}" if currency else ""
+                total_label = QLabel(f"Итого: {service.total_text}{suffix}")
                 total_label.setObjectName("TinyMuted")
                 details.addWidget(total_label)
             cam_row.addLayout(details, 1)
@@ -1242,7 +1250,8 @@ class TariffsPage(QWidget):
                 ))
                 thumb.setText("")
                 return
-        thumb.setText("Нет\\nпревью")
+        thumb.setPixmap(QPixmap())
+        thumb.setText("Нет превью")
 
     def _billing_external_action(self, action: str, service: BillingService):
         if self._busy or self.client is None or service not in self.client.services:
@@ -1275,27 +1284,68 @@ class TariffsPage(QWidget):
         dialog = QDialog(self)
         style_helper_dialog(dialog)
         dialog.setObjectName("BillingCameraStatusDialog")
-        dialog.setWindowTitle(f"{verb} камеру")
-        dialog.setMinimumWidth(450)
+        dialog.setWindowTitle(f"{verb} камеру · LinkVideo.Helper")
+        dialog.resize(550, 415)
+        dialog.setMinimumWidth(510)
         layout = QVBoxLayout(dialog)
-        title = QLabel(f"{verb} камеру «{service.camera_name}»?")
+        layout.setContentsMargins(22, 20, 22, 20)
+        layout.setSpacing(13)
+        title = QLabel(f"{verb} камеру?")
         title.setObjectName("SectionTitle")
         layout.addWidget(title)
-        note = QLabel(
-            f"Клиент: {self.client.login} · {self.client.country}\\n"
-            f"ID камеры: {service.id}\\n"
-            f"Текущий статус: {service.status} → "
-            f"{'Неактивный' if new_status == 0 else 'Активный'}"
+
+        description = QLabel(
+            f"{service.camera_name}  ·  "
+            f"ID админки: {admin_camera_label(self.client.country, service.camera_vc_id)}"
         )
-        note.setWordWrap(True)
-        layout.addWidget(note)
-        layout.addWidget(QLabel("Дата изменения"))
+        description.setObjectName("Muted")
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        status_card = Card(subtle=True)
+        status_layout = QVBoxLayout(status_card)
+        status_layout.setContentsMargins(15, 13, 15, 13)
+        status_layout.setSpacing(9)
+        source_label = QLabel(
+            f"{self.client.login} · {self.client.country} · "
+            f"аккаунт № {self.client.id}"
+        )
+        source_label.setObjectName("TinyMuted")
+        source_label.setWordWrap(True)
+        status_layout.addWidget(source_label)
+        status_row = QHBoxLayout()
+        status_row.addWidget(StatusPill(
+            service.status, "success" if new_status == 0 else "neutral"
+        ))
+        arrow = QLabel("  →  ")
+        arrow.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        status_row.addWidget(arrow)
+        status_row.addWidget(StatusPill(
+            "Неактивный" if new_status == 0 else "Активный",
+            "neutral" if new_status == 0 else "success"
+        ))
+        status_row.addStretch(1)
+        status_layout.addLayout(status_row)
+        layout.addWidget(status_card)
+
+        date_label = QLabel("Дата изменения")
+        date_label.setObjectName("Muted")
+        layout.addWidget(date_label)
         when = QDateEdit(QDate.currentDate())
         when.setObjectName("BillingCameraStatusDate")
         when.setCalendarPopup(True)
         when.setDisplayFormat("dd.MM.yyyy")
         when.setMinimumDate(QDate.currentDate())
+        when.setMinimumHeight(43)
         layout.addWidget(when)
+        help_text = QLabel(
+            "Изменение статуса будет отправлено в биллинг только "
+            "после подтверждения."
+        )
+        help_text.setWordWrap(True)
+        help_text.setObjectName("TinyMuted")
+        layout.addWidget(help_text)
+        layout.addStretch(1)
         actions = QHBoxLayout()
         actions.addStretch(1)
         cancel = QPushButton("Отмена")
