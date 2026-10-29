@@ -46,26 +46,35 @@ def b2o_camera_for_serial(serial: str, token: str, b2o: B2OService) -> tuple[str
     if not token or "\r" in token or "\n" in token:
         raise PermissionError("Войдите в B2O в разделе «Скачать архив».")
 
+    failed_operators = 0
     for operator, country in PREVIEW_OPERATORS:
         url = B2OService.CAMERAS_URL.format(operator=operator)
-        for page in range(1, 5):
-            payload = b2o.request_json(
-                url, token,
-                {"Count": "50", "Page": str(page), "Search": serial,
-                 "Show_deleted_cameras": "0"},
-                12,
-            )
-            if not isinstance(payload, dict):
-                raise ValueError("B2O вернул некорректный список камер.")
-            items = payload.get("data")
-            if not isinstance(items, list):
-                raise ValueError("B2O не вернул список камер.")
-            for row in items:
-                camera_id = _matching_id(row, serial)
-                if camera_id:
-                    return country, camera_id
-            if len(items) < 50:
-                break
+        try:
+            for page in range(1, 5):
+                payload = b2o.request_json(
+                    url, token,
+                    {"Count": "50", "Page": str(page), "Search": serial,
+                     "Show_deleted_cameras": "0"},
+                    12,
+                )
+                if not isinstance(payload, dict):
+                    raise ValueError("B2O вернул некорректный список камер.")
+                items = payload.get("data")
+                if not isinstance(items, list):
+                    raise ValueError("B2O не вернул список камер.")
+                for row in items:
+                    camera_id = _matching_id(row, serial)
+                    if camera_id:
+                        return country, camera_id
+                if len(items) < 50:
+                    break
+        except Exception:
+            # A token might have access to RU but not to the other operators.
+            # Failure of one operator must not hide valid cameras in another.
+            failed_operators += 1
+            continue
+    if failed_operators == len(PREVIEW_OPERATORS):
+        raise ConnectionError("B2O не предоставил список камер ни одного оператора.")
     return None
 
 
