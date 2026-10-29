@@ -12,7 +12,8 @@ from dataclasses import dataclass
 from typing import Callable
 
 from linkvideo_vpn_helper.services.billing_gateway import (
-    BillingClient, BillingService, BillingPermissionDenied, BillingValidationError, TariffChange,
+    BillingClient, BillingService, BillingNotConfigured, BillingPermissionDenied,
+    BillingValidationError, TariffChange,
 )
 from linkvideo_vpn_helper.services.billing_readonly_gateway import BillingReadOnlyGateway
 from linkvideo_vpn_helper.services.billing_catalog import filter_tariffs_for_client
@@ -182,6 +183,12 @@ class BillingEditableGateway(BillingReadOnlyGateway):
         """Explicit user-confirmed write for one verified customer's camera."""
         if not isinstance(change, TariffChange):
             raise BillingValidationError("Не указан объект изменения тарифа.")
+        if change.comment:
+            # Captured tariff PUT body is only {"date": "..."}.
+            # Reject instead of silently losing an operator's audit comment.
+            raise BillingNotConfigured(
+                "Передача комментария не подтверждена API биллинга."
+            )
         if change.client_id != client.id:
             raise BillingPermissionDenied("Выбран другой клиент. Повторите поиск.")
         if not re.fullmatch(r"[1-9][0-9]{0,17}", change.service_id):
