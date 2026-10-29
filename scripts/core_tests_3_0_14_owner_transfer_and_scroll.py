@@ -153,6 +153,14 @@ with tempfile.TemporaryDirectory() as directory:
         credentials=SessionCredentials("fake", "fake"),
         registry=ServerRegistry(settings),
     )
+    vpn.current = ClientRecord(
+        server="vpn02.linkvideo.ru", login="fictional_01",
+        password="fictional-only", remote_address="172.16.2.133",
+        ports=[11690, 11691, 11692], is_online=False,
+        active_ports=[11690, 11691],
+    )
+    vpn._open_client_view()
+    app.processEvents()
     assert vpn.detail_scroll.property("lvWheelBoundaryLock") is True
     assert vpn.port_list.property("lvWheelBoundaryLock") is True
     filter_ = _NestedScrollFilter()
