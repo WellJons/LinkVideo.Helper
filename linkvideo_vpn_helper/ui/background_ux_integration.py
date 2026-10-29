@@ -262,13 +262,11 @@ def _install_inactive_clients_auto_refresh() -> None:
         self._sync_batch_controls()
 
     def patched_activated(self):
+        # The lifecycle inventory can exceed 1,700 records. Tab activation
+        # must never trigger a scan, render or 60-second timer; the user has an
+        # explicit «Проверить серверы» button for that expensive operation.
         if callable(original_activated):
             original_activated(self)
-        self._lv_refresh_timer.start()
-        # Opening the page must never show a blocking scan dialog. Empty/stale
-        # data are refreshed silently after the page is already interactive.
-        if getattr(self, "_cancel_event", None) is None:
-            QTimer.singleShot(350, lambda: _background_scan(self))
 
     def patched_deactivated(self):
         self._lv_refresh_timer.stop()
@@ -276,11 +274,9 @@ def _install_inactive_clients_auto_refresh() -> None:
             original_deactivated(self)
 
     def patched_refresh_servers(self):
-        try:
-            original_refresh_servers(self)
-        finally:
-            if self.isVisible() and getattr(self, "_cancel_event", None) is None:
-                QTimer.singleShot(250, lambda: _background_scan(self))
+        # Settings changes are not permission to enumerate all VPN accounts.
+        # Keep the last result until the user explicitly requests a new scan.
+        return original_refresh_servers(self)
 
     InactiveClientsPage.__init__ = patched_init
     InactiveClientsPage._scan = patched_scan
