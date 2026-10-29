@@ -89,7 +89,7 @@ jobs:
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          $remoteTag = (git ls-remote --tags origin "refs/tags/$tag").Trim()
+          $remoteTag = ([string](git ls-remote --tags origin "refs/tags/$tag")).Trim()
           if ($remoteTag) {
             if (-not $remoteTag.StartsWith($env:GITHUB_SHA)) {
               throw "Stable tag already exists on a different commit: $tag"
