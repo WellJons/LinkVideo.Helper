@@ -27,9 +27,7 @@ def _safe_error(error: Exception) -> str:
         return str(error)[:170]
     codes = re.findall(r"\b(?:ORA|DPY|DPI)-\d{4,5}\b", str(error))
     if codes:
-        return "Ошибка Oracle " + ", ".join(dict.fromkeys(codes)[:3]) if False else (
-            "Ошибка Oracle " + ", ".join(list(dict.fromkeys(codes))[:3])
-        )
+        return "Ошибка Oracle " + ", ".join(list(dict.fromkeys(codes))[:3])
     return "Не удалось выполнить запрос Oracle. Проверьте подключение и права пользователя."
 
 
