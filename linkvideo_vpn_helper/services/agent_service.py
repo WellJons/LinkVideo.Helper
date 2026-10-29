@@ -138,7 +138,8 @@ class AgentService:
                 if found:
                     return found
             except requests.RequestException:
-                pass
+                # A stale cache must never block a full inventory search.
+                found = None
             with self._cache_lock:
                 self._cache.pop(key, None)
         others = [host for host in self.servers() if host != cached]
@@ -210,7 +211,8 @@ class AgentService:
                 try:
                     data = json.loads(data)
                 except ValueError:
-                    pass
+                    # Invalid embedded JSON is not a settings document.
+                    data = None
             if isinstance(data, dict):
                 return data
         return payload
