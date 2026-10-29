@@ -30,7 +30,7 @@ def _safe_error(error: Exception) -> str:
     if codes:
         code = codes[0]
         explanations = {
-            "ORA-01017": "Неверные учётные данные Oracle или вход запрещён.",
+            "ORA-01017": "Oracle отклонила вход. Пароль от окна Ula может отличаться от пароля подключения к БД; проверьте используемую Ula учётную запись и режим RADIUS.",
             "ORA-12505": "Oracle Listener не распознал указанный SID.",
             "ORA-12514": "Oracle Listener не распознал указанное имя службы.",
             "ORA-12541": "Oracle Listener недоступен по этому адресу и порту.",
@@ -115,7 +115,7 @@ class UlaServicesTab(QWidget):
         self.password = QLineEdit()
         self.password.setObjectName("UlaOraclePassword")
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
-        self.password.setPlaceholderText("Пароль сотрудника, используемый в Ula")
+        self.password.setPlaceholderText("Пароль подключения Oracle / RADIUS (может отличаться от входа Ula)")
         self.password.setToolTip("Пароль не сохраняется и не отправляется в логи.")
         self.password.returnPressed.connect(self._test_connection)
 
@@ -269,13 +269,15 @@ class UlaServicesTab(QWidget):
         self._ula_config_dir = str(Path(file).parent)
         if ula_radius_configured(self._ula_config_dir):
             self.message.setText(
-                "В конфигурации Ula найден RADIUS. Введите свой обычный пароль Ula "
-                "и выберите папку 64-битного Oracle Instant Client (oci.dll). "
-                "Администраторская учётная запись не нужна."
+                "В конфигурации Ula найден RADIUS. Выберите 64-битный Oracle Client "
+                "(oci.dll). В Ula.ini указан пользователь подключения Oracle, "
+                "а не обязательно ваш логин для входа в Ula. "
+                "Администраторская учётная запись не требуется."
             )
         else:
             self.message.setText(
-                "Параметры из Ula.ini загружены. Введите пароль сотрудника Ula."
+                "Параметры из Ula.ini загружены. Нужен пароль подключения Oracle, "
+                "который может отличаться от пароля входа в Ula."
             )
 
     def _details(self):
