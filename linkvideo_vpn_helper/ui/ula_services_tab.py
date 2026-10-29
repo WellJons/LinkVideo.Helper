@@ -26,7 +26,7 @@ def _safe_error(error: Exception) -> str:
     # from third-party errors into screenshots, UI, logs or support reports.
     if isinstance(error, (ValueError, TypeError, UlaReadError)):
         return str(error)[:170]
-    codes = re.findall(r"\\b(?:ORA|DPY|DPI)-\\d{4,5}\\b", str(error))
+    codes = re.findall(r"\b(?:ORA|DPY|DPI)-\d{4,5}\b", str(error))
     if codes:
         code = codes[0]
         explanations = {
