@@ -141,7 +141,7 @@ class BillingTokenTransport:
             raise BillingTransportError("CRM вернула неожиданную структуру ответа.")
         return data
 
-    def put_camera_status(self, camera_id: str, status: int, effective_date) -> dict:
+    def put_camera_status(self, camera_id: str, status: int, effective_date, comment: str = "") -> dict:
         """Observed PUT /api/cameras/{id}/status, once, no automatic retry."""
         from datetime import date
         if not isinstance(camera_id, str) or not re.fullmatch(
@@ -152,6 +152,12 @@ class BillingTokenTransport:
             raise BillingValidationError("Статус камеры должен быть 0 или 1.")
         if not isinstance(effective_date, date) or effective_date < date.today():
             raise BillingValidationError("Выберите текущую или будущую дату.")
+        if not isinstance(comment, str) or len(comment.strip()) > 500:
+            raise BillingValidationError("Комментарий не должен превышать 500 символов.")
+        payload = {"status": status, "date": effective_date.strftime("%d-%m-%Y")}
+        if comment.strip():
+            # Confirmed browser payload: "comments" (plural).
+            payload["comments"] = comment.strip()
         path = f"/api/cameras/{camera_id}/status"
         with self._lock:
             if not self.token or self._session is None:
@@ -163,7 +169,7 @@ class BillingTokenTransport:
             try:
                 response = self._session.put(
                     BILLING_API_ORIGIN + path,
-                    json={"status": status, "date": effective_date.strftime("%d-%m-%Y")},
+                    json=payload,
                     headers=self._headers(self.header_mode),
                     timeout=self.timeout,
                     allow_redirects=False,
@@ -265,7 +271,7 @@ class BillingTokenTransport:
                 )
             return result
 
-    def put_tariff(self, camera_id: str, tariff_id: str, effective_date) -> dict:
+    def put_tariff(self, camera_id: str, tariff_id: str, effective_date, comment: str = "") -> dict:
         """Observed PUT /api/cameras/{id_camera}/tariff/{id_tariff}.
 
         Date is serialized DD-MM-YYYY exactly as shown in DevTools.
@@ -278,6 +284,12 @@ class BillingTokenTransport:
         for ident in (camera_id, tariff_id):
             if not isinstance(ident, str) or not re.fullmatch(r"[1-9][0-9]{0,17}", ident):
                 raise BillingValidationError("Некорректный ID камеры или тарифа.")
+        if not isinstance(comment, str) or len(comment.strip()) > 500:
+            raise BillingValidationError("Комментарий не должен превышать 500 символов.")
+        payload = {"date": effective_date.strftime("%d-%m-%Y")}
+        if comment.strip():
+            # Confirmed browser payload: tariff uses "description".
+            payload["description"] = comment.strip()
         path = f"/api/cameras/{camera_id}/tariff/{tariff_id}"
         with self._lock:
             if not self.token or self._session is None:
@@ -290,7 +302,7 @@ class BillingTokenTransport:
             try:
                 response = self._session.put(
                     BILLING_API_ORIGIN + path,
-                    json={"date": effective_date.strftime("%d-%m-%Y")},
+                    json=payload,
                     headers=self._headers(self.header_mode),
                     timeout=self.timeout,
                     allow_redirects=False,
