@@ -165,10 +165,11 @@ with tempfile.TemporaryDirectory() as temp:
     panel.close()
 
     page = TariffsPage(settings=settings)
-    assert page.workspace_tabs.count() == 3
+    assert page.workspace_tabs.count() == 4
     assert page.workspace_tabs.tabText(0) == "Поиск клиента"
     assert page.workspace_tabs.tabText(1) == "Создать клиента"
     assert page.workspace_tabs.tabText(2) == "Все тарифы"
+    assert page.workspace_tabs.tabText(3) == "Россия · Ula (тест)"
     assert page.b2o_creator.country.count() == 3
     assert page.b2o_creator.country.itemData(0) == 241
     assert page.b2o_creator.country.itemData(1) == 1721
