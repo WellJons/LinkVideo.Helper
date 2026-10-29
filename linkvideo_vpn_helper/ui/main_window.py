@@ -181,6 +181,9 @@ class MainWindow(QMainWindow):
         # Версия находится непосредственно под настройками и визуально
         # центрируется относительно боковой панели.
         self.version = QLabel(f"v{APP_VERSION}")
+        # A user may have a stale pinned shortcut targeting another installation.
+        # Expose the actual executable path to support without changing preferences.
+        self.version.setToolTip(f"Запущено из: {Path(sys.executable)}")
         self.version.setObjectName("TinyMuted")
         self.version.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sl.addWidget(self.version, 0, Qt.AlignmentFlag.AlignHCenter)
