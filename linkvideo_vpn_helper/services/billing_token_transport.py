@@ -196,6 +196,75 @@ class BillingTokenTransport:
                 )
             return data
 
+    def put_camera_owner(
+        self, camera_id: str, from_account_id: str,
+        to_account_id: str, *, move_in_vc: bool = False,
+    ) -> dict:
+        """One confirmed owner transfer, using the captured CRM request shape.
+
+        Only move_in_vc=0 is verified; never silently move a video camera in B2O.
+        A timeout or unclear response is not permission to retry.
+        """
+        for identifier in (camera_id, from_account_id, to_account_id):
+            if not isinstance(identifier, str) or not re.fullmatch(
+                r"[1-9][0-9]{0,17}", identifier
+            ):
+                raise BillingValidationError("Некорректный ID камеры или аккаунта.")
+        if from_account_id == to_account_id:
+            raise BillingValidationError("Выберите другой аккаунт получателя.")
+        if move_in_vc is not False:
+            raise BillingNotConfigured(
+                "Перенос в VC пока не подтверждён запросом API."
+            )
+        path = f"/api/cameras/{camera_id}/owner"
+        with self._lock:
+            if not self.token or self._session is None:
+                raise BillingPermissionDenied("Требуется повторный вход в CRM.")
+            if self.header_mode not in (
+                "token", "authorization_bearer", "authorization_raw"
+            ):
+                raise BillingNotConfigured("Сначала загрузите камеры из CRM.")
+            try:
+                response = self._session.put(
+                    BILLING_API_ORIGIN + path,
+                    json={
+                        "from_id_account": from_account_id,
+                        "to_id_account": to_account_id,
+                        "move_in_vc": "0",
+                    },
+                    headers=self._headers(self.header_mode),
+                    timeout=self.timeout,
+                    allow_redirects=False,
+                )
+            except requests.RequestException:
+                raise BillingWriteOutcomeUnknown(
+                    "Неизвестен результат передачи камеры. Проверьте CRM "
+                    "перед повтором."
+                ) from None
+            code = response.status_code
+            if code in (401, 403):
+                raise BillingPermissionDenied(
+                    f"Нет прав на передачу камеры (HTTP {code})."
+                )
+            if code in (408, 425, 429) or code >= 500:
+                raise BillingWriteOutcomeUnknown(
+                    f"HTTP {code}: результат передачи неизвестен. "
+                    "Проверьте CRM перед повтором."
+                )
+            if not 200 <= code < 300:
+                raise BillingWriteRejected(code)
+            try:
+                result = response.json()
+            except ValueError:
+                raise BillingWriteOutcomeUnknown(
+                    "CRM не вернула подтверждение передачи камеры."
+                ) from None
+            if not isinstance(result, dict):
+                raise BillingWriteOutcomeUnknown(
+                    "Неожиданная структура ответа передачи камеры."
+                )
+            return result
+
     def put_tariff(self, camera_id: str, tariff_id: str, effective_date) -> dict:
         """Observed PUT /api/cameras/{id_camera}/tariff/{id_tariff}.
 
