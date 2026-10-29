@@ -73,8 +73,8 @@ camera = AgentCamera(SERIAL, service.servers()[0])
 page._on_ready(page._generation, "found", camera)
 assert page.camera is camera
 assert page.preview_label.isVisible() is False or "B2O" in page.preview_label.text()
-page.action_combo.setCurrentIndex(page.action_combo.findData("rotation"))
 with patch.object(page, "_load_setting"):
+    page.action_combo.setCurrentIndex(page.action_combo.findData("rotation"))
     page._on_ready(page._generation, "rotation_loaded", {
         "ImageRotation": 0, "Brightness": 50,
     })
@@ -92,8 +92,8 @@ page.rotation_combo.setCurrentIndex(page.rotation_combo.findData(1))
 assert page.ok_btn.isEnabled()
 assert page._image_enhance["Brightness"] == 50
 
-page.action_combo.setCurrentIndex(page.action_combo.findData("bitrate"))
 with patch.object(page, "_load_setting"):
+    page.action_combo.setCurrentIndex(page.action_combo.findData("bitrate"))
     page._on_ready(page._generation, "bitrate_loaded", {
         "VideoStreamInfos": [{"ID": 0, "VideoEncodeInfo": {"BitRate": "2048"}}]
     })
