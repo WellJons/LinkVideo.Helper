@@ -320,7 +320,9 @@ def audit_release_chain(audit: Audit) -> None:
         ("verifier protects source tree", "git status --porcelain --untracked-files=no" in verifier),
         ("CI calls reusable verifier", "scripts/verify_release.ps1" in workflow),
         ("release PRs run the Windows verifier", "pull_request:" in workflow and "- main" in workflow),
-        ("RC is one private draft Release", "Create or update private RC draft" in workflow and '"rc-$version"' in workflow),
+        ("RC is a downloadable prerelease", "Publish downloadable RC prerelease" in workflow
+         and '"rc-$version"' in workflow and "--prerelease" in workflow
+         and "--draft=false" in workflow and "gh release upload $tag" in workflow),
         ("Actions artifact quota is not used", "actions/upload-artifact" not in workflow),
         ("legacy Inno build is gone", "build_setup.bat" not in workflow and "innosetup" not in workflow.lower()),
         ("final draft uses authoritative Setup", "Create or update private final draft Release" in workflow and "installer_next/output/LinkVideo.Helper_Setup.exe" in workflow),
