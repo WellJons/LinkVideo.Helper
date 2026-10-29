@@ -1159,11 +1159,11 @@ class TariffsPage(QWidget):
                 lambda _checked=False, srv=service: self._request_service_catalog(srv)
             )
             cam_row.addWidget(change_button)
-            other = QPushButton("Действия ▾")
+            other = QPushButton("Действия")
             other.setObjectName("BillingCameraOtherActions")
             other.setToolTip("Статус камеры, передача и история изменений")
             other.setProperty("role", "soft")
-            other.setMinimumWidth(104)
+            other.setMinimumWidth(112)
             other.setMinimumHeight(42)
             popup = QMenu(other)
             for label in ("Включить / отключить", "Передать камеру", "История изменений", "Скидка"):
