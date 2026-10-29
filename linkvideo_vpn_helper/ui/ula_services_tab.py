@@ -105,6 +105,19 @@ class UlaServicesTab(QWidget):
         row.addStretch(1)
         setup.addLayout(row)
 
+        login_row = QHBoxLayout()
+        login_label = QLabel("Логин Oracle / RADIUS")
+        login_row.addWidget(login_label)
+        self.username = QLineEdit()
+        self.username.setObjectName("UlaOracleUsername")
+        self.username.setPlaceholderText("Имя пользователя для Oracle / RADIUS")
+        self.username.setToolTip(
+            "При импорте заполняется UserName из Ula.ini. Это может быть не "
+            "персональный логин сотрудника Ula."
+        )
+        login_row.addWidget(self.username, 1)
+        setup.addLayout(login_row)
+
         password_row = QHBoxLayout()
         password_label = QLabel("Пароль Oracle / RADIUS")
         password_row.addWidget(password_label)
@@ -139,17 +152,12 @@ class UlaServicesTab(QWidget):
         self.sid = QLineEdit()
         self.sid.setObjectName("UlaOracleSid")
         self.sid.setPlaceholderText("SID")
-        self.username = QLineEdit()
-        self.username.setObjectName("UlaOracleUsername")
-        self.username.setPlaceholderText("UserName из Ula.ini")
         grid.addWidget(QLabel("Сервер"), 0, 0)
         grid.addWidget(self.host, 0, 1)
         grid.addWidget(QLabel("Порт"), 0, 2)
         grid.addWidget(self.port, 0, 3)
         grid.addWidget(QLabel("SID"), 1, 0)
         grid.addWidget(self.sid, 1, 1)
-        grid.addWidget(QLabel("Пользователь"), 1, 2)
-        grid.addWidget(self.username, 1, 3)
         grid.setColumnStretch(1, 2)
         grid.setColumnStretch(3, 1)
         advanced_layout.addLayout(grid)
@@ -306,7 +314,8 @@ class UlaServicesTab(QWidget):
             )
             self.message.setText(
                 "В Ula.ini найден RADIUS. " + status +
-                " Учётная запись Oracle из Ula.ini может отличаться от сотрудника Ula."
+                " Поле логина заполнено UserName из Ula.ini; при необходимости "
+                "измените его на персональный логин Oracle/RADIUS."
             )
         else:
             self.message.setText(
