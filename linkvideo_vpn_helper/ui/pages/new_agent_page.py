@@ -511,14 +511,14 @@ class NewAgentPage(QWidget):
                     try:
                         fresh = self.service.get_image_enhance(camera)
                     except Exception:
-                        pass  # A read error does not undo a confirmed write.
+                        fresh = None  # A read error does not undo a confirmed write.
                 else:
                     before, after = self.service.set_bitrate(camera, old_video, value)
                     detail = f"Битрейт: {before} → {after} Кбит/с"
                     try:
                         fresh = self.service.get_video_streams(camera)
                     except Exception:
-                        pass
+                        fresh = None
                 self.operationReady.emit(request_id, "done", (title, detail, action, fresh))
             except Exception as exc:
                 self.operationReady.emit(request_id, "error", ("Настройки не применены", str(exc)))
