@@ -22,7 +22,7 @@ def write_pe(path: Path, machine: int):
     data = bytearray(0x90)
     data[0:2] = b"MZ"
     struct.pack_into("<I", data, 0x3c, 0x80)
-    data[0x80:0x84] = b"PE\\x00\\x00"
+    data[0x80:0x84] = b"PE\x00\x00"
     struct.pack_into("<H", data, 0x84, machine)
     path.write_bytes(data)
 
@@ -33,11 +33,11 @@ with tempfile.TemporaryDirectory() as temp:
     ula = root / "Ula"
     ula.mkdir()
     (ula / "Ula.ini").write_text(
-        "[DB]\\nServer=127.0.0.1\\nPort=1521\\nSid=TEST\\nUserName=operator\\n",
+        "[DB]\nServer=127.0.0.1\nPort=1521\nSid=TEST\nUserName=operator\n",
         encoding="cp1251",
     )
     (ula / "sqlnet.ora").write_text(
-        "SQLNET.AUTHENTICATION_SERVICES=(RADIUS)\\n", encoding="ascii",
+        "SQLNET.AUTHENTICATION_SERVICES=(RADIUS)\n", encoding="ascii",
     )
     assert ula_radius_configured(ula)
 
@@ -95,7 +95,7 @@ with tempfile.TemporaryDirectory() as temp:
             })
             conn.close()
 
-    (ula / "sqlnet.ora").write_text("SQLNET.AUTHENTICATION_SERVICES=(NONE)\\n")
+    (ula / "sqlnet.ora").write_text("SQLNET.AUTHENTICATION_SERVICES=(NONE)\n")
     assert not ula_radius_configured(ula)
     (client / "oci.dll").write_bytes(b"not a PE file")
     assert _oci_architecture(client / "oci.dll") == "unknown"
