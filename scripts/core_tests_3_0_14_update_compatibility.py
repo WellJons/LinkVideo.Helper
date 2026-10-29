@@ -14,6 +14,10 @@ from unittest.mock import patch
 
 from linkvideo_vpn_helper.services import update_service as update
 
+# A new stable build must never reuse 3.0.13, otherwise the installed
+# 3.0.13 clients will not see a newer version in the update manifest.
+assert update._version_tuple(update.APP_VERSION) >= update._version_tuple("3.0.14")
+
 base = {
     "version": "3.0.14",
     "download_url": "https://github.com/WellJons/LinkVideo.Helper.Updates/releases/download/v3.0.14/LinkVideo.Helper_Setup.exe",
