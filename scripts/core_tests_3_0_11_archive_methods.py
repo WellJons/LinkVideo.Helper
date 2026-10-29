@@ -220,7 +220,8 @@ def test_release_packaging_contract() -> None:
     assert "build_setup.bat" not in workflow
     assert "scripts/verify_release.ps1" in workflow
     assert "pull_request:" in workflow and "- main" in workflow
-    assert "Create or update private RC draft" in workflow
+    assert "Publish downloadable RC prerelease" in workflow
+    assert "--prerelease" in workflow and "--draft=false" in workflow
     assert '"rc-$version"' in workflow
     assert "Self-test exact produced Setup payload" in verifier
     assert "--self-test" in verifier
