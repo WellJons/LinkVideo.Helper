@@ -214,5 +214,38 @@ def main() -> int:
     return app.exec()
 
 
+def _self_test_ula_driver(output_filename: str) -> int:
+    """Prove the *frozen EXE* contains working Oracle Thin crypto primitives.
+
+    The offline test performs authenticated AES encryption/decryption, never
+    accesses the network and never loads any customer or database credentials.
+    A file marker is used because the Windows application has no console.
+    """
+    try:
+        import oracledb
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+        from cryptography.hazmat.primitives import hashes
+
+        secret = b"offline Ula runtime probe"
+        key = AESGCM.generate_key(bit_length=128)
+        cipher = AESGCM(key)
+        nonce = bytes(range(12))
+        ciphertext = cipher.encrypt(nonce, secret, None)
+        assert cipher.decrypt(nonce, ciphertext, None) == secret
+        result = PBKDF2HMAC(
+            algorithm=hashes.SHA256(), length=32,
+            salt=b"linkvideo-ula-probe", iterations=1000,
+        ).derive(b"synthetic-password")
+        assert len(result) == 32
+        assert hasattr(oracledb, "connect")
+    except Exception:
+        return 1
+    Path(output_filename).write_text("ULA_CRYPTO_THIN_OK\n", encoding="utf-8")
+    return 0
+
+
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "--self-test-ula-driver":
+        raise SystemExit(_self_test_ula_driver(sys.argv[2]))
     raise SystemExit(main())
