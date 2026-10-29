@@ -413,6 +413,7 @@ class SearchManagePage(QWidget):
         # a customer's account.
         self.detail_scroll = QScrollArea()
         self.detail_scroll.setObjectName("SearchClientControlsScroll")
+        self.detail_scroll.setProperty("lvWheelBoundaryLock", True)
         self.detail_scroll.setWidgetResizable(True)
         self.detail_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         self.detail_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -1135,6 +1136,7 @@ class SearchManagePage(QWidget):
         pl.addLayout(port_head)
         self.port_list = QListWidget()
         self.port_list.setObjectName("PortList")
+        self.port_list.setProperty("lvWheelBoundaryLock", True)
         self.port_list.setMinimumHeight(160)
         self.port_list.setMaximumHeight(230)
         self.port_list.setSpacing(4)
