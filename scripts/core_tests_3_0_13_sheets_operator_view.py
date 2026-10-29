@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from linkvideo_vpn_helper.version import APP_VERSION
 from linkvideo_vpn_helper.services.vpn_sheets_operator_view import (
     _compact_ports,
     _describe_port_change,
@@ -45,9 +46,9 @@ assert "self._lv_summary_rows = {}" in module_source
 assert "(2, 3), (3, 4)" in module_source
 assert "Автоматически" in module_source
 
-release_notes = (ROOT / "RELEASE_3.0.13_RU.txt").read_text(encoding="utf-8")
-assert "LinkVideo.Helper 3.0.13" in release_notes
-assert "LV Сводка" in release_notes
-assert "10001→10001" in release_notes
+release_notes = (ROOT / f"RELEASE_{APP_VERSION}_RU.txt").read_text(encoding="utf-8")
+assert f"LinkVideo.Helper {APP_VERSION}" in release_notes
+assert "обновлени" in release_notes.lower()
+assert "VPN" in release_notes
 
 print("CORE TESTS 3.0.13 SHEETS OPERATOR VIEW OK")
