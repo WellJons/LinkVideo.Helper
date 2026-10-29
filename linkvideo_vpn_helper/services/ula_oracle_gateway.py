@@ -11,6 +11,7 @@ discount, VAT) must be checked against two test Ula screens before labelling
 it a monthly charge.
 """
 
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Sequence
 
@@ -149,9 +150,10 @@ class UlaOracleReadOnlyGateway:
 
             return parse_ula_services(column_names, capped_rows())
         finally:
+            # Oracle can raise during cursor cleanup after a more relevant
+            # query failure. Close all three resources independently without
+            # masking the original exception or skipping connection.close().
             for obj in (result_cursor, cursor, connection):
                 if obj is not None:
-                    try:
+                    with suppress(Exception):
                         obj.close()
-                    except Exception:
-                        pass
