@@ -7,9 +7,9 @@ default adapter is fail-closed; no guesswork around CRM endpoints or cookies.
 """
 
 import threading
-from datetime import date
+from datetime import date, datetime
 
-from PySide6.QtCore import QDate, QSettings, Qt, QUrl, Signal
+from PySide6.QtCore import QDate, QSettings, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QAbstractItemView, QCalendarWidget, QCheckBox, QComboBox, QDateEdit,
@@ -475,6 +475,10 @@ class TariffsPage(QWidget):
         self.operationReady.connect(self._on_operation)
         self.cameraPreviewReady.connect(self._on_camera_preview)
         self.billing_login.sessionChanged.connect(self._on_billing_session_changed)
+        # Wait until the whole page and listeners exist, then use only
+        # explicitly remembered Windows DPAPI credentials for a fresh login.
+        if gateway is None:
+            QTimer.singleShot(0, self.billing_login.auto_login_remembered)
 
     def _build(self):
         self.page_scroll, self.page_canvas, root = build_page_scaffold(
