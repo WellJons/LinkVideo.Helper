@@ -1687,10 +1687,10 @@ class TariffsPage(QWidget):
             return
         confirmation = ConfirmDialog(
             "Подтвердить передачу камеры",
-            f"Камера: {service.camera_name}\\n"
-            f"Отправитель: {client.login} · № {client.id}\\n"
-            f"Получатель: {recipient.login} · № {recipient.id}\\n"
-            f"Страна: {client.country}\\n"
+            f"Камера: {service.camera_name}\n"
+            f"Отправитель: {client.login} · № {client.id}\n"
+            f"Получатель: {recipient.login} · № {recipient.id}\n"
+            f"Страна: {client.country}\n"
             "Перенести в VC: нет. Операция изменит владельца в биллинге.",
             "Передать камеру", True, self
         )
