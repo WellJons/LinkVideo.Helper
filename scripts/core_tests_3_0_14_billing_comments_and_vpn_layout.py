@@ -96,6 +96,9 @@ with tempfile.TemporaryDirectory() as folder:
     app.processEvents()
     assert page.client_info_card.minimumWidth() >= 400
     assert page.detail_panel.minimumWidth() <= 450
+    assert not page.compact_search.isHidden()
+    assert "fictional_01" in page.compact_search_label.text()
+    assert page.search_form.maximumHeight() <= page.search_form.sizeHint().height()
     assert page.info_title.text() == "Клиент fictional_01"
     assert page.info_online.text()=="В сети"
     assert page.info_title.parentWidget() is not page.info_host
