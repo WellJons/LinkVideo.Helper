@@ -89,17 +89,12 @@ jobs:
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          $remoteTag = ([string](git ls-remote --tags origin "refs/tags/$tag")).Trim()
-          if ($remoteTag) {
-            if (-not $remoteTag.StartsWith($env:GITHUB_SHA)) {
-              throw "Stable tag already exists on a different commit: $tag"
-            }
-          } else {
-            git tag $tag $env:GITHUB_SHA
-            if ($LASTEXITCODE -ne 0) { throw 'Could not create final version tag' }
-            git push origin "refs/tags/$tag"
-            if ($LASTEXITCODE -ne 0) { throw 'Could not publish final version tag' }
-          }
+          # Push is deliberately non-forced: an existing production tag
+          # cannot be moved or overwritten by this one-shot workflow.
+          git tag $tag $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create final version tag' }
+          git push origin "refs/tags/$tag"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not publish final version tag' }
 
           $assets = @($setup, $uninstaller, $payload, $payloadMeta, $evidence)
           gh release create $tag @assets --repo $env:GITHUB_REPOSITORY --verify-tag --title 'LinkVideo.Helper 3.0.15' --notes-file $notes --latest
