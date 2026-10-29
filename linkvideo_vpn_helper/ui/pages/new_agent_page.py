@@ -58,7 +58,6 @@ class NewAgentPage(QWidget):
         self.workspace = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         self.workspace.setSpacing(16)
         form = Card(kind="hero")
-        form.setObjectName("NewAgentFormCard")
         root = QVBoxLayout(form)
         root.setContentsMargins(22, 20, 22, 22)
         root.setSpacing(15)
@@ -85,7 +84,6 @@ class NewAgentPage(QWidget):
         root.addLayout(row)
 
         self.camera_card = Card(kind="success")
-        self.camera_card.setObjectName("NewAgentCameraCard")
         cam = QVBoxLayout(self.camera_card)
         cam.setContentsMargins(16, 14, 16, 14)
         cam.setSpacing(9)
@@ -189,7 +187,6 @@ class NewAgentPage(QWidget):
         self.workspace.addWidget(form, 6)
 
         self.result = Card()
-        self.result.setObjectName("NewAgentResultCard")
         side = QVBoxLayout(self.result)
         side.setContentsMargins(22, 20, 22, 22)
         side.setSpacing(12)
@@ -228,7 +225,6 @@ class NewAgentPage(QWidget):
         side.addWidget(self.result_empty, 1)
 
         self.result_summary = Card(subtle=True)
-        self.result_summary.setObjectName("NewAgentSummary")
         summary_l = QVBoxLayout(self.result_summary)
         summary_l.setContentsMargins(16, 15, 16, 15)
         summary_l.setSpacing(8)
