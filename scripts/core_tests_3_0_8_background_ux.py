@@ -30,11 +30,15 @@ assert "progress_callback(100)" in update_service
 assert "os.startfile" in update_service
 assert '["cmd", "/c", "start"' not in update_service
 
-# VPN-client lifecycle data refreshes silently after the page is interactive;
-# the manual button is the only path that owns visible progress.
-assert "setInterval(60_000)" in ux
-assert "QTimer.singleShot(350, lambda: _background_scan(self))" in ux
+# Opening VPN clients must be idle; the large inventory is fetched ONLY
+# when the user presses "Проверить серверы".
+assert "setInterval(60_000)" in ux  # Compatibility timer exists, but is never started.
+assert "self._lv_refresh_timer.start()" not in ux
+assert "QTimer.singleShot(350, lambda: _background_scan(self))" not in ux
+assert "QTimer.singleShot(250, lambda: _background_scan(self))" not in ux
 assert "QTimer.singleShot(180, self._scan)" not in ux
+main_window = (ROOT / "linkvideo_vpn_helper/ui/main_window.py").read_text(encoding="utf-8")
+assert '"inactive"' not in main_window.split("self._preload_queue = ", 1)[1].split("\n", 1)[0]
 assert 'self._busy_kind = "background-scan" if background else "scan"' in ux
 assert "if not background:\n            self._set_busy(True)" in ux
 assert "incoming == list(getattr(self, \"_records\", []))" in ux

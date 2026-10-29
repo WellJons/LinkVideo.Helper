@@ -340,7 +340,8 @@ class SearchManagePage(QWidget):
         self._search_form_anim = None
 
         self.workspace = QWidget()
-        workspace_l = QHBoxLayout(self.workspace)
+        workspace_l = QBoxLayout(QBoxLayout.Direction.LeftToRight, self.workspace)
+        self.workspace_layout = workspace_l
         workspace_l.setContentsMargins(0, 0, 0, 0)
         workspace_l.setSpacing(12)
 
@@ -561,10 +562,26 @@ class SearchManagePage(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._sync_responsive_layout()
 
     def _sync_responsive_layout(self):
-        # Компоновка поиска теперь одноколоночная и не требует переноса карточки.
-        return
+        if not hasattr(self, "workspace_layout"):
+            return
+        # The left profile and the right controls need ~900 px together.
+        # On narrower windows stack the cards; never clip dangerous actions.
+        stacked = self.width() < 1050
+        direction = (QBoxLayout.Direction.TopToBottom if stacked
+                     else QBoxLayout.Direction.LeftToRight)
+        if self.workspace_layout.direction() != direction:
+            self.workspace_layout.setDirection(direction)
+        if stacked:
+            self.client_info_card.setMinimumWidth(0)
+            self.detail_panel.setMinimumWidth(0)
+            self.workspace.setMinimumHeight(940)
+        else:
+            self.client_info_card.setMinimumWidth(405)
+            self.detail_panel.setMinimumWidth(445)
+            self.workspace.setMinimumHeight(545)
 
     def cancel_current_action(self) -> bool:
         event = self._cancel_event
@@ -1290,6 +1307,7 @@ class SearchManagePage(QWidget):
         cl.addWidget(ct)
 
         grid = QGridLayout()
+        grid.setObjectName("ClientManagementActionsGrid")
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(8)
 
@@ -1302,40 +1320,48 @@ class SearchManagePage(QWidget):
         monitor.clicked.connect(self._monitor)
         grid.addWidget(self.copy_data_button, 0, 0)
         grid.addWidget(refresh, 0, 1)
-        grid.addWidget(monitor, 0, 2)
+        grid.addWidget(monitor, 1, 0, 1, 2)
 
         self.add_count = CounterControl(1, 1, 14)
         add = QPushButton("Добавить порты")
         add.setProperty("role", "primary")
         add.clicked.connect(self._add_ports)
-        grid.addWidget(self.add_count, 1, 0)
-        grid.addWidget(add, 1, 1, 1, 2)
+        grid.addWidget(self.add_count, 2, 0)
+        grid.addWidget(add, 2, 1)
 
         self.toggle_port_button = QPushButton("Выберите порт")
         self.toggle_port_button.clicked.connect(self._toggle_selected_port)
         self.remove_port_button = QPushButton("Удалить порт")
         self.remove_port_button.clicked.connect(self._remove_selected_port)
-        grid.addWidget(self.toggle_port_button, 2, 0, 1, 2)
-        grid.addWidget(self.remove_port_button, 2, 2)
+        grid.addWidget(self.toggle_port_button, 3, 0)
+        grid.addWidget(self.remove_port_button, 3, 1)
 
         self.password_edit = QLineEdit()
         self.password_edit.setPlaceholderText("Новый пароль или пусто для генерации")
+        self.password_edit.setMinimumWidth(0)
         change = QPushButton("Сменить пароль")
         change.clicked.connect(self._password_inline)
-        grid.addWidget(self.password_edit, 3, 0, 1, 2)
-        grid.addWidget(change, 3, 2)
+        grid.addWidget(self.password_edit, 4, 0)
+        grid.addWidget(change, 4, 1)
 
         account_toggle = QPushButton("Вкл./выкл. учётку")
         account_toggle.clicked.connect(self._toggle_account)
         delete = QPushButton("Удалить клиента")
         delete.setProperty("role", "danger")
         delete.clicked.connect(self._delete)
-        grid.addWidget(account_toggle, 4, 0, 1, 2)
-        grid.addWidget(delete, 4, 2)
+        grid.addWidget(account_toggle, 5, 0)
+        grid.addWidget(delete, 5, 1)
 
+        # Two balanced columns fit into the account workspace. Three columns
+        # previously pushed the last buttons past the card's right edge.
+        for action in (self.copy_data_button, refresh, monitor, add,
+                       self.toggle_port_button, self.remove_port_button,
+                       change, account_toggle, delete):
+            action.setMinimumWidth(0)
+            action.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+            action.setMinimumHeight(38)
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(2, 1)
         cl.addLayout(grid)
         self.detail_l.addWidget(control)
         self.detail_l.addStretch(1)

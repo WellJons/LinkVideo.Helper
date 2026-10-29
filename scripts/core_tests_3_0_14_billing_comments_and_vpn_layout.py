@@ -96,6 +96,12 @@ with tempfile.TemporaryDirectory() as folder:
     app.processEvents()
     assert page.client_info_card.minimumWidth() >= 400
     assert page.detail_panel.minimumWidth() <= 450
+    grid = page.findChild(__import__("PySide6.QtWidgets", fromlist=["QGridLayout"]).QGridLayout, "ClientManagementActionsGrid")
+    assert grid is not None
+    assert grid.columnCount() == 2
+    assert grid.itemAtPosition(0, 0) is not None
+    assert grid.itemAtPosition(0, 1) is not None
+    assert grid.itemAtPosition(1, 0) is not None
     assert not page.compact_search.isHidden()
     assert "fictional_01" in page.compact_search_label.text()
     assert page._search_form_anim is not None
@@ -110,6 +116,12 @@ with tempfile.TemporaryDirectory() as folder:
     assert page.detail_route_title.text() == "Управление аккаунтом"
     assert page.info_scroll.verticalScrollBar().value()==0
     assert page.port_list.height()<=275
+    page.resize(970, 850)
+    app.processEvents()
+    assert page.workspace_layout.direction() == page.workspace_layout.Direction.TopToBottom
+    page.resize(1100, 850)
+    app.processEvents()
+    assert page.workspace_layout.direction() == page.workspace_layout.Direction.LeftToRight
     page.close()
     app.processEvents()
 

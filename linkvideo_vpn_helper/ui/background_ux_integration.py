@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import copy
+import logging
+import ntpath
 import os
 import queue
 import subprocess
@@ -15,19 +18,70 @@ _INSTALLED = False
 
 
 def _install_no_console_process_guard() -> None:
+    """Hide short-lived Windows console helpers without suppressing GUI windows.
+
+    CREATE_NO_WINDOW alone is insufficient when a caller also requests
+    CREATE_NEW_CONSOLE (the old wrapper explicitly exempted that case).
+    STARTUPINFO.SW_HIDE provides a second, independent Windows startup hint.
+    The detached case already has no console and must not be combined with
+    CREATE_NO_WINDOW.  Keep handles, environment, redirection and arguments
+    untouched.
+    """
     if os.name != "nt" or getattr(subprocess.Popen, "_lv_no_console_guard", False):
         return
+
     original = subprocess.Popen
     no_window = int(getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
     new_console = int(getattr(subprocess, "CREATE_NEW_CONSOLE", 0x00000010))
+    detached = int(getattr(subprocess, "DETACHED_PROCESS", 0x00000008))
+    startf_showwindow = int(getattr(subprocess, "STARTF_USESHOWWINDOW", 0x00000001))
+    sw_hide = int(getattr(subprocess, "SW_HIDE", 0))
+
+    # Startup-only telemetry to distinguish Helper children from third-party
+    # windows. Never log command arguments, paths, tokens or credentials.
+    start = time.monotonic()
+    recorded = 0
 
     class HiddenPopen(original):
         _lv_no_console_guard = True
 
         def __init__(self, *args, **kwargs):
-            flags = int(kwargs.get("creationflags", 0) or 0)
-            if not flags & new_console:
-                kwargs["creationflags"] = flags | no_window
+            nonlocal recorded
+            arguments = args[0] if args else kwargs.get("args", ())
+            executable = kwargs.get("executable")
+            if not executable:
+                executable = (arguments[0] if isinstance(arguments, (list, tuple))
+                              and arguments else arguments)
+            name = ntpath.basename(str(executable or "")).lower()
+
+            # Do not suppress real GUI programs launched by Helper. WinBox
+            # and the fallback setup launcher must remain visible. Only
+            # console children get STARTUPINFO.SW_HIDE.
+            is_gui = (
+                name in ("winbox.exe", "winbox64.exe", "linkvideo.helper.exe")
+                or name.startswith("linkvideo.helper_setup") and name.endswith(".exe")
+            )
+            if not is_gui:
+                flags = int(kwargs.get("creationflags", 0) or 0)
+                flags &= ~new_console
+                if not flags & detached:
+                    flags |= no_window
+                kwargs["creationflags"] = flags
+
+                existing = kwargs.get("startupinfo")
+                info = copy.copy(existing) if existing is not None else subprocess.STARTUPINFO()
+                info.dwFlags |= startf_showwindow
+                info.wShowWindow = sw_hide
+                kwargs["startupinfo"] = info
+
+            if recorded < 40 and time.monotonic() - start < 60:
+                if name and name.replace("_", "").replace("-", "").replace(".", "").isalnum():
+                    logger = logging.getLogger("linkvideo.helper")
+                    if logger.handlers:
+                        mode = "GUI" if is_gui else "скрытый режим"
+                        logger.info("PROCESS | Запуск дочернего процесса (%s) | %s", mode, name[:80])
+                        recorded += 1
+
             super().__init__(*args, **kwargs)
 
     subprocess.Popen = HiddenPopen
@@ -218,13 +272,11 @@ def _install_inactive_clients_auto_refresh() -> None:
         self._sync_batch_controls()
 
     def patched_activated(self):
+        # The lifecycle inventory can exceed 1,700 records. Tab activation
+        # must never trigger a scan, render or 60-second timer; the user has an
+        # explicit «Проверить серверы» button for that expensive operation.
         if callable(original_activated):
             original_activated(self)
-        self._lv_refresh_timer.start()
-        # Opening the page must never show a blocking scan dialog. Empty/stale
-        # data are refreshed silently after the page is already interactive.
-        if getattr(self, "_cancel_event", None) is None:
-            QTimer.singleShot(350, lambda: _background_scan(self))
 
     def patched_deactivated(self):
         self._lv_refresh_timer.stop()
@@ -232,11 +284,9 @@ def _install_inactive_clients_auto_refresh() -> None:
             original_deactivated(self)
 
     def patched_refresh_servers(self):
-        try:
-            original_refresh_servers(self)
-        finally:
-            if self.isVisible() and getattr(self, "_cancel_event", None) is None:
-                QTimer.singleShot(250, lambda: _background_scan(self))
+        # Settings changes are not permission to enumerate all VPN accounts.
+        # Keep the last result until the user explicitly requests a new scan.
+        return original_refresh_servers(self)
 
     InactiveClientsPage.__init__ = patched_init
     InactiveClientsPage._scan = patched_scan
