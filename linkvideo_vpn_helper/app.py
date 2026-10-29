@@ -75,6 +75,12 @@ def _migrate_settings(settings: QSettings):
 
 
 def main() -> int:
+    # Install the Windows subprocess guard before any QApplication/setting
+    # initializers or automatic login can launch auxiliary programs.
+    from linkvideo_vpn_helper.ui.background_ux_integration import (
+        _install_no_console_process_guard,
+    )
+    _install_no_console_process_guard()
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setApplicationDisplayName(APP_NAME)
@@ -84,14 +90,6 @@ def main() -> int:
 
     settings = QSettings("LinkVideo", "LinkVideo.Helper")
     _migrate_settings(settings)
-
-    # Hide console subprocesses BEFORE login and plugin/startup imports.
-    # The existing guard used to run only after RouterOS authorization,
-    # allowing early child console windows to flash on Windows.
-    from linkvideo_vpn_helper.ui.background_ux_integration import (
-        _install_no_console_process_guard,
-    )
-    _install_no_console_process_guard()
 
     from linkvideo_vpn_helper.services.app_logging import event, install_runtime_logging, shutdown_runtime_logging
     install_runtime_logging()
