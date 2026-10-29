@@ -61,6 +61,16 @@ if os.name == "nt":
         assert not detached.kwargs["creationflags"] & subprocess.CREATE_NO_WINDOW
         assert all(call.kwargs["startupinfo"].wShowWindow == 0 for call in calls)
 
+        for gui_program in ("winbox64.exe", "winbox.exe", "LinkVideo.Helper_Setup_3.0.15_RC.exe"):
+            gui = subprocess.Popen([gui_program, "example"], creationflags=0)
+            assert gui.kwargs["creationflags"] == 0, gui_program
+            assert "startupinfo" not in gui.kwargs, gui_program
+        gui_startup = subprocess.STARTUPINFO()
+        gui_startup.wShowWindow = 1
+        gui = subprocess.Popen(["winbox64.exe"], startupinfo=gui_startup)
+        assert gui.kwargs["startupinfo"] is gui_startup
+        assert gui.kwargs["startupinfo"].wShowWindow == 1
+
         assert all("fake-secret-argument" not in str(call.kwargs)
                    for call in calls), "No secret arguments belong to subprocess kwargs"
     finally:
