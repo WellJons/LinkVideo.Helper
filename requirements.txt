@@ -2,3 +2,5 @@ PySide6>=6.6,<7
 requests>=2.31,<3
 certifi>=2024.7.4
 google-auth>=2.30,<3
+oracledb>=2.4,<4
+cryptography>=42,<49

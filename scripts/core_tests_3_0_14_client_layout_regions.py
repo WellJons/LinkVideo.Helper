@@ -57,7 +57,7 @@ with tempfile.TemporaryDirectory() as temp:
         page.client = client
         page._render_client(client)
         app.processEvents()
-        assert page.workspace_tabs.count() == 3
+        assert page.workspace_tabs.count() == 4
         assert page.workspace_tabs.tabText(1) == "Создать клиента"
         assert page.services_table.columnWidth(6) >= 184
         controls = page.services_table.cellWidget(0, 6)
