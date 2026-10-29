@@ -111,6 +111,46 @@ with patch("linkvideo_vpn_helper.services.agent_service.requests.get", side_effe
     else:
         raise AssertionError("External host accepted")
 
+
+# A camera beyond the first (truncated) inventory page must still be found.
+late_serial = "210235UFHK3251005463"
+paging_calls = []
+def paginated_get(url, **kwargs):
+    paging_calls.append((url, kwargs.get("params")))
+    if not url.startswith(f"http://{host}:19999/"):
+        return FakeResponse([])
+    params = kwargs.get("params")
+    if params is None:
+        return FakeResponse({"items": [{"serial_number": serial}], "total": 2})
+    assert params == {"offset": 1, "limit": 1}
+    return FakeResponse({"items": [{"serial_number": late_serial, "vendor": "LD"}], "total": 2})
+
+with patch("linkvideo_vpn_helper.services.agent_service.requests.get", side_effect=paginated_get):
+    paged = AgentService(None, creds)
+    found_late = paged.find_camera(late_serial)
+    assert found_late.serial_number == late_serial and found_late.server == host
+    assert any(params == {"offset": 1, "limit": 1} for _, params in paging_calls)
+
+# Parsing a nested camera list and a noncanonical serial key is supported.
+assert AgentService._camera_rows({"data": {"cameras": [{"serialNumber": late_serial}]}}) == [
+    {"serialNumber": late_serial}
+]
+
+# Unrecognized responses on any server are not falsely shown as "not found".
+def incomplete_get(url, **kwargs):
+    if url.startswith(f"http://{host}:19999/"):
+        return FakeResponse({"unexpected": {"error": "inventory not provided"}})
+    return FakeResponse([])
+
+with patch("linkvideo_vpn_helper.services.agent_service.requests.get", side_effect=incomplete_get):
+    try:
+        AgentService(None, creds).find_camera("210235UFHK3251009999")
+    except ConnectionError as exc:
+        assert "Поиск не завершён" in str(exc)
+        assert host in str(exc)
+    else:
+        raise AssertionError("Partial inventory incorrectly counted as not found")
+
 app = QApplication.instance() or QApplication([])
 assert not navigation_icon("new_agent").isNull()
 
@@ -121,6 +161,8 @@ assert page.camera is None and page.actions_card.isHidden()
 page._on_ready(page._generation, "found", camera)
 assert page.camera is camera
 assert page.camera_card.isHidden() is False
+assert page.result_summary.isHidden() is False
+assert page.copy_btn.isEnabled()
 assert serial in page.info.text()
 page.action_combo.setCurrentIndex(page.action_combo.findData("time"))
 assert page.ok_btn.isEnabled()
