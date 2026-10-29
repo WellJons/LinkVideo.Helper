@@ -23,7 +23,7 @@ from linkvideo_vpn_helper.services.vpn_restore_service import (
 )
 from linkvideo_vpn_helper.services.vpn_service import SessionCredentials
 from linkvideo_vpn_helper.ui.components import TaskStatus
-from linkvideo_vpn_helper.ui.dialogs import ConfirmDialog
+from linkvideo_vpn_helper.ui.dialogs import ConfirmDialog, style_helper_dialog
 
 
 class VPNRestoreDialog(QDialog):
@@ -40,6 +40,7 @@ class VPNRestoreDialog(QDialog):
         parent=None,
     ):
         super().__init__(parent)
+        style_helper_dialog(self)
         self.service = service
         self.credentials = credentials
         self.servers = list(servers)

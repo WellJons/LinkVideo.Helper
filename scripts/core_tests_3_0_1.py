@@ -9,7 +9,9 @@ for token in ['Розовое молочко','linkvideo_2026','LinkVideo · о�
 search=(ROOT/'linkvideo_vpn_helper/ui/pages/search_manage_page.py').read_text(encoding='utf-8')
 assert 'item.setSizeHint(QSize(0, 70))' in search
 assert 'self.page_layout.addStretch(1)' not in search
-assert 'self.workspace.setMinimumHeight(640)' in search
+assert 'self.workspace.setMinimumHeight(545)' in search
+assert 'self.info_scroll = QScrollArea()' in search
+assert 'self.detail_scroll = QScrollArea()' in search
 components=(ROOT/'linkvideo_vpn_helper/ui/components.py').read_text(encoding='utf-8')
 compat=(ROOT/'linkvideo_vpn_helper/ui/components_compat.py').read_text(encoding='utf-8')
 combined=components+'\n'+compat

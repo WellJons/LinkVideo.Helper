@@ -74,6 +74,24 @@ def main():
             assert not settings.contains("password")
             stale.close()
 
+            # Regression: the entire 2-line failure message must remain
+            # inside the red error frame at 100% and larger UI sizes.
+            stale.resize(1080, 680)
+            stale.show()
+            stale._status(
+                "Ни один VPN-сервер не завершил проверку входа. "
+                "Проверьте доступность RouterOS API (8728/8729). "
+                "Техническая причина записана в журнал LinkVideo.Helper.",
+                danger=True,
+            )
+            app.processEvents()
+            assert stale.error_banner.height() >= 76, stale.error_banner.height()
+            assert stale.error.height() >= 44, stale.error.height()
+            assert stale.error.geometry().bottom() < stale.error_banner.height(), (
+                stale.error.geometry(), stale.error_banner.geometry()
+            )
+            stale.close()
+
             # A manual attempt with a new valid password can recover.
             login_module.verify_routeros_user = (
                 lambda user, password, servers: VerifiedRouterOSUser(user, "full", "vpn01.linkvideo.ru")

@@ -61,20 +61,29 @@ def verify_routeros_user(
         raise LoginUnavailable("Не настроены VPN-серверы для проверки входа.")
 
     unavailable: list[str] = []
+    missing_user_hosts: list[str] = []
     for host in hosts:
+        stage = "connect"
         try:
-            # Connect first authenticates through /login; no API access is granted
-            # by this Python application until both steps below succeed.
+            # A successful RouterOS /login is only the first step. Never
+            # authorize a Helper user until /user confirms that exact enabled
+            # account in the full group on a trusted server.
             with client_factory(host, user, password, port=8728, timeout=timeout) as api:
+                stage = "user-list"
                 accounts = api.print("/user", {".proplist": "name,group,disabled"})
+                if not isinstance(accounts, list):
+                    raise ValueError("Unexpected RouterOS user list format")
                 record = next(
-                    (item for item in accounts if str(item.get("name", "")) == user),
+                    (item for item in accounts
+                     if isinstance(item, dict) and str(item.get("name", "")) == user),
                     None,
                 )
                 if record is None:
-                    raise LoginRejected(
-                        "RouterOS принял соединение, но пользователь не найден в /user. Вход запрещён."
-                    )
+                    # Regional servers can have different local user lists.
+                    # Continue to another trusted server, but never accept
+                    # this server's /login as proof of Helper authorization.
+                    missing_user_hosts.append(host)
+                    continue
                 if not _is_enabled(record.get("disabled", "no")):
                     raise LoginRejected("Учётная запись MikroTik отключена. Вход запрещён.")
                 group = str(record.get("group", "")).strip()
@@ -86,28 +95,39 @@ def verify_routeros_user(
         except LoginRejected:
             raise
         except Exception as exc:
-            # An explicit bad-password response from a reachable authentication
-            # endpoint must not be bypassed by trying a different router.
+            # Log only the endpoint, stage and exception class, never the
+            # raw exception: a protocol exception may contain a secret.
+            from linkvideo_vpn_helper.services.app_logging import event
+            event("LOGIN", "Проверка RouterOS", f"{host} · {stage} · {type(exc).__name__}")
+
             if _is_auth_failure(exc):
+                # Do not try other servers after explicit bad credentials.
                 raise LoginRejected("Неверный логин или пароль MikroTik.") from exc
 
-            # /user permission failures and API traps are not network outages.
-            # Do not fall through to another server with potentially different
-            # group or account state.
-            if isinstance(exc, RouterOSAPIError):
+            if isinstance(exc, RouterOSAPIError) and stage == "user-list":
+                # A permission denial while reading /user is not a network
+                # outage. Never turn it into access or silently bypass it.
                 raise LoginRejected(
                     "Не удалось подтвердить пользователя через /user MikroTik. "
                     "Проверьте права учётной записи и настройки API."
                 ) from exc
 
-            if isinstance(exc, (OSError, TimeoutError, socket.timeout)):
+            if isinstance(exc, (OSError, TimeoutError, socket.timeout,
+                                RouterOSAPIError, ValueError, TypeError, UnicodeError)):
+                # RouterOS versions/servers may disagree about protocol or
+                # legacy challenge format. Move to the next trusted host.
+                # Credentials are still never considered verified here.
                 unavailable.append(host)
                 continue
-            raise LoginUnavailable(
-                "Не удалось безопасно завершить проверку входа в MikroTik."
-            ) from exc
+            unavailable.append(host)
 
+    if missing_user_hosts:
+        raise LoginRejected(
+            "MikroTik принял данные входа, но пользователь не найден в /user "
+            "на проверенных серверах. Вход запрещён."
+        )
     raise LoginUnavailable(
-        "Не удалось связаться ни с одним VPN-сервером для проверки входа. "
-        "Проверьте сеть и повторите попытку."
+        "Ни один VPN-сервер не завершил проверку входа. "
+        "Проверьте доступность RouterOS API (8728/8729). "
+        "Техническая причина записана в журнал LinkVideo.Helper."
     )

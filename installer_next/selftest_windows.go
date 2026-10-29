@@ -109,6 +109,38 @@ func installerSelfTest() error {
 		}
 	}
 
+	// Regression for Windows Apps & Features reporting a missing Uninstall.exe.
+	// A fresh Setup must restore the complete runtime from its embedded payload
+	// even when the previous installation has lost its uninstaller.
+	uninstallPath := filepath.Join(dest, "Uninstall.exe")
+	if err := os.Remove(uninstallPath); err != nil {
+		return fmt.Errorf("simulate missing uninstaller: %w", err)
+	}
+	if err := verifyRuntimeSnapshot(dest); err == nil {
+		return fmt.Errorf("runtime validation accepted a missing uninstaller")
+	}
+	repairStage, err := stageRuntimeSnapshot(dest, nil)
+	if err != nil {
+		return fmt.Errorf("stage repair for missing uninstaller: %w", err)
+	}
+	defer os.RemoveAll(repairStage)
+	repairBackup, err := activateStagedRuntime(dest, repairStage)
+	if err != nil {
+		return fmt.Errorf("activate repaired runtime: %w", err)
+	}
+	if err := verifyRuntimeSnapshot(dest); err != nil {
+		return fmt.Errorf("fresh Setup did not restore Uninstall.exe: %w", err)
+	}
+	if repairBackup == "" {
+		return fmt.Errorf("repair did not preserve previous files before replacement")
+	}
+	if err := recoverInterruptedRuntimeUpgrade(dest); err != nil {
+		return fmt.Errorf("complete uninstaller repair: %w", err)
+	}
+	if _, err := os.Stat(repairBackup); !os.IsNotExist(err) {
+		return fmt.Errorf("backup left after successful uninstaller repair")
+	}
+
 	// FFmpeg must only live in the per-user LocalAppData cache after first use.
 	// A stale developer copy in Setup would recreate the 3.0.10 packaging bug.
 	err = filepath.WalkDir(dest, func(path string, entry os.DirEntry, walkErr error) error {

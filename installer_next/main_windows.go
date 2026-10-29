@@ -29,6 +29,7 @@ const (
     idRemoveData = 1011
     idRunAfter   = 1012
     idInstallPath = 1013
+    idRemoveInstalled = 1014
     idProgress   = 1020
     idProgressText = 1021
 
@@ -159,6 +160,7 @@ type wizard struct {
     installPath uintptr
     desktop     uintptr
     removeData  uintptr
+    removeInstalled uintptr
     runAfter    uintptr
     finishInfo  uintptr
     progress    uintptr
@@ -236,7 +238,7 @@ var (
 )
 
 func main() {
-    uninstall := strings.EqualFold(buildMode, "uninstaller")
+    uninstall := strings.EqualFold(buildMode, "uninstaller") || hasArg("--uninstall")
 
     if uninstall {
         ready, err := ensureUninstallerRunsFromTemp()
@@ -471,6 +473,16 @@ func (w *wizard) createInstallPages() {
     setFont(hint, w.fontSmall)
     setChecked(w.desktop, true)
     w.pages[pageOptions] = []uintptr{pathLabel, w.installPath, w.desktop, hint}
+    if w.upgrade {
+        // Recovery path: the downloaded Setup can uninstall a broken install
+        // even if Windows points at a missing Program Files\\Uninstall.exe.
+        w.removeInstalled = w.newControl(
+            "BUTTON", "Удалить текущую версию", wsChild|wsTabStop|bsOwnerDraw,
+            0, 310, 418, 245, 38, idRemoveInstalled,
+        )
+        setFont(w.removeInstalled, w.fontBold)
+        w.pages[pageOptions] = append(w.pages[pageOptions], w.removeInstalled)
+    }
 
     w.progress = w.newControl("msctls_progress32", "", wsChild|pbsSmooth, 0, 310, 222, 545, 22, idProgress)
     w.progressText = w.newControl("STATIC", "Подготовка…", wsChild|ssLeft, 0, 310, 263, 545, 48, idProgressText)
@@ -596,6 +608,12 @@ func (w *wizard) setPage(page int) {
 func (w *wizard) handleCommand(id int) {
     if w.working { return }
     switch id {
+    case idRemoveInstalled:
+        if !w.uninstall && w.upgrade && w.page == pageOptions {
+            w.uninstall = true
+            w.createUninstallPages()
+            w.setPage(pageWelcome)
+        }
     case idBack:
         if !w.uninstall && w.page == pageOptions {
             w.setPage(pageWelcome)

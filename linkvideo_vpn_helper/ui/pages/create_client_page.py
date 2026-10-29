@@ -5,7 +5,7 @@ import threading
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
-    QBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QTextEdit, QVBoxLayout, QWidget,
+    QBoxLayout, QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from linkvideo_vpn_helper.services.errors import classify_exception
@@ -69,7 +69,14 @@ class CreateClientPage(QWidget):
         self.server_picker.addRequested.connect(self._add_server)
         self.server_picker.refresh()
         fl.addLayout(server_header)
+        self.country_picker = QComboBox()
+        self.country_picker.setObjectName("VpnCreateCountry")
+        for country in ("Россия", "Казахстан", "Беларусь"):
+            self.country_picker.addItem(country, country)
+        self.country_picker.currentIndexChanged.connect(self._country_changed)
+        fl.addWidget(self.country_picker)
         fl.addWidget(self.server_picker)
+        self._country_changed()
 
         login_header = QHBoxLayout()
         login_step = QLabel("2")
@@ -301,7 +308,30 @@ class CreateClientPage(QWidget):
         self.task.warning("Логин был занят — подставлен свободный", f"{original} → {suggestion}.{suffix}")
 
     def _russian_hosts(self) -> list[str]:
-        return [x.host for x in self.registry.all(include_disabled=False) if x.country == "Россия"]
+        return self._country_hosts("Россия")
+
+    def _country_hosts(self, country: str) -> list[str]:
+        return [x.host for x in self.registry.all(include_disabled=False) if x.country == country]
+
+    def set_country(self, country: str) -> None:
+        """Select a regional VPN server when routed from Clients and Tariffs."""
+        index = self.country_picker.findData(country)
+        if index < 0:
+            raise ValueError("Неизвестная страна для создания VPN клиента")
+        self.country_picker.setCurrentIndex(index)
+        self._country_changed()
+
+    def _country_changed(self, *_):
+        country = self.country_picker.currentData()
+        if not country or not hasattr(self, "server_picker"):
+            return
+        servers = self._country_hosts(country)
+        if servers:
+            self.server_picker.setHost(servers[0])
+        # An unavailable region is not silently replaced with a Russian VPN.
+        if hasattr(self, "btn_create"):
+            self.btn_create.setEnabled(bool(servers))
+            self.btn_create_auto.setEnabled(bool(servers))
 
     def _start_create(self, auto_pick: bool = False):
         login = self.login.text().strip()
@@ -317,22 +347,28 @@ class CreateClientPage(QWidget):
         ports = self.ports.value()
         accounts = self.accounts.value()
         selected = self.server_picker.host()
+        region = self.country_picker.currentData()
 
         def worker():
             try:
                 chosen = selected
                 if auto_pick:
-                    russian = self._russian_hosts()
-                    if not russian:
-                        raise RuntimeError("Нет активных российских VPN-серверов для автоматического выбора")
+                    regional_hosts = self._country_hosts(region)
+                    if not regional_hosts:
+                        raise RuntimeError(f"Нет активных VPN-серверов страны {region}")
                     self.progressReady.emit(
                         "Подбираю VPN-сервер",
-                        f"Параллельно проверяю {len(russian)} российских серверов…",
+                        f"Параллельно проверяю {len(regional_hosts)} серверов: {region}…",
                         15,
                     )
-                    chosen = self.service.pick_best_server_parallel(russian, self.credentials, cancel_event=cancel_event)
+                    chosen = self.service.pick_best_server_parallel(regional_hosts, self.credentials, cancel_event=cancel_event)
                 if not chosen:
                     raise RuntimeError("VPN-сервер не выбран")
+                if self.registry.get(chosen).country != region:
+                    raise RuntimeError(
+                        "Выбранный VPN-сервер не соответствует стране. "
+                        "Выберите сервер указанной страны."
+                    )
 
                 # Логин обязан быть уникальным только внутри выбранного MikroTik.
                 # Одинаковый базовый логин на vpn04 и kz-vpn01 допустим и не должен

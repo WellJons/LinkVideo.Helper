@@ -733,6 +733,9 @@ class DateTimePopup(QDialog):
 
     def __init__(self, value, parent=None):
         super().__init__(parent)
+        # Runtime import avoids a module cycle: dialogs uses components.Card.
+        from linkvideo_vpn_helper.ui.dialogs import style_helper_dialog
+        style_helper_dialog(self)
         self.setObjectName("DateTimePopup")
         self.setWindowFlags(Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
         self.setMinimumWidth(390)

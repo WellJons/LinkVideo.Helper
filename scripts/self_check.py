@@ -128,8 +128,10 @@ if "WinBox" in search_ui or "winbox" in search_ui.lower():
     fail("WinBox action must not be present in 2.0 client UI")
 
 create_ui = (SRC / "ui" / "pages" / "create_client_page.py").read_text(encoding="utf-8")
-if 'x.country == "Россия"' not in create_ui:
-    fail("automatic server choice must be restricted to Russia")
+if 'x.country == country' not in create_ui or 'regional_hosts = self._country_hosts(region)' not in create_ui:
+    fail("automatic server choice must be restricted to the explicitly selected country")
+if 'self.registry.get(chosen).country != region' not in create_ui:
+    fail("regional VPN client creation must reject mismatched manual servers")
 if "self.counters_row" not in create_ui:
     fail("ports/accounts controls must share one horizontal work row")
 

@@ -35,6 +35,8 @@ class MainWindow(QMainWindow):
         ("archive", "↓", "Скачать архив", "Поиск и сохранение MP4"),
         ("diagnostics", "◇", "Диагностика архива", "Покрытие и пропуски"),
         ("inactive", "⌛", "VPN-клиенты", "Состояния и карантин"),
+        ("tariffs", "₽", "Клиенты и тарифы", "Корпоративный биллинг, VPN и КЦ"),
+        ("new_agent", "◉", "Новый Агент", "Настройки камер LD через agent-vcore"),
         # Управление инфраструктурой оставляем последним рабочим разделом,
         # а не вклиниваем между ежедневными операциями сотрудников.
         ("vpn_servers", "▦", "VPN-серверы", "Нагрузка, резервные копии и LV"),
@@ -71,7 +73,7 @@ class MainWindow(QMainWindow):
         self._go("create")
         # Build the remaining pages only after the main window is visible.
         # This removes the one-frame native/unstyled widget flash on first opening a tab.
-        self._preload_queue = ["search", "vpn_servers", "archive", "diagnostics", "inactive", "settings"]
+        self._preload_queue = ["search", "vpn_servers", "archive", "diagnostics", "inactive", "settings", "tariffs", "new_agent"]
         QTimer.singleShot(350, self._preload_next_page)
         # Автоматически проверяем обновления после запуска, но не показываем
         # пользователю сообщения об успешной проверке/сетевой ошибке.
@@ -214,6 +216,12 @@ class MainWindow(QMainWindow):
         elif key == "inactive":
             from linkvideo_vpn_helper.ui.pages.inactive_clients_page import InactiveClientsPage
             page = InactiveClientsPage(self.service, self.credentials, self.registry, self)
+        elif key == "tariffs":
+            from linkvideo_vpn_helper.ui.pages.tariffs_page import TariffsPage
+            page = TariffsPage(self, settings=self.settings)
+        elif key == "new_agent":
+            from linkvideo_vpn_helper.ui.pages.new_agent_page import NewAgentPage
+            page = NewAgentPage(self.settings, self.credentials, self)
         elif key == "settings":
             from linkvideo_vpn_helper.ui.pages.settings_page import SettingsPage
             page = SettingsPage(self.settings, self.registry, self.service, self.credentials, self)
