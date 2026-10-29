@@ -14,7 +14,7 @@ from linkvideo_vpn_helper.services.ula_connection import (
     UlaConnectionDetails, read_ula_ini,
 )
 from linkvideo_vpn_helper.services.ula_oracle_gateway import UlaClientHit, UlaService
-from linkvideo_vpn_helper.ui.ula_services_tab import UlaServicesTab
+from linkvideo_vpn_helper.ui.ula_services_tab import UlaServicesTab, _safe_error
 
 
 with tempfile.TemporaryDirectory() as folder:
@@ -50,6 +50,13 @@ assert gateway is not None and len(requested) == 1
 assert requested[0][0].username == "fictional"
 assert page.password.echoMode() == page.password.EchoMode.Password
 assert page.findChild(QTableWidget, "UlaServicesTable") is page.services
+assert page.layout().itemAt(1).widget() is page.message, (
+    "Oracle diagnostics must be visible before the long forms, not below tables"
+)
+assert "ORA-01017" in _safe_error(Exception("ORA-01017: private-credential"))
+assert "private-credential" not in _safe_error(Exception("ORA-01017: private-credential"))
+assert "DPY-3010" in _safe_error(Exception("DPY-3010: unsupported server"))
+assert "unsupported server" not in _safe_error(Exception("DPY-3010: unsupported server"))
 page._finished(
     page._generation,
     "find",
