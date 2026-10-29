@@ -17,13 +17,14 @@ from PySide6.QtWidgets import (
 from linkvideo_vpn_helper.services.ula_connection import (
     UlaConnectionDetails, create_ula_gateway, read_ula_ini,
 )
+from linkvideo_vpn_helper.services.ula_oracle_gateway import UlaReadError
 from linkvideo_vpn_helper.ui.components import Card, StatusPill
 
 
 def _safe_error(error: Exception) -> str:
     # Never put password, raw connection descriptors or filesystem paths
     # from third-party errors into screenshots, UI, logs or support reports.
-    if isinstance(error, (ValueError, TypeError)):
+    if isinstance(error, (ValueError, TypeError, UlaReadError)):
         return str(error)[:170]
     codes = re.findall(r"\b(?:ORA|DPY|DPI)-\d{4,5}\b", str(error))
     if codes:
