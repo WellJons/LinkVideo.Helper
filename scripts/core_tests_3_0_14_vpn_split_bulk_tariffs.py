@@ -53,6 +53,14 @@ with tempfile.TemporaryDirectory() as folder:
     assert page.info_scroll.verticalScrollBar().singleStep() == 28
     assert page.detail_scroll.verticalScrollBar().singleStep() == 28
     assert page.port_list.count() == 3
+    # Port list now sits under client profile in the left scroll column.
+    ancestor = page.port_list.parentWidget()
+    while ancestor is not None and ancestor is not page.info_scroll:
+        ancestor = ancestor.parentWidget()
+    assert ancestor is page.info_scroll, "Ports should be below the left client profile"
+    assert page.detail_scroll.findChild(
+        type(page.port_list), "PortList"
+    ) is None, "Right column must contain management, not a second port list"
     assert page.toggle_port_button is not None
     page._close_client_view()
     assert not page.left_card.isHidden()
@@ -104,6 +112,7 @@ gateway = FakeGateway()
 billing = TariffsPage(gateway=gateway)
 billing.client = client
 billing._render_client(client)
+assert billing.camera_scroll.property("lvWheelBoundaryLock") is True
 checks = billing.findChildren(QCheckBox, "BillingCameraSelect")
 assert len(checks) == 2
 assert billing.findChild(QPushButton, "BillingCameraOtherActions") is not None
