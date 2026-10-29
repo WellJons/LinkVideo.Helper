@@ -165,6 +165,8 @@ assert page.result_summary.isHidden() is False
 assert page.copy_btn.isEnabled()
 assert serial in page.info.text()
 page.action_combo.setCurrentIndex(page.action_combo.findData("time"))
+assert page.timezone.currentData() == 7
+assert page.timezone.count() == 27
 assert page.ok_btn.isEnabled()
 # Denied confirmation never sends a settings write.
 with patch("linkvideo_vpn_helper.ui.pages.new_agent_page.ConfirmDialog.exec",
@@ -176,10 +178,18 @@ with patch.object(page, "_load_setting") as load:
     page.action_combo.setCurrentIndex(page.action_combo.findData("rotation"))
     load.assert_called_once_with("rotation")
     page._on_ready(page._generation, "rotation_loaded", {"ImageRotation": 3})
+    assert len(page.rotation_buttons) == 4
+    assert page.rotation_buttons[3].isChecked()
+    page.rotation_buttons[2].click()
+    assert page.rotation_combo.currentData() == 2
     assert page.ok_btn.isEnabled()
     page.action_combo.setCurrentIndex(page.action_combo.findData("bitrate"))
     page._on_ready(page._generation, "bitrate_loaded", video_settings)
 assert page.bitrate.value() == 2048
+assert any(rate == 2048 and tile.isChecked() for rate, tile in page.bitrate_presets)
+next(tile for rate, tile in page.bitrate_presets if rate == 4096).click()
+assert page.bitrate.value() == 4096
+assert page.bitrate.buttonSymbols() == page.bitrate.ButtonSymbols.NoButtons
 page.close()
 app.processEvents()
 
