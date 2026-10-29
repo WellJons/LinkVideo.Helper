@@ -302,7 +302,7 @@ class NewAgentPage(QWidget):
         self.preview_label.setText("Загрузка превью…")
         self.preview_label.show()
         self.preview_btn.show()
-        self.preview_btn.setEnabled(bool(token))
+        self.preview_btn.setEnabled(True)
         if not token:
             self.preview_label.setText(
                 "Для превью войдите в B2O в разделе «Скачать архив»."
