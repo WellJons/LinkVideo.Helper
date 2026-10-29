@@ -282,7 +282,10 @@ class LoginWindow(QDialog):
     def _resize_login_error(self, message: str):
         # Use the actual label width (and frame padding) rather than a fixed
         # four-line banner. Dynamic word-wrapping also supports font scaling.
-        width = max(190, self.error.width(), self.error_banner.width() - 56)
+        widths = [v for v in (
+            self.error.width(), self.error_banner.width() - 50
+        ) if v > 190]
+        width = min(widths) if widths else 190
         bounds = self.error.fontMetrics().boundingRect(
             QRect(0, 0, width, 20000), Qt.TextFlag.TextWordWrap, message
         )
