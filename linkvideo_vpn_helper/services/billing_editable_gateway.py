@@ -183,7 +183,7 @@ class BillingEditableGateway(BillingReadOnlyGateway):
         """Explicit user-confirmed write for one verified customer's camera."""
         if not isinstance(change, TariffChange):
             raise BillingValidationError("Не указан объект изменения тарифа.")
-               if change.client_id != client.id:
+        if change.client_id != client.id:
             raise BillingPermissionDenied("Выбран другой клиент. Повторите поиск.")
         if not re.fullmatch(r"[1-9][0-9]{0,17}", change.service_id):
             raise BillingValidationError("У камеры нет проверенного id_camera.")
