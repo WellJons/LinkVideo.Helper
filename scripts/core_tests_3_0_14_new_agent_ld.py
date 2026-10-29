@@ -190,9 +190,23 @@ with patch.object(page, "_load_setting") as load:
     page.action_combo.setCurrentIndex(page.action_combo.findData("bitrate"))
     page._on_ready(page._generation, "bitrate_loaded", video_settings)
 assert page.bitrate.value() == 2048
+assert page.bitrate.isHidden()
+assert page.bitrate_input.text() == "2048"
+assert page.bitrate_input.width() <= 150
 assert any(rate == 2048 and tile.isChecked() for rate, tile in page.bitrate_presets)
 next(tile for rate, tile in page.bitrate_presets if rate == 4096).click()
 assert page.bitrate.value() == 4096
+assert page.bitrate_input.text() == "4096"
+page.bitrate_input.setText("3072")
+page.bitrate_input.textEdited.emit("3072")
+assert page.bitrate.value() == 3072
+assert page.ok_btn.isEnabled()
+page.bitrate_input.setText("")
+page.bitrate_input.textEdited.emit("")
+assert not page.ok_btn.isEnabled()
+page.bitrate_input.setText("1024")
+page.bitrate_input.textEdited.emit("1024")
+assert page.ok_btn.isEnabled()
 assert page.bitrate.buttonSymbols() == page.bitrate.ButtonSymbols.NoButtons
 page.close()
 app.processEvents()
