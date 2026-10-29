@@ -157,7 +157,7 @@ class AgentService:
                 return list(rows_by_serial.values())
 
             meta = payload if isinstance(payload, dict) else {}
-            for name in ("pagination", "paging", "pageInfo", "meta"):
+            for name in ("data", "result", "pagination", "paging", "pageInfo", "meta"):
                 if isinstance(meta.get(name), dict):
                     meta = {**meta, **meta[name]}
                     break
@@ -243,7 +243,7 @@ class AgentService:
                 found = self._find_on_server(cached, serial)
                 if found:
                     return found
-            except requests.RequestException:
+            except (requests.RequestException, ConnectionError, ValueError):
                 # A stale cache must never block a full inventory search.
                 found = None
             with self._cache_lock:
