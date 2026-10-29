@@ -127,12 +127,12 @@ class AgentService:
             if marker in requested:
                 raise ConnectionError(f"agent-vcore {server}: повтор страницы списка камер.")
             requested.add(marker)
-            kwargs = {"headers": {"Accept": "application/json"},
-                      "auth": self._auth(), "timeout": self.timeout,
-                      "allow_redirects": False}
-            if params:
-                kwargs["params"] = params
-            response = requests.get(url, **kwargs)
+            # Explicit timeout here is required by the release security audit.
+            response = requests.get(
+                url, headers={"Accept": "application/json"},
+                auth=self._auth(), timeout=self.timeout, allow_redirects=False,
+                params=params or None,
+            )
             response.raise_for_status()
             payload = response.json()
             page_rows = self._camera_rows(payload)
