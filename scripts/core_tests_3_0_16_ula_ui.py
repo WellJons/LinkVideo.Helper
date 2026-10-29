@@ -50,6 +50,8 @@ assert gateway is not None and len(requested) == 1
 assert requested[0][0].username == "fictional"
 assert requested[0][3] == ""  # no Ula.ini imported in this UI-only test
 assert page.password.echoMode() == page.password.EchoMode.Password
+assert not page.advanced_panel.isVisible()
+assert page.more_button.objectName() == "UlaOracleAdvancedToggle"
 assert page.findChild(QTableWidget, "UlaServicesTable") is page.services
 assert page.layout().itemAt(1).widget() is page.message, (
     "Oracle diagnostics must be visible before the long forms, not below tables"
