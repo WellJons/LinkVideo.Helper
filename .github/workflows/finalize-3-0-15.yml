@@ -1,0 +1,118 @@
+name: Publish verified LinkVideo.Helper 3.0.15 (one-shot)
+
+on:
+  push:
+    branches:
+      - release/3.0.15-publish
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: publish-linkvideo-helper-v3.0.15
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'WellJons/LinkVideo.Helper'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact publishing source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.x'
+          cache-dependency-path: |
+            installer_next/go.mod
+            patcher/go.mod
+            silent_updater/go.mod
+
+      - name: Require runtime source identical to main
+        shell: pwsh
+        run: |
+          git fetch --no-tags --depth=1 origin main
+          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch main for the release source comparison' }
+          git diff --exit-code origin/main HEAD -- . ':(exclude).github/workflows/finalize-3-0-15.yml'
+          if ($LASTEXITCODE -ne 0) { throw 'One-shot publication branch differs from main source' }
+          $version = (python -c "from linkvideo_vpn_helper.version import APP_VERSION; print(APP_VERSION)").Trim()
+          if ($version -ne '3.0.15') { throw "Refusing to publish unintended version: $version" }
+          if (-not (Test-Path 'RELEASE_3.0.15_RU.txt')) { throw 'Missing versioned release notes' }
+
+      - name: Verify and build exact production Setup
+        shell: pwsh
+        run: ./scripts/verify_release.ps1
+
+      - name: Publish final release and dispatch public updates
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = 'v3.0.15'
+          $version = '3.0.15'
+          $setup = 'installer_next/output/LinkVideo.Helper_Setup.exe'
+          $uninstaller = 'installer_next/output/Uninstall.exe'
+          $payload = "release_payload/LinkVideo.Helper_Payload_${version}.zip"
+          $payloadMeta = "release_payload/LinkVideo.Helper_Payload_${version}.json"
+          $evidence = 'release_candidate/verification.json'
+          $notes = 'RELEASE_3.0.15_RU.txt'
+          foreach ($required in @($setup, $uninstaller, $payload, $payloadMeta, $evidence, $notes)) {
+            if (-not (Test-Path -LiteralPath $required)) { throw "Missing verified release asset: $required" }
+          }
+          $report = Get-Content -Raw -LiteralPath $evidence | ConvertFrom-Json
+          $expectedSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash.ToLowerInvariant()
+          if ([string]$report.version -ne $version -or [string]$report.setup_product_version -ne $version) {
+            throw 'Production version does not match expected 3.0.15'
+          }
+          if ([string]$report.source_commit -ne $env:GITHUB_SHA) {
+            throw 'Built binaries are not from the publication commit'
+          }
+          if ([string]$report.setup_sha256 -ne $expectedSha) {
+            throw 'Release verification SHA-256 does not match Setup'
+          }
+          foreach ($field in @('exact_setup_self_test', 'python_release_preflight', 'ruff_critical', 'go_vet', 'patch_pipeline_compile')) {
+            if ([string]$report.$field -ne 'passed') { throw "Release gate not passed: $field" }
+          }
+
+          gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -eq 0) { throw "Refusing to replace existing release: $tag" }
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          $remoteTag = (git ls-remote --tags origin "refs/tags/$tag").Trim()
+          if ($remoteTag) {
+            if (-not $remoteTag.StartsWith($env:GITHUB_SHA)) {
+              throw "Stable tag already exists on a different commit: $tag"
+            }
+          } else {
+            git tag $tag $env:GITHUB_SHA
+            if ($LASTEXITCODE -ne 0) { throw 'Could not create final version tag' }
+            git push origin "refs/tags/$tag"
+            if ($LASTEXITCODE -ne 0) { throw 'Could not publish final version tag' }
+          }
+
+          $assets = @($setup, $uninstaller, $payload, $payloadMeta, $evidence)
+          gh release create $tag @assets --repo $env:GITHUB_REPOSITORY --verify-tag --title 'LinkVideo.Helper 3.0.15' --notes-file $notes --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Could not publish final release' }
+
+          New-Item -ItemType Directory -Path 'final-release-check' -Force | Out-Null
+          gh release download $tag --repo $env:GITHUB_REPOSITORY --pattern 'LinkVideo.Helper_Setup.exe' --dir 'final-release-check'
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to re-download published Setup' }
+          $downloadSha = (Get-FileHash -Algorithm SHA256 -LiteralPath 'final-release-check/LinkVideo.Helper_Setup.exe').Hash.ToLowerInvariant()
+          if ($downloadSha -ne $expectedSha) { throw 'Published Setup SHA-256 differs from verified build' }
+
+          # GitHub does not trigger other workflows from events produced by
+          # GITHUB_TOKEN. workflow_dispatch is an explicit permitted exception.
+          gh workflow run 'publish-public-update.yml' --repo $env:GITHUB_REPOSITORY --ref main -f tag=$tag
+          if ($LASTEXITCODE -ne 0) { throw 'Stable Release published but public updater workflow dispatch failed' }
+          Write-Host "Published and dispatched updater: $tag $expectedSha"
