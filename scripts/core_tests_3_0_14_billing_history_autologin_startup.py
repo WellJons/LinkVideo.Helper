@@ -15,7 +15,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QSettings
-from PySide6.QtWidgets import QApplication, QDialog, QLabel, QPushButton, QScrollArea
+from PySide6.QtWidgets import QApplication, QDialog, QFrame, QLabel, QPushButton, QScrollArea
 
 from linkvideo_vpn_helper.services.billing_credential_store import BillingCredentialStore
 from linkvideo_vpn_helper.services.billing_gateway import BillingClient, BillingService
@@ -93,7 +93,7 @@ with tempfile.TemporaryDirectory() as tmp:
     dialog = page.findChild(QDialog, "BillingCameraHistoryDialog")
     assert dialog is not None
     assert dialog.findChild(QScrollArea, "BillingHistoryScroll") is not None
-    assert len(dialog.findChildren(type(thumbs[0].parentWidget()), "BillingHistoryEvent")) >= 0
+    assert len(dialog.findChildren(QFrame, "BillingHistoryEvent")) == 1
     texts = [x.text() for x in dialog.findChildren(QLabel)]
     assert "07.07.2026 00:01:38" in texts
     assert any("Стартовый 90" in x and "ЮЛ 30 дней" in x for x in texts)
