@@ -3,7 +3,6 @@ from __future__ import annotations
 """Ula Oracle desktop connection: operator-supplied, never persisted secrets."""
 
 import configparser
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -70,10 +69,14 @@ def ula_radius_configured(config_dir: str | Path) -> bool:
         text = path.read_text(encoding="ascii", errors="replace")
     except OSError:
         return False
-    return bool(re.search(
-        r"^\\s*SQLNET\\.AUTHENTICATION_SERVICES\\s*=\\s*\\(\\s*RADIUS\\s*\\)",
-        text, flags=re.IGNORECASE | re.MULTILINE,
-    ))
+    for line in text.splitlines():
+        # Only process the exact Oracle Net setting, never secrets or other
+        # configuration fields. Comments cannot enable RADIUS.
+        clean = line.split("#", 1)[0].split(";", 1)[0]
+        normalized = "".join(clean.upper().split())
+        if normalized == "SQLNET.AUTHENTICATION_SERVICES=(RADIUS)":
+            return True
+    return False
 
 
 def create_ula_gateway(
