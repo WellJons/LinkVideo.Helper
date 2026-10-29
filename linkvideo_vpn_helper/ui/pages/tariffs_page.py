@@ -48,6 +48,18 @@ def _value(text: str) -> str:
     return str(text or "").strip() or "—"
 
 
+def admin_camera_label(country: str, vc_id: str) -> str:
+    """Display the verified Belarus admin camera key, never use it as billing ID."""
+    value = str(vc_id or "").strip()
+    if not value:
+        return "—"
+    if country == "Беларусь":
+        return f"linkvideoby_{value}"
+    # Other operator prefixes have not been confirmed; show the actual
+    # id_camera_vc without inventing an admin-side camera-key prefix.
+    return value
+
+
 def format_history_timestamp(value: str) -> str:
     """CRM sends ISO timestamps with offsets; display local wall time only."""
     source = str(value or "").strip()
@@ -1135,7 +1147,7 @@ class TariffsPage(QWidget):
             details.addLayout(title_row)
             tariff_label = QLabel(
                 f"Тариф: {service.tariff_name or '—'}"
-                f"   ·   ID админки: {service.camera_vc_id or '—'}"
+                f"   ·   ID админки: {admin_camera_label(client.country, service.camera_vc_id)}"
             )
             tariff_label.setObjectName("Muted")
             tariff_label.setWordWrap(True)
@@ -1366,7 +1378,7 @@ class TariffsPage(QWidget):
         root.addWidget(title)
         description = QLabel(
             f"CRM · {len(rows)} событий · "
-            f"ID камеры в админке: {service.camera_vc_id or '—'}"
+            f"ID камеры в админке: {admin_camera_label(self.client.country if self.client else '', service.camera_vc_id)}"
         )
         description.setObjectName("Muted")
         root.addWidget(description)
