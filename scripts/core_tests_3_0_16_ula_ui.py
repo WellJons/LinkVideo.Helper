@@ -48,6 +48,11 @@ page.password.setText("not-a-real-password")
 gateway = page._make_gateway()
 assert gateway is not None and len(requested) == 1
 assert requested[0][0].username == "fictional"
+page.username.setText("operator-other")
+page._make_gateway()
+assert requested[-1][0].username == "operator-other", (
+    "Oracle/RADIUS login must be editable, independent of imported Ula.ini username"
+)
 assert requested[0][3] == ""  # no Ula.ini imported in this UI-only test
 assert page.password.echoMode() == page.password.EchoMode.Password
 assert not page.advanced_panel.isVisible()
