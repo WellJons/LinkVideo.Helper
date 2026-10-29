@@ -36,8 +36,8 @@ with tempfile.TemporaryDirectory() as folder:
 app = QApplication.instance() or QApplication([])
 requested = []
 
-def fake_factory(details, password, *, thick_client_dir=""):
-    requested.append((details, password, thick_client_dir))
+def fake_factory(details, password, *, thick_client_dir="", config_dir=""):
+    requested.append((details, password, thick_client_dir, config_dir))
     return object()
 
 page = UlaServicesTab(gateway_factory=fake_factory)
@@ -48,6 +48,7 @@ page.password.setText("not-a-real-password")
 gateway = page._make_gateway()
 assert gateway is not None and len(requested) == 1
 assert requested[0][0].username == "fictional"
+assert requested[0][3] == ""  # no Ula.ini imported in this UI-only test
 assert page.password.echoMode() == page.password.EchoMode.Password
 assert page.findChild(QTableWidget, "UlaServicesTable") is page.services
 assert page.layout().itemAt(1).widget() is page.message, (
