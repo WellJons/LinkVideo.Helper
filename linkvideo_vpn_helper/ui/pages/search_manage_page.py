@@ -984,8 +984,8 @@ class SearchManagePage(QWidget):
             return
         self._clear_detail()
 
-        # Client profile occupies the left column, while ports and
-        # management occupy the right. No duplicate result list is shown.
+        # Client profile and ports occupy the left; only management remains
+        # in the right column. Keep selected-port signals wired across columns.
         header_row = QHBoxLayout()
         header = QLabel(f"Клиент {c.login}")
         header.setObjectName("SectionTitle")
@@ -993,7 +993,7 @@ class SearchManagePage(QWidget):
         header_row.addStretch(1)
         live = StatusPill("В сети" if c.is_online else "Не в сети", "success" if c.is_online else "neutral")
         header_row.addWidget(live)
-        self.detail_l.addLayout(header_row)
+        self.info_content.addLayout(header_row)
 
         if self._recent_new_ports:
             banner = Card(kind="success")
@@ -1088,7 +1088,6 @@ class SearchManagePage(QWidget):
         top.addWidget(data)
         top.addWidget(vpn)
         self.info_content.addLayout(top)
-        self.info_content.addStretch(1)
 
         if c.port_conflicts:
             conflict_card = Card()
@@ -1120,7 +1119,7 @@ class SearchManagePage(QWidget):
             conflict_note.setObjectName("TinyMuted")
             conflict_note.setWordWrap(True)
             conflict_layout.addWidget(conflict_note)
-            self.detail_l.addWidget(conflict_card)
+            self.info_content.addWidget(conflict_card)
 
         ports = Card()
         pl = QVBoxLayout(ports)
@@ -1190,7 +1189,8 @@ class SearchManagePage(QWidget):
             item.setSizeHint(QSize(0, 42))
             self.port_list.addItem(item)
         pl.addWidget(self.port_list, 1)
-        self.detail_l.addWidget(ports)
+        self.info_content.addWidget(ports)
+        self.info_content.addStretch(1)
 
         control = Card()
         cl = QVBoxLayout(control)
