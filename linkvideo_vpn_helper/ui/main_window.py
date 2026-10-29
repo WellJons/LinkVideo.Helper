@@ -73,7 +73,7 @@ class MainWindow(QMainWindow):
         self._go("create")
         # Build the remaining pages only after the main window is visible.
         # This removes the one-frame native/unstyled widget flash on first opening a tab.
-        self._preload_queue = ["search", "vpn_servers", "archive", "diagnostics", "inactive", "settings", "tariffs", "new_agent"]
+        self._preload_queue = ["search", "vpn_servers", "archive", "diagnostics", "settings", "tariffs", "new_agent"]
         QTimer.singleShot(350, self._preload_next_page)
         # Автоматически проверяем обновления после запуска, но не показываем
         # пользователю сообщения об успешной проверке/сетевой ошибке.
