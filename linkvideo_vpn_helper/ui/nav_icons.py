@@ -15,6 +15,7 @@ _DRAWINGS = {
     "inactive": '<path d="M7 3h10M7 21h10M8 4c0 5 8 5 8 8s-8 3-8 8m8-16c0 5-8 5-8 8s8 3 8 8"/>',
     "vpn_servers": '<rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="14" width="18" height="7" rx="1.5"/><path d="M7 7.5h.1M7 17.5h.1M11 7.5h7M11 17.5h7"/>',
     "tariffs": '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h10M7 12h6M7 15h4"/>',
+    "new_agent": '<rect x="5" y="3" width="14" height="18" rx="3"/><circle cx="12" cy="10" r="3"/><path d="M9 17h6M21 10v4M3 10v4"/>',
     "settings": '<circle cx="12" cy="12" r="3"/><path d="M10 2h4l.7 2.6 2 1.1 2.6-.7 2 3.4-1.9 1.9v2.2l1.9 1.9-2 3.4-2.6-.7-2 1.1L14 22h-4l-.7-2.6-2-1.1-2.6.7-2-3.4 1.9-1.9v-2.2L2.7 9.6l2-3.4 2.6.7 2-1.1z"/>',
 }
 
