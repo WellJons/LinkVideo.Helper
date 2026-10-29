@@ -316,8 +316,7 @@ class TariffCatalogDialog(QDialog):
 
         root.addWidget(tabs, 1)
         if service is not None:
-            # Original CRM has a comment field, but observed tariff PUT only
-            # sends "date". Do not silently discard typed comments.
+            # Browser-confirmed tariff PUT accepts "description".
             comment_row = QVBoxLayout()
             comment_row.setSpacing(4)
             comment_row.addWidget(QLabel("Комментарий (необязательно)"))
@@ -327,8 +326,7 @@ class TariffCatalogDialog(QDialog):
             self.comment_edit.setPlaceholderText("Причина изменения тарифа")
             comment_row.addWidget(self.comment_edit)
             disclaimer = QLabel(
-                "Передача комментариев ещё не подтверждена в API. "
-                "С комментарием программа не отправит изменение."
+                "Комментарий передаётся в биллинг вместе с выбранным тарифом."
             )
             disclaimer.setObjectName("TinyMuted")
             disclaimer.setWordWrap(True)
@@ -1364,8 +1362,7 @@ class TariffsPage(QWidget):
         comment.setPlaceholderText("Причина изменения статуса")
         layout.addWidget(comment)
         comment_note = QLabel(
-            "Комментарий пока не поддержан подтверждённым API-запросом. "
-            "Если заполнить его, операция не будет отправлена."
+            "Комментарий сохранится вместе с изменением статуса в биллинге."
         )
         comment_note.setObjectName("TinyMuted")
         comment_note.setWordWrap(True)
@@ -1391,16 +1388,10 @@ class TariffsPage(QWidget):
         layout.addLayout(actions)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        if comment.text().strip():
-            self.task.warning(
-                "Комментарий не отправлен",
-                "CRM-запрос статуса подтверждён только с полями status и date. "
-                "Для комментария требуется уточнить параметр API."
-            )
-            return
         client = self.client
         chosen_day = when.date().toPython()
-        fingerprint = (client.id, service.id, new_status, chosen_day)
+        operator_comment = comment.text().strip()
+        fingerprint = (client.id, service.id, new_status, chosen_day, operator_comment)
         if fingerprint in self._unknown_status_changes:
             self.task.warning(
                 "Проверьте статус",
@@ -1415,7 +1406,8 @@ class TariffsPage(QWidget):
         def work():
             try:
                 _, refreshed = self.gateway.set_camera_status(
-                    client, service.id, new_status, chosen_day
+                    client, service.id, new_status, chosen_day,
+                    comment=operator_comment,
                 )
                 self.operationReady.emit(
                     request_id, "status_changed", (service, new_status, refreshed), None
@@ -2029,16 +2021,10 @@ class TariffsPage(QWidget):
         if tariff is None:
             self.task.warning("Неверный тариф", "Тариф другой страны.")
             return
-        if example.comment:
-            self.task.warning(
-                "Комментарий не отправлен",
-                "Неизвестен параметр комментария в API изменения тарифа."
-            )
-            return
         changes = tuple(
             validate_tariff_change(
                 client, service, TariffOption(tariff.id, tariff.name),
-                example.effective_date, ""
+                example.effective_date, example.comment
             )
             for service in selected
         )
@@ -2057,7 +2043,8 @@ class TariffsPage(QWidget):
             f"Клиент: {client.login} ({client.country})\n"
             f"Камер: {len(selected)} — {names}\n"
             f"Тариф: {tariff.name}\n"
-            f"Дата: {example.effective_date:%d.%m.%Y}\n\n"
+            f"Дата: {example.effective_date:%d.%m.%Y}\n"
+            f"Комментарий: {example.comment or 'не указан'}\n\n"
             "Биллинг не предоставляет подтверждённого пакетного API. "
             "Программа отправит отдельный PUT для каждой камеры. "
             "Уже успешные операции не откатываются при ошибке следующей.",
@@ -2112,13 +2099,6 @@ class TariffsPage(QWidget):
         if service not in client.services or change.client_id != client.id or change.service_id != service.id:
             self.task.warning("Камера изменилась", "Повторно откройте клиента.")
             return
-        if change.comment:
-            self.task.warning(
-                "Комментарий не отправлен",
-                "Смена тарифа с комментарием не выполняется: "
-                "его поле отсутствует в подтверждённом PUT-запросе."
-            )
-            return
         choice = next((t for t in visible_tariffs if t.id == change.tariff_id), None)
         if choice is None or choice.country != client.country:
             self.task.warning("Неверный тариф", "Тариф должен принадлежать стране клиента.")
@@ -2139,7 +2119,8 @@ class TariffsPage(QWidget):
             f"Будет: {choice.name}\n"
             f"Стоимость в каталоге: {choice.price}\n"
             f"Тип тарифа по CRM: {choice.account_type}\n"
-            f"Дата применения: {change.effective_date:%d.%m.%Y}\n\n"
+            f"Дата применения: {change.effective_date:%d.%m.%Y}\n"
+            f"Комментарий: {change.comment or 'не указан'}\n\n"
             "Биллинг покажет итоговое решение о допустимости тарифа. "
             "Изменение будет отправлено после подтверждения.",
             "Применить тариф",
