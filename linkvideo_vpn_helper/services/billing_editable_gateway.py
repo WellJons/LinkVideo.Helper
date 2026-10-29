@@ -102,7 +102,7 @@ class BillingEditableGateway(BillingReadOnlyGateway):
 
     def set_camera_status(
         self, client: BillingClient, camera_id: str,
-        status: int, effective_date,
+        status: int, effective_date, comment: str = "",
     ) -> tuple[dict, BillingClient | None]:
         """User-confirmed camera activation/deactivation only."""
         from datetime import date
@@ -111,7 +111,7 @@ class BillingEditableGateway(BillingReadOnlyGateway):
             raise BillingValidationError("Неподдерживаемый статус.")
         # Status is based on the verified 0 (disabled) / 1 (enabled) CRM codes.
         parsed = self._transport.put_camera_status(
-            service.id, status, effective_date
+            service.id, status, effective_date, comment=comment
         )
         if parsed.get("success") is not True or parsed.get("response") != 1:
             raise BillingWriteOutcomeUnknown(
@@ -183,13 +183,7 @@ class BillingEditableGateway(BillingReadOnlyGateway):
         """Explicit user-confirmed write for one verified customer's camera."""
         if not isinstance(change, TariffChange):
             raise BillingValidationError("Не указан объект изменения тарифа.")
-        if change.comment:
-            # Captured tariff PUT body is only {"date": "..."}.
-            # Reject instead of silently losing an operator's audit comment.
-            raise BillingNotConfigured(
-                "Передача комментария не подтверждена API биллинга."
-            )
-        if change.client_id != client.id:
+               if change.client_id != client.id:
             raise BillingPermissionDenied("Выбран другой клиент. Повторите поиск.")
         if not re.fullmatch(r"[1-9][0-9]{0,17}", change.service_id):
             raise BillingValidationError("У камеры нет проверенного id_camera.")
@@ -205,7 +199,8 @@ class BillingEditableGateway(BillingReadOnlyGateway):
                 "Тариф отсутствует в каталоге страны и типа клиента."
             )
         response = self._transport.put_tariff(
-            change.service_id, change.tariff_id, change.effective_date
+            change.service_id, change.tariff_id, change.effective_date,
+            comment=change.comment,
         )
         receipt = validated_tariff_receipt(response, change)
         # Reload by the confirmed account ID, NOT by login: one login may
