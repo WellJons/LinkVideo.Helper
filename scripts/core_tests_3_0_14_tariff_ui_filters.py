@@ -100,8 +100,11 @@ dialog.table.selectRow(0)
 message = dialog.selection_message()
 assert "Камера 1" in message and "BYN ЮЛ 30 дней" in message
 assert "Тариф ещё не изменён" in message
-dialog.copy_selection.click()
-assert QApplication.clipboard().text() == message
+assert not hasattr(dialog, "copy_selection")
+assert dialog.findChild(QPushButton, "CopyServiceTariffSelection") is None
+assert dialog.dialog_frame is not None
+assert dialog.width() >= 740
+assert dialog.tariff_cards.minimumHeight() >= 245
 with patch.object(QDialog, "exec", return_value=QDialog.DialogCode.Accepted):
     dialog._open_date_calendar()
 assert dialog.pick_date.text() == QDate.currentDate().toString("dd.MM.yyyy")
@@ -143,4 +146,4 @@ with patch.object(page, "_request_service_catalog", side_effect=lambda srv: call
 assert called == [service], "Tariff button must actually open customer-scoped read-only selector"
 page.close()
 app.processEvents()
-print("CORE TESTS TARIFF CLIENT DAYS/CURRENCY SORT, CALENDAR AND COPY PREVIEW OK")
+print("CORE TESTS TARIFF CLIENT DAYS/CURRENCY SORT, CALENDAR AND PICKER LAYOUT OK")
