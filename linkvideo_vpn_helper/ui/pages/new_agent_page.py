@@ -6,8 +6,8 @@ import threading
 from PySide6.QtCore import Signal, Qt, QTimer
 from PySide6.QtGui import QGuiApplication, QPixmap
 from PySide6.QtWidgets import (
-    QBoxLayout, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QSpinBox, QVBoxLayout, QWidget,
+    QAbstractSpinBox, QBoxLayout, QComboBox, QDialog, QGridLayout, QHBoxLayout,
+    QLabel, QLineEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from linkvideo_vpn_helper.services.agent_service import AgentCamera, AgentService
@@ -129,12 +129,14 @@ class NewAgentPage(QWidget):
         tz_label = QLabel("Часовой пояс камеры")
         tz_label.setObjectName("TinyMuted")
         time_l.addWidget(tz_label)
-        self.timezone = QSpinBox()
+        self.timezone = QComboBox()
         self.timezone.setObjectName("NewAgentTimezone")
-        self.timezone.setRange(-12, 14)
-        self.timezone.setValue(7)
-        self.timezone.setSuffix(" UTC")
-        self.timezone.setMinimumHeight(43)
+        for offset in range(-12, 15):
+            value = f"UTC{offset:+d} · {'Местное время' if offset == 7 else 'часовой пояс'}"
+            self.timezone.addItem(value, offset)
+        self.timezone.setCurrentIndex(self.timezone.findData(7))
+        self.timezone.setMinimumHeight(44)
+        self.timezone.setToolTip("Укажите часовой пояс, который будет установлен на камере")
         time_l.addWidget(self.timezone)
         ntp = QLabel("Синхронизация с ntp.goodline.info · каждые 3600 секунд")
         ntp.setObjectName("TinyMuted")
@@ -149,12 +151,36 @@ class NewAgentPage(QWidget):
         self.rotation_current = QLabel("Получение текущей ориентации…")
         self.rotation_current.setObjectName("Muted")
         rot_l.addWidget(self.rotation_current)
+        # The combo stores the API value for backwards compatibility;
+        # users select orientation through large, clearly labelled tiles.
         self.rotation_combo = QComboBox()
         self.rotation_combo.setObjectName("NewAgentRotation")
         for label, code in self.ROTATIONS:
             self.rotation_combo.addItem(label, code)
-        self.rotation_combo.setMinimumHeight(43)
+        self.rotation_combo.hide()
         rot_l.addWidget(self.rotation_combo)
+        options = QGridLayout()
+        options.setHorizontalSpacing(9)
+        options.setVerticalSpacing(9)
+        self.rotation_buttons = []
+        for index, title in enumerate((
+            "Обычное", "Отразить по вертикали",
+            "Отразить по горизонтали", "Повернуть на 180°",
+        )):
+            tile = QPushButton(title)
+            tile.setObjectName(f"NewAgentRotationChoice{index}")
+            tile.setProperty("themeChoice", "true")
+            tile.setProperty("active", "false")
+            tile.setMinimumHeight(46)
+            tile.setCheckable(True)
+            tile.clicked.connect(
+                lambda checked=False, idx=index: self.rotation_combo.setCurrentIndex(idx)
+            )
+            options.addWidget(tile, index // 2, index % 2)
+            self.rotation_buttons.append(tile)
+        self.rotation_combo.currentIndexChanged.connect(self._sync_rotation_buttons)
+        rot_l.addLayout(options)
+        self._sync_rotation_buttons()
         work.addWidget(self.rotation_row)
 
         self.bitrate_row = Card(subtle=True)
@@ -169,8 +195,28 @@ class NewAgentPage(QWidget):
         self.bitrate.setRange(1, 100000)
         self.bitrate.setValue(1024)
         self.bitrate.setSuffix(" Кбит/с")
-        self.bitrate.setMinimumHeight(43)
+        self.bitrate.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.bitrate.setMinimumHeight(44)
         bitrate_l.addWidget(self.bitrate)
+        preset_label = QLabel("Быстрый выбор битрейта")
+        preset_label.setObjectName("TinyMuted")
+        bitrate_l.addWidget(preset_label)
+        presets = QGridLayout()
+        presets.setSpacing(7)
+        self.bitrate_presets = []
+        for index, rate in enumerate((512, 1024, 2048, 4096, 8192)):
+            preset = QPushButton(f"{rate // 1024:g} Мбит/с" if rate >= 1024 else "512 Кбит/с")
+            preset.setObjectName(f"NewAgentBitratePreset{rate}")
+            preset.setProperty("themeChoice", "true")
+            preset.setProperty("active", "false")
+            preset.setCheckable(True)
+            preset.setMinimumHeight(40)
+            preset.clicked.connect(lambda checked=False, value=rate: self.bitrate.setValue(value))
+            presets.addWidget(preset, index // 3, index % 3)
+            self.bitrate_presets.append((rate, preset))
+        bitrate_l.addLayout(presets)
+        self.bitrate.valueChanged.connect(self._sync_bitrate_presets)
+        self._sync_bitrate_presets()
         work.addWidget(self.bitrate_row)
 
         button_row = QHBoxLayout()
@@ -372,13 +418,35 @@ class NewAgentPage(QWidget):
         )
         self.timezone.setEnabled(found and not self._busy)
         self.rotation_combo.setEnabled(found and not self._busy)
+        for tile in self.rotation_buttons:
+            tile.setEnabled(found and not self._busy)
         self.bitrate.setEnabled(found and not self._busy)
+        for _, preset in self.bitrate_presets:
+            preset.setEnabled(found and not self._busy)
         ready = found and not self._busy and bool(action)
         if action == "rotation":
             ready = ready and self._image_enhance is not None
         if action == "bitrate":
             ready = ready and self._video_streams is not None
         self.ok_btn.setEnabled(ready)
+
+    def _sync_rotation_buttons(self, *_):
+        selected = self.rotation_combo.currentIndex()
+        for index, tile in enumerate(self.rotation_buttons):
+            active = index == selected
+            tile.setChecked(active)
+            tile.setProperty("active", "true" if active else "false")
+            tile.style().unpolish(tile)
+            tile.style().polish(tile)
+
+    def _sync_bitrate_presets(self, *_):
+        current = self.bitrate.value()
+        for rate, tile in self.bitrate_presets:
+            active = current == rate
+            tile.setChecked(active)
+            tile.setProperty("active", "true" if active else "false")
+            tile.style().unpolish(tile)
+            tile.style().polish(tile)
 
     def _action_changed(self, *_):
         action = self.action_combo.currentData() or ""
@@ -467,7 +535,7 @@ class NewAgentPage(QWidget):
             return
         action = self.action_combo.currentData() or ""
         args = {
-            "time": self.timezone.value(),
+            "time": self.timezone.currentData(),
             "rotation": self.rotation_combo.currentData(),
             "bitrate": self.bitrate.value(),
         }
