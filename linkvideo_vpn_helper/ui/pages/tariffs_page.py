@@ -9,10 +9,10 @@ default adapter is fail-closed; no guesswork around CRM endpoints or cookies.
 import threading
 from datetime import date, datetime
 
-from PySide6.QtCore import QDate, QSettings, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QDate, QSettings, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QAbstractItemView, QCalendarWidget, QCheckBox, QComboBox, QDateEdit,
+    QApplication, QAbstractItemView, QAbstractSpinBox, QCalendarWidget, QCheckBox, QComboBox, QDateEdit,
     QDialog, QFormLayout, QMenu, QGridLayout, QHeaderView, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton, QScrollArea,
     QSpinBox, QTabWidget, QTableWidget, QTableWidgetItem, QTextEdit,
@@ -151,14 +151,28 @@ class TariffCatalogDialog(QDialog):
         style_helper_dialog(self)
         self.setObjectName("TariffCatalogDialog")
         self.setWindowTitle("Подбор тарифа" if service else "Справочник тарифов")
-        self.resize(850, 630 if service else 600)
-        self.setMinimumSize(700, 455)
+        screen = QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else None
+        desired_w, desired_h = (990, 750) if service else (940, 690)
+        if available is not None:
+            desired_w = min(desired_w, max(720, int(available.width() * 0.92)))
+            desired_h = min(desired_h, max(520, int(available.height() * 0.90)))
+        self.resize(desired_w, desired_h)
+        self.setMinimumSize(740, 540)
         self.service = service
         self._chosen_date = QDate.currentDate()
         self._visible_tariffs = ()
-        root = QVBoxLayout(self)
-        root.setContentsMargins(22, 19, 22, 19)
-        root.setSpacing(11)
+        # A framed workspace keeps the modal visually consistent with the
+        # rounded cards elsewhere in Helper, including the dark theme.
+        backdrop = QVBoxLayout(self)
+        backdrop.setContentsMargins(12, 12, 12, 12)
+        backdrop.setSpacing(0)
+        self.dialog_frame = Card(kind="hero")
+        self.dialog_frame.setMinimumWidth(0)
+        backdrop.addWidget(self.dialog_frame)
+        root = QVBoxLayout(self.dialog_frame)
+        root.setContentsMargins(24, 21, 24, 21)
+        root.setSpacing(12)
 
         title = QLabel(
             f"Изменить тариф для {selected_count} камер"
@@ -202,6 +216,8 @@ class TariffCatalogDialog(QDialog):
         self.archive_days = QSpinBox()
         self.archive_days.setObjectName("TariffCatalogArchiveDays")
         self.archive_days.setRange(0, 3660)
+        self.archive_days.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.archive_days.setMinimumWidth(110)
         self.archive_days.setSpecialValueText("Любой срок")
         self.archive_days.setToolTip("Введите точное число дней; 0 — любой срок")
         filter_row.addWidget(self.archive_days)
@@ -214,6 +230,9 @@ class TariffCatalogDialog(QDialog):
             button = QPushButton("Все" if days == 0 else f"{days} дн.")
             button.setObjectName(f"TariffQuickDays{days}")
             button.setCheckable(True)
+            button.setProperty("themeChoice", "true")
+            button.setProperty("active", "false")
+            button.setMinimumHeight(37)
             button.clicked.connect(
                 lambda checked=False, value=days: self.archive_days.setValue(value)
             )
@@ -255,6 +274,7 @@ class TariffCatalogDialog(QDialog):
         self.tariff_cards = QListWidget()
         self.tariff_cards.setObjectName("TariffPickerResults")
         self.tariff_cards.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.tariff_cards.setMinimumHeight(245)
         self.tariff_cards.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.tariff_cards.verticalScrollBar().setSingleStep(26)
         dark = self.palette().color(self.backgroundRole()).lightness() < 128
@@ -346,10 +366,6 @@ class TariffCatalogDialog(QDialog):
             preview_row.addWidget(QLabel("Дата:"))
             preview_row.addWidget(self.pick_date)
             preview_row.addStretch(1)
-            self.copy_selection = QPushButton("Скопировать выбор")
-            self.copy_selection.setObjectName("CopyServiceTariffSelection")
-            self.copy_selection.clicked.connect(self._copy_selection)
-            preview_row.addWidget(self.copy_selection)
             root.addLayout(preview_row)
         close = QPushButton("Закрыть")
         close.setObjectName("TariffCatalogClose")
@@ -382,7 +398,11 @@ class TariffCatalogDialog(QDialog):
         self.table.setRowCount(len(selected))
         self.tariff_cards.clear()
         for days, button in self.quick_days:
-            button.setChecked(self.archive_days.value() == days)
+            active = self.archive_days.value() == days
+            button.setChecked(active)
+            button.setProperty("active", "true" if active else "false")
+            button.style().unpolish(button)
+            button.style().polish(button)
         for row, tariff in enumerate(selected):
             retention = archive_days_from_name(tariff.name)
             fields = (
@@ -409,6 +429,7 @@ class TariffCatalogDialog(QDialog):
                 f"  •  {tariff.account_type}"
             )
             option.setToolTip(tariff.description or tariff.name)
+            option.setSizeHint(QSize(0, 70))
             self.tariff_cards.addItem(option)
         if self.service is not None and hasattr(self, "apply_tariff"):
             self.apply_tariff.setEnabled(False)
@@ -484,16 +505,6 @@ class TariffCatalogDialog(QDialog):
             client, self.service, TariffOption(tariff.id, tariff.name),
             self._chosen_date.toPython(), self.comment_edit.text().strip(),
         )
-
-    def _copy_selection(self):
-        try:
-            message = self.selection_message()
-        except ValueError:
-            self.copy_selection.setText("Сначала выберите тариф")
-            return
-        QApplication.clipboard().setText(message)
-        self.copy_selection.setText("✓ Скопировано")
-
 
 class TariffsPage(QWidget):
     searchReady = Signal(int, object, object)
