@@ -26,6 +26,41 @@ begin
 end;
 """
 
+SEARCH_CALL = """
+begin
+  :result := devdb.get_clients_by_filter_ula(:search_text, :type);
+end;
+"""
+
+@dataclass(frozen=True)
+class UlaClientHit:
+    client_id: str
+    name: str
+    client_type: str = ""
+
+
+def parse_ula_clients(columns: Sequence[str], records: Iterable[Sequence[object]]) -> tuple[UlaClientHit, ...]:
+    headers = tuple(str(value or "").upper() for value in columns)
+    if "ID_CLIENT" not in headers or len(set(headers)) != len(headers):
+        raise UlaReadError("Поиск Ula не вернул уникальное поле ID_CLIENT.")
+    idx = {name: i for i, name in enumerate(headers)}
+    result: list[UlaClientHit] = []
+    for row in records:
+        if len(result) >= 200:
+            raise UlaReadError("Ula вернула слишком много результатов поиска.")
+        if len(row) != len(headers):
+            raise UlaReadError("Некорректная строка поиска Ula.")
+        ident = _cell(row[idx["ID_CLIENT"]])
+        if not ident.isascii() or not ident.isdecimal() or int(ident) <= 0:
+            raise UlaReadError("Некорректный ID клиента Ula.")
+        result.append(UlaClientHit(
+            client_id=ident,
+            name=_cell(row[idx["CLIENT_NAME"]]) if "CLIENT_NAME" in idx else "",
+            client_type=_cell(row[idx["ID_CLIENT_TYPE"]]) if "ID_CLIENT_TYPE" in idx else "",
+        ))
+    return tuple(result)
+
+
 MAX_SERVICES = 3000
 _REQUIRED_COLUMNS = frozenset(("ID_CONTRACT_SERVICE", "SERVICE_NAME", "TARIFF_NAME", "COSTS"))
 _OPTIONAL_COLUMNS = ("DISCOUNT", "STATUS", "IS_ACTIVE_SERVICE", "DOG_NUM", "COST_CONNECT")
@@ -106,6 +141,39 @@ class UlaOracleReadOnlyGateway:
             raise TypeError("connection_factory must be callable")
         self._connect = connection_factory
         self._cursor_type = cursor_type
+
+    def search_clients(self, search_text: str, *, search_type: int = 0) -> tuple[UlaClientHit, ...]:
+        # Search mode 0 is a test default, not yet confirmed by Oracle captures.
+        # A failed response is shown to the operator; never silently try
+        # alternative modes that could expose an unintended client.
+        query = str(search_text or "").strip()
+        if len(query) < 2 or len(query) > 100:
+            raise UlaReadError("Введите не менее двух символов имени или идентификатора клиента.")
+        if type(search_type) is not int or search_type not in (0, 1, 2):
+            raise UlaReadError("Неподдерживаемый режим поиска Ula.")
+        connection = self._connect()
+        cursor = None
+        result_cursor = None
+        try:
+            cursor = connection.cursor()
+            out = cursor.var(self._cursor_type)
+            cursor.execute(
+                SEARCH_CALL,
+                result=out,
+                search_text=query,
+                type=search_type,
+            )
+            result_cursor = out.getvalue()
+            if result_cursor is None or not result_cursor.description:
+                raise UlaReadError("Поиск Ula не вернул курсор результата.")
+            headers = [col[0] for col in result_cursor.description]
+            rows = result_cursor.fetchmany(201)
+            return parse_ula_clients(headers, rows)
+        finally:
+            for obj in (result_cursor, cursor, connection):
+                if obj is not None:
+                    with suppress(Exception):
+                        obj.close()
 
     def list_services(
         self, client_id: int | str, *,
