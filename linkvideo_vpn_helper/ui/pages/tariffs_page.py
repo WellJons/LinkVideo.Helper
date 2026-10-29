@@ -1363,14 +1363,13 @@ class TariffsPage(QWidget):
         title.setObjectName("SectionTitle")
         root.addWidget(title)
         description = QLabel(
-            f"Все записи CRM · {len(rows)} событий · "
+            f"CRM · {len(rows)} событий · "
             f"ID камеры в админке: {service.camera_vc_id or '—'}"
         )
         description.setObjectName("Muted")
         root.addWidget(description)
 
-        # Preserve the structured data as a hidden test/export model, while
-        # presenting readable individual events rather than a clipped grid.
+        # Preserve the structured source data for existing export/tests.
         table = QTableWidget(len(rows), 6, dialog)
         table.setObjectName("BillingCameraHistoryTable")
         table.setHorizontalHeaderLabels((
@@ -1382,9 +1381,11 @@ class TariffsPage(QWidget):
                 "date", "user", "action", "field_name", "old_value", "new_value"
             )):
                 value = str(record.get(key) or "")
-                if key == "date":
-                    value = format_history_timestamp(value)
-                table.setItem(index, col, QTableWidgetItem(value))
+                table.setItem(
+                    index, col, QTableWidgetItem(
+                        format_history_timestamp(value) if key == "date" else value
+                    )
+                )
         root.addWidget(table)
 
         scroll = QScrollArea(dialog)
@@ -1396,75 +1397,16 @@ class TariffsPage(QWidget):
         host = QWidget(scroll)
         events = QVBoxLayout(host)
         events.setContentsMargins(0, 2, 3, 3)
-        events.setSpacing(9)
-
-        # Avoid thousands of QWidget objects on long-running accounts.
-        # Pagination is local and never truncates the server response.
+        events.setSpacing(8)
         ordered = sorted(
             rows, key=lambda item: str(item.get("date") or ""), reverse=True
         )
         displayed = [0]
 
-        def add_events():
-            end = min(displayed[0] + 50, len(ordered))
-            for event in ordered[displayed[0]:end]:
-                card = Card(subtle=True)
-                card.setObjectName("BillingHistoryEvent")
-                layout = QVBoxLayout(card)
-                layout.setContentsMargins(15, 12, 15, 12)
-                layout.setSpacing(6)
-                top = QHBoxLayout()
-                action = QLabel(_value(event.get("action")))
-                action.setObjectName("CardTitle")
-                action.setWordWrap(True)
-                top.addWidget(action, 1)
-                date_label = QLabel(format_history_timestamp(event.get("date")))
-                date_label.setObjectName("Muted")
-                date_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-                top.addWidget(date_label)
-                layout.addLayout(top)
-                meta = QLabel(
-                    f"{_value(event.get('user'))}   ·   "
-                    f"{_value(event.get('field_name'))}"
-                )
-                meta.setObjectName("TinyMuted")
-                layout.addWidget(meta)
-                before = _value(event.get("old_value"))
-                after = _value(event.get("new_value"))
-                if before != "—" or after != "—":
-                    changes = QLabel(f"{before}   →   {after}")
-                    changes.setObjectName("Value")
-                    changes.setTextInteractionFlags(
-                        Qt.TextInteractionFlag.TextSelectableByMouse
-                    )
-                    changes.setWordWrap(True)
-                    layout.addWidget(changes)
-                events.addWidget(card)
-            displayed[0] = end
-            load_more.setVisible(displayed[0] < len(ordered))
-
-        if not ordered:
-            no_events = QLabel("Изменений пока нет")
-            no_events.setObjectName("Muted")
-            no_events.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            events.addWidget(no_events)
         load_more = QPushButton("Показать ещё 50 событий")
         load_more.setObjectName("BillingHistoryLoadMore")
         load_more.setProperty("role", "soft")
-        load_more.clicked.connect(add_events)
-        events.addWidget(load_more)
-        # New event widgets must be inserted before the load-more button.
-        original_add_widget = events.addWidget
-        def before_load_more(widget):
-            events.insertWidget(max(0, events.count() - 1), widget)
-        # Keep the insertion point for incremental updates.
-        events_add = before_load_more
-        # Use a local closure, not a global monkey-patch of QVBoxLayout.
-        # Rebind the event rendering function with its proper insertion.
-        events.addStretch(0)
-        scroll.setWidget(host)
-        root.addWidget(scroll, 1)
-        # Inserting subsequent cards before the footer prevents jumpy order.
+
         def append_batch():
             end = min(displayed[0] + 50, len(ordered))
             for event in ordered[displayed[0]:end]:
@@ -1482,8 +1424,11 @@ class TariffsPage(QWidget):
                 stamp.setObjectName("Muted")
                 top.addWidget(stamp)
                 layout.addLayout(top)
-                meta = QLabel(f"{_value(event.get('user'))} · {_value(event.get('field_name'))}")
+                meta = QLabel(
+                    f"{_value(event.get('user'))} · {_value(event.get('field_name'))}"
+                )
                 meta.setObjectName("TinyMuted")
+                meta.setWordWrap(True)
                 layout.addWidget(meta)
                 before = _value(event.get("old_value"))
                 after = _value(event.get("new_value"))
@@ -1491,21 +1436,31 @@ class TariffsPage(QWidget):
                     change = QLabel(f"{before}   →   {after}")
                     change.setObjectName("Value")
                     change.setWordWrap(True)
-                    change.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                    change.setTextInteractionFlags(
+                        Qt.TextInteractionFlag.TextSelectableByMouse
+                    )
                     layout.addWidget(change)
-                events.insertWidget(max(0, events.indexOf(load_more)), card)
+                events.insertWidget(events.indexOf(load_more), card)
             displayed[0] = end
             load_more.setVisible(end < len(ordered))
-        load_more.clicked.disconnect(add_events)
+
+        if not ordered:
+            no_events = QLabel("История изменений пуста")
+            no_events.setObjectName("Muted")
+            no_events.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            events.addWidget(no_events)
+        events.addWidget(load_more)
         load_more.clicked.connect(append_batch)
         append_batch()
+        scroll.setWidget(host)
+        root.addWidget(scroll, 1)
 
-        actions = QHBoxLayout()
-        actions.addStretch(1)
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
         close = QPushButton("Закрыть")
         close.clicked.connect(dialog.accept)
-        actions.addWidget(close)
-        root.addLayout(actions)
+        buttons.addWidget(close)
+        root.addLayout(buttons)
         dialog.exec()
 
     def _transfer_camera_preview(self, service: BillingService):
