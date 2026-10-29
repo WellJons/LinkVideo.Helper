@@ -47,29 +47,39 @@ def _install_no_console_process_guard() -> None:
 
         def __init__(self, *args, **kwargs):
             nonlocal recorded
-            flags = int(kwargs.get("creationflags", 0) or 0)
-            flags &= ~new_console
-            if not flags & detached:
-                flags |= no_window
-            kwargs["creationflags"] = flags
+            arguments = args[0] if args else kwargs.get("args", ())
+            executable = kwargs.get("executable")
+            if not executable:
+                executable = (arguments[0] if isinstance(arguments, (list, tuple))
+                              and arguments else arguments)
+            name = ntpath.basename(str(executable or "")).lower()
 
-            existing = kwargs.get("startupinfo")
-            info = copy.copy(existing) if existing is not None else subprocess.STARTUPINFO()
-            info.dwFlags |= startf_showwindow
-            info.wShowWindow = sw_hide
-            kwargs["startupinfo"] = info
+            # Do not suppress real GUI programs launched by Helper. WinBox
+            # and the fallback setup launcher must remain visible. Only
+            # console children get STARTUPINFO.SW_HIDE.
+            is_gui = (
+                name in ("winbox.exe", "winbox64.exe", "linkvideo.helper.exe")
+                or name.startswith("linkvideo.helper_setup") and name.endswith(".exe")
+            )
+            if not is_gui:
+                flags = int(kwargs.get("creationflags", 0) or 0)
+                flags &= ~new_console
+                if not flags & detached:
+                    flags |= no_window
+                kwargs["creationflags"] = flags
+
+                existing = kwargs.get("startupinfo")
+                info = copy.copy(existing) if existing is not None else subprocess.STARTUPINFO()
+                info.dwFlags |= startf_showwindow
+                info.wShowWindow = sw_hide
+                kwargs["startupinfo"] = info
 
             if recorded < 40 and time.monotonic() - start < 60:
-                executable = kwargs.get("executable")
-                if not executable:
-                    arguments = args[0] if args else kwargs.get("args", ())
-                    executable = (arguments[0] if isinstance(arguments, (list, tuple))
-                                  and arguments else arguments)
-                name = ntpath.basename(str(executable or "")).lower()
                 if name and name.replace("_", "").replace("-", "").replace(".", "").isalnum():
                     logger = logging.getLogger("linkvideo.helper")
                     if logger.handlers:
-                        logger.info("PROCESS | Запуск дочернего процесса (скрытый режим) | %s", name[:80])
+                        mode = "GUI" if is_gui else "скрытый режим"
+                        logger.info("PROCESS | Запуск дочернего процесса (%s) | %s", mode, name[:80])
                         recorded += 1
 
             super().__init__(*args, **kwargs)
