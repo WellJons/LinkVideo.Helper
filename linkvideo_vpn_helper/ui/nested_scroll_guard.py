@@ -65,6 +65,13 @@ class _NestedScrollFilter(QObject):
                 scrollbar.setValue(new_position)
                 event.accept()
                 return True
+            # Some nested lists (VPN ports) must not pass wheel movement to
+            # their parent, even when their own scrollbar reached an edge.
+            # This avoids scrolling the entire customer workspace while
+            # working inside the ports panel.
+            if bool(candidate.property("lvWheelBoundaryLock")):
+                event.accept()
+                return True
             ancestor = candidate.parentWidget()
             candidate = None
             while ancestor is not None:
