@@ -94,8 +94,17 @@ assert dialog.period_table.item(0, 1).text() == "10"
 assert dialog.table.item(0, 4).text() == "2"  # Trial, not retention.
 assert dialog.findChild(QPushButton, "TariffPreviewDateButton")
 dialog.archive_days.setValue(30)
+assert dialog.archive_days_input.text() == "30"
+assert dialog.archive_days.isHidden()
+assert dialog.archive_days_input.hasAcceptableInput()
 assert dialog.table.rowCount() == 1
 assert dialog.table.item(0, 0).text() == "BYN ЮЛ 30 дней"
+dialog.archive_days_input.setText("14")
+dialog.archive_days_input.textEdited.emit("14")
+assert dialog.archive_days.value() == 14
+assert dialog.table.rowCount() == 1
+assert dialog.table.item(0, 0).text() == "ЮЛ 14 дней"
+dialog.archive_days.setValue(30)
 dialog.table.selectRow(0)
 message = dialog.selection_message()
 assert "Камера 1" in message and "BYN ЮЛ 30 дней" in message
