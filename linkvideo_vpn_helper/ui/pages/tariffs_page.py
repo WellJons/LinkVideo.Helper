@@ -829,6 +829,7 @@ class TariffsPage(QWidget):
         root.addWidget(self.services_table)
         self.camera_scroll = QScrollArea()
         self.camera_scroll.setObjectName("BillingCameraCardsScroll")
+        self.camera_scroll.setProperty("lvWheelBoundaryLock", True)
         self.camera_scroll.setWidgetResizable(True)
         self.camera_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         self.camera_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -1498,7 +1499,13 @@ class TariffsPage(QWidget):
                 before = _value(event.get("old_value"))
                 after = _value(event.get("new_value"))
                 if before != "—" or after != "—":
-                    change = QLabel(f"{before}   →   {after}")
+                    if before == "—":
+                        description = f"Установлено: {after}"
+                    elif after == "—":
+                        description = f"Удалено: {before}"
+                    else:
+                        description = f"Было: {before}    →    Стало: {after}"
+                    change = QLabel(description)
                     change.setObjectName("Value")
                     change.setWordWrap(True)
                     change.setTextInteractionFlags(
