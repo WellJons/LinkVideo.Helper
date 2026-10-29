@@ -18,7 +18,16 @@ a = Analysis(
     pathex=[str(root)],
     binaries=[],
     datas=datas,
-    hiddenimports=["PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets", "oracledb"],
+    hiddenimports=[
+        "PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets", "oracledb",
+        # python-oracledb loads cryptography dynamically in Thin mode.
+        # Omission from a frozen EXE yields DPY-3016 even when the library
+        # is installed in the build environment.
+        "cryptography",
+        "cryptography.hazmat.primitives.ciphers.aead",
+        "cryptography.hazmat.primitives.kdf.pbkdf2",
+        "cryptography.hazmat.primitives.hashes",
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
