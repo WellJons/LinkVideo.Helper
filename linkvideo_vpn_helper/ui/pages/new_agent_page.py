@@ -120,7 +120,28 @@ class NewAgentPage(QWidget):
         self.action_combo.setMinimumHeight(43)
         for label, value in self.ACTIONS:
             self.action_combo.addItem(label, value)
+        # Preserve the action code for existing tests/API, but replace the
+        # plain combo with themed direct-selection controls.
+        self.action_combo.hide()
         work.addWidget(self.action_combo)
+        action_tiles = QHBoxLayout()
+        action_tiles.setSpacing(8)
+        self.action_buttons = []
+        for code, title in (("time", "Время и NTP"), ("bitrate", "Битрейт"),
+                            ("rotation", "Ориентация")):
+            tile = QPushButton(title)
+            tile.setObjectName(f"NewAgentActionTile_{code}")
+            tile.setProperty("themeChoice", "true")
+            tile.setProperty("active", "false")
+            tile.setCheckable(True)
+            tile.setMinimumHeight(46)
+            tile.clicked.connect(
+                lambda checked=False, key=code:
+                self.action_combo.setCurrentIndex(self.action_combo.findData(key))
+            )
+            action_tiles.addWidget(tile, 1)
+            self.action_buttons.append((code, tile))
+        work.addLayout(action_tiles)
 
         self.time_row = Card(subtle=True)
         time_l = QVBoxLayout(self.time_row)
@@ -132,7 +153,7 @@ class NewAgentPage(QWidget):
         self.timezone = QComboBox()
         self.timezone.setObjectName("NewAgentTimezone")
         for offset in range(-12, 15):
-            value = f"UTC{offset:+d} · {'Местное время' if offset == 7 else 'часовой пояс'}"
+            value = f"UTC{offset:+d}"
             self.timezone.addItem(value, offset)
         self.timezone.setCurrentIndex(self.timezone.findData(7))
         self.timezone.setMinimumHeight(44)
@@ -413,6 +434,8 @@ class NewAgentPage(QWidget):
         self.actions_card.setVisible(found)
         self.copy_btn.setEnabled(found)
         self.action_combo.setEnabled(found and not self._busy)
+        for _, tile in self.action_buttons:
+            tile.setEnabled(found and not self._busy)
         self.refresh_setting_btn.setEnabled(
             found and not self._busy and action in ("rotation", "bitrate")
         )
@@ -450,6 +473,12 @@ class NewAgentPage(QWidget):
 
     def _action_changed(self, *_):
         action = self.action_combo.currentData() or ""
+        for key, tile in self.action_buttons:
+            active = key == action
+            tile.setChecked(active)
+            tile.setProperty("active", "true" if active else "false")
+            tile.style().unpolish(tile)
+            tile.style().polish(tile)
         self.time_row.setVisible(action == "time")
         self.rotation_row.setVisible(action == "rotation")
         self.bitrate_row.setVisible(action == "bitrate")
