@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import json
 import re
 import time
+from urllib.parse import parse_qsl, urlsplit
 from threading import Lock
 from typing import Any
 
@@ -82,27 +83,124 @@ class AgentService:
             raise ValueError("Неизвестный агент или некорректный serial_number.")
 
     @staticmethod
+    def _serial_from_row(row: dict[str, Any]) -> str:
+        """Support known naming variations without treating an arbitrary ID as a serial."""
+        for key in ("serial_number", "serialNumber", "SerialNumber", "serial_no"):
+            value = row.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+        return ""
+
+    @staticmethod
     def _camera_rows(payload: Any) -> list[dict[str, Any]]:
         if isinstance(payload, list):
-            return [v for v in payload if isinstance(v, dict)]
+            rows = []
+            for item in payload:
+                rows.extend(AgentService._camera_rows(item))
+            return rows
         if not isinstance(payload, dict):
             return []
-        for name in ("cameras", "items", "data", "result"):
+        if AgentService._serial_from_row(payload):
+            return [payload]
+        for name in ("cameras", "cameraList", "camera_list", "items", "records", "data", "result", "list"):
             item = payload.get(name)
-            if isinstance(item, list):
-                return [v for v in item if isinstance(v, dict)]
-            if isinstance(item, dict):
+            if isinstance(item, (list, dict)):
                 rows = AgentService._camera_rows(item)
                 if rows:
                     return rows
-        return [payload] if "serial_number" in payload else []
+        return []
 
-    def camera_list(self, server: str) -> list[dict[str, Any]]:
+    def camera_list(self, server: str, target_serial: str = "") -> list[dict[str, Any]]:
+        """Read all discoverable pages, never silently report an incomplete list as empty.
+
+        The first request stays identical to the established /camera/list contract.
+        Pagination is attempted only when the response advertises it or a
+        suspiciously full (50+) page could have been truncated by the gateway.
+        All subsequent requests remain on the explicitly allowlisted host/path.
+        """
         url = self._url(server, "/api/v1/camera/list")
-        r = requests.get(url, headers={"Accept": "application/json"},
-                         auth=self._auth(), timeout=self.timeout, allow_redirects=False)
-        r.raise_for_status()
-        return self._camera_rows(r.json())
+        rows_by_serial: dict[str, dict[str, Any]] = {}
+        params: dict[str, Any] | None = None
+        requested: set[tuple[tuple[str, str], ...]] = set()
+        for _page in range(40):
+            marker = tuple(sorted((str(k), str(v)) for k, v in (params or {}).items()))
+            if marker in requested:
+                raise ConnectionError(f"agent-vcore {server}: повтор страницы списка камер.")
+            requested.add(marker)
+            kwargs = {"headers": {"Accept": "application/json"},
+                      "auth": self._auth(), "timeout": self.timeout,
+                      "allow_redirects": False}
+            if params:
+                kwargs["params"] = params
+            response = requests.get(url, **kwargs)
+            response.raise_for_status()
+            payload = response.json()
+            page_rows = self._camera_rows(payload)
+            new_count = 0
+            for row in page_rows:
+                serial = self._serial_from_row(row)
+                if not serial:
+                    continue
+                key = serial.casefold()
+                if key not in rows_by_serial:
+                    new_count += 1
+                rows_by_serial[key] = row
+            if target_serial and target_serial.casefold() in rows_by_serial:
+                return list(rows_by_serial.values())
+
+            meta = payload if isinstance(payload, dict) else {}
+            for name in ("pagination", "paging", "pageInfo", "meta"):
+                if isinstance(meta.get(name), dict):
+                    meta = {**meta, **meta[name]}
+                    break
+            next_page = meta.get("next") or meta.get("next_page") or meta.get("nextPage")
+            has_more = meta.get("has_more", meta.get("hasMore"))
+            raw_total = meta.get("total", meta.get("total_count", meta.get("totalCount")))
+            try:
+                total = int(raw_total) if raw_total is not None else None
+            except (ValueError, TypeError):
+                total = None
+
+            if isinstance(next_page, str) and next_page:
+                # Ignore remote URLs/paths supplied by an untrusted inventory response.
+                parsed = urlsplit(next_page)
+                if parsed.scheme or parsed.netloc or (parsed.path and parsed.path != "/api/v1/camera/list"):
+                    raise ConnectionError(f"agent-vcore {server}: небезопасный переход страницы.")
+                next_params = dict(parse_qsl(parsed.query, keep_blank_values=False))
+                if not next_params:
+                    raise ConnectionError(f"agent-vcore {server}: нет параметров следующей страницы.")
+                params = next_params
+            elif isinstance(next_page, int) and not isinstance(next_page, bool):
+                params = {"page": next_page}
+            elif has_more is True or (total is not None and len(rows_by_serial) < total):
+                if not page_rows or not new_count:
+                    raise ConnectionError(f"agent-vcore {server}: неполный список камер.")
+                page_key = "page" if "page" in meta or "page" in (params or {}) else "offset"
+                if page_key == "page":
+                    params = {"page": int((params or {}).get("page", meta.get("page", 1))) + 1,
+                              "page_size": int(meta.get("page_size", meta.get("limit", len(page_rows))))}
+                else:
+                    params = {"offset": len(rows_by_serial), "limit": int(meta.get("limit", len(page_rows)))}
+            elif has_more is False or (total is not None and len(rows_by_serial) >= total):
+                return list(rows_by_serial.values())
+            elif len(page_rows) >= 50 and params is None:
+                # A capped plain list may omit pagination metadata altogether.
+                params = {"offset": len(page_rows), "limit": len(page_rows)}
+            elif params is not None:
+                if not page_rows:
+                    return list(rows_by_serial.values())
+                if not new_count:
+                    raise ConnectionError(f"agent-vcore {server}: сервер игнорирует постраничный запрос.")
+                limit = int(params.get("limit", params.get("page_size", len(page_rows))))
+                if len(page_rows) < limit:
+                    return list(rows_by_serial.values())
+                if "page" in params:
+                    params = {**params, "page": int(params["page"]) + 1}
+                else:
+                    params = {**params, "offset": len(rows_by_serial)}
+            else:
+                return list(rows_by_serial.values())
+        raise ConnectionError(f"agent-vcore {server}: превышен предел страниц списка камер.")
 
     @staticmethod
     def _from_row(server: str, row: dict[str, Any]) -> AgentCamera:
@@ -110,7 +208,7 @@ class AgentService:
         if not isinstance(raw, (tuple, list)):
             raw = []
         return AgentCamera(
-            serial_number=str(row.get("serial_number") or "").strip(),
+            serial_number=AgentService._serial_from_row(row),
             server=server,
             agent_version=tuple(int(v) for v in raw if str(v).isdigit()),
             vendor=str(row.get("vendor") or "").strip(),
@@ -119,8 +217,8 @@ class AgentService:
         )
 
     def _find_on_server(self, server: str, serial: str) -> AgentCamera | None:
-        for row in self.camera_list(server):
-            if str(row.get("serial_number") or "").strip().casefold() == serial.casefold():
+        for row in self.camera_list(server, target_serial=serial):
+            if self._serial_from_row(row).casefold() == serial.casefold():
                 return self._from_row(server, row)
         return None
 
@@ -143,14 +241,14 @@ class AgentService:
             with self._cache_lock:
                 self._cache.pop(key, None)
         others = [host for host in self.servers() if host != cached]
-        errors = 0
+        failures = []
         with ThreadPoolExecutor(max_workers=min(8, max(1, len(others)))) as pool:
-            tasks = [pool.submit(self._find_on_server, host, serial) for host in others]
+            tasks = {pool.submit(self._find_on_server, host, serial): host for host in others}
             for future in as_completed(tasks):
                 try:
                     found = future.result()
                 except Exception:
-                    errors += 1
+                    failures.append(tasks[future])
                     continue
                 if found:
                     self._validated_camera(found)
@@ -159,9 +257,13 @@ class AgentService:
                     for pending in tasks:
                         pending.cancel()
                     return found
-        if errors == len(others):
-            raise ConnectionError("Не удалось получить список камер с agent-vcore.")
-        raise LookupError(f"Камера {serial} не найдена на agent-vcore.")
+        if failures:
+            raise ConnectionError(
+                f"Поиск не завершён: {len(failures)} из {len(others)} agent-vcore "
+                "не вернули полный список камер. Повторите проверку или проверьте доступность серверов: "
+                + ", ".join(failures[:5]) + ("…" if len(failures) > 5 else "")
+            )
+        raise LookupError(f"Камера {serial} отсутствует в полученных списках agent-vcore.")
 
     @staticmethod
     def _raw_http_get(path: str) -> bytes:
