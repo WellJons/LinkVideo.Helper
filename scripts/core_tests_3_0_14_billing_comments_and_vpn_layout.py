@@ -102,7 +102,7 @@ with tempfile.TemporaryDirectory() as folder:
     assert page.info_scroll.property("lvWheelBoundaryLock")
     assert page.port_list.parentWidget() is not page.detail_host
     assert page.port_list.count()==2
-    assert "\\n" in page.port_list.item(0).text()
+    assert page.port_list.item(0).text().count("Порт 11398") == 1
     assert page.back_to_results.isHidden()
     assert page.detail_route_title.text() == "Управление аккаунтом"
     assert page.info_scroll.verticalScrollBar().value()==0
