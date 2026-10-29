@@ -493,6 +493,7 @@ class TariffsPage(QWidget):
         self._recipient_request = 0
         self._preview_widgets = {}
         self._unknown_status_changes = set()
+        self._unknown_owner_changes = set()
         self._uncertain_tariff_changes: set[tuple[str, str, str, date]] = set()
         self.client: BillingClient | None = None
         self._build()
@@ -1478,60 +1479,131 @@ class TariffsPage(QWidget):
         dialog.exec()
 
     def _transfer_camera_preview(self, service: BillingService):
-        # Search endpoint has been captured, but the final transfer request has
-        # not. Allow recipient discovery without claiming or sending a transfer.
+        if not callable(getattr(self.gateway, "transfer_camera", None)):
+            self.task.warning("Нет API", "Выполните авторизацию в CRM.")
+            return
+        client = self.client
+        if client is None or service not in client.services:
+            return
+
         dialog = QDialog(self)
         style_helper_dialog(dialog)
         dialog.setObjectName("BillingTransferCameraDialog")
         dialog.setWindowTitle(f"Передать камеру · {service.camera_name}")
-        dialog.setMinimumSize(530, 320)
+        dialog.resize(580, 470)
         layout = QVBoxLayout(dialog)
-        layout.addWidget(QLabel(
-            f"Камера: {service.camera_name} · ID {service.id}"
-        ))
-        layout.addWidget(QLabel("Поиск аккаунта получателя"))
+        layout.setContentsMargins(22, 20, 22, 20)
+        layout.setSpacing(12)
+        heading = QLabel("Передача камеры")
+        heading.setObjectName("SectionTitle")
+        layout.addWidget(heading)
+        subtitle = QLabel(
+            f"{service.camera_name} · ID админки: "
+            f"{admin_camera_label(client.country, service.camera_vc_id)}"
+        )
+        subtitle.setObjectName("Muted")
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
+
+        current = Card(subtle=True)
+        current_l = QVBoxLayout(current)
+        current_l.setContentsMargins(14, 11, 14, 11)
+        current_l.addWidget(QLabel("Текущий владелец"))
+        current_value = QLabel(
+            f"{client.login} · {client.country} · аккаунт № {client.id}"
+        )
+        current_value.setObjectName("Value")
+        current_value.setWordWrap(True)
+        current_l.addWidget(current_value)
+        layout.addWidget(current)
+        layout.addWidget(QLabel("Найти получателя по логину"))
+        search_row = QHBoxLayout()
         query = QLineEdit()
         query.setObjectName("BillingTransferRecipientQuery")
+        query.setMinimumHeight(42)
         query.setPlaceholderText("Логин или номер учётной записи")
-        layout.addWidget(query)
+        find = QPushButton("Найти")
+        find.setProperty("role", "soft")
+        search_row.addWidget(query, 1)
+        search_row.addWidget(find)
+        layout.addLayout(search_row)
+
         choices = QListWidget()
         choices.setObjectName("BillingTransferRecipientResults")
+        choices.setMinimumHeight(102)
+        choices.setAlternatingRowColors(True)
         layout.addWidget(choices, 1)
+        move_in_vc = QCheckBox("Перенести также в VC (админке)")
+        move_in_vc.setObjectName("BillingTransferMoveInVC")
+        move_in_vc.setChecked(False)
+        move_in_vc.setEnabled(False)
+        move_in_vc.setToolTip(
+            "Пока подтверждён только перенос биллинга (move_in_vc=0)."
+        )
+        layout.addWidget(move_in_vc)
         hint = QLabel(
-            "Поиск получателя работает. Отправка передачи пока доступна "
-            "в оригинальном биллинге: запрос переноса не подтверждён."
+            "Выберите точный аккаунт получателя. Доступен перенос в "
+            "биллинге внутри одной страны; перенос в VC пока не подтверждён."
         )
         hint.setWordWrap(True)
         hint.setObjectName("TinyMuted")
         layout.addWidget(hint)
+
         actions = QHBoxLayout()
-        find = QPushButton("Найти получателя")
-        find.setProperty("role", "soft")
-        actions.addWidget(find)
         actions.addStretch(1)
-        go = QPushButton("Открыть биллинг")
-        go.clicked.connect(lambda: (dialog.accept(), self._open_billing()))
-        close = QPushButton("Закрыть")
+        close = QPushButton("Отмена")
         close.clicked.connect(dialog.reject)
-        actions.addWidget(go)
+        submit = QPushButton("Передать")
+        submit.setObjectName("BillingTransferSubmit")
+        submit.setProperty("role", "primary")
+        submit.setEnabled(False)
+        submit.clicked.connect(dialog.accept)
         actions.addWidget(close)
+        actions.addWidget(submit)
         layout.addLayout(actions)
+
+        def selected_hit():
+            item = choices.currentItem()
+            if item is None:
+                return None
+            hit = item.data(Qt.ItemDataRole.UserRole)
+            return hit if isinstance(hit, BillingSearchHit) else None
+
+        def update_submit():
+            hit = selected_hit()
+            valid = (
+                hit is not None and hit.country == client.country
+                and hit.id != client.id
+            )
+            submit.setEnabled(valid)
+            if hit is not None and hit.country != client.country:
+                hint.setText(
+                    "Передача между разными странами не подтверждена. "
+                    "Выберите аккаунт той же страны."
+                )
+        choices.currentItemChanged.connect(lambda *_: update_submit())
+
         def on_results(request_id, hits, error):
             if request_id != self._recipient_request or not dialog.isVisible():
                 return
             find.setEnabled(True)
             choices.clear()
+            submit.setEnabled(False)
             if error is not None:
-                hint.setText("Поиск не выполнен. Проверьте логин и авторизацию.")
+                hint.setText("Поиск не выполнен. Проверьте авторизацию CRM.")
                 return
             for hit in hits:
-                if self.client and hit.id == self.client.id:
+                if hit.id == client.id:
                     continue
-                choices.addItem(
-                    f"{hit.login} · {hit.country} · аккаунт № {hit.id}"
+                item = QListWidgetItem(
+                    f"{hit.login} · {hit.country} · № {hit.id} · {hit.status}"
                 )
+                item.setData(Qt.ItemDataRole.UserRole, hit)
+                choices.addItem(item)
             if not choices.count():
-                hint.setText("Аккаунты не найдены.")
+                hint.setText("Получатели не найдены.")
+            else:
+                hint.setText("Проверьте страну и ID выбранного получателя.")
 
         def do_search():
             value = query.text().strip()
@@ -1541,23 +1613,74 @@ class TariffsPage(QWidget):
             request_id = self._recipient_request
             gateway = self.gateway
             find.setEnabled(False)
-            hint.setText("Ищу аккаунты получателя…")
+            choices.clear()
+            submit.setEnabled(False)
+            hint.setText("Загружаю аккаунты…")
             def work():
                 try:
-                    result = gateway.search_clients(value)
-                    self.recipientSearchReady.emit(request_id, result, None)
+                    hits = gateway.search_clients(value)
+                    self.recipientSearchReady.emit(request_id, hits, None)
                 except Exception as exc:
                     self.recipientSearchReady.emit(request_id, None, exc)
             threading.Thread(
                 target=work, name="billing-transfer-recipient-get", daemon=True
             ).start()
+
         self.recipientSearchReady.connect(on_results)
         find.clicked.connect(do_search)
         query.returnPressed.connect(do_search)
-        dialog.exec()
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        recipient = selected_hit() if accepted else None
         self._recipient_request += 1
-        # This connection was created above and is always ours to remove.
         self.recipientSearchReady.disconnect(on_results)
+        if not accepted or recipient is None or recipient.country != client.country:
+            return
+        confirmation = ConfirmDialog(
+            "Подтвердить передачу камеры",
+            f"Камера: {service.camera_name}\\n"
+            f"Отправитель: {client.login} · № {client.id}\\n"
+            f"Получатель: {recipient.login} · № {recipient.id}\\n"
+            f"Страна: {client.country}\\n"
+            "Перенести в VC: нет. Операция изменит владельца в биллинге.",
+            "Передать камеру", True, self
+        )
+        if confirmation.exec() != QDialog.DialogCode.Accepted:
+            return
+        fingerprint = (client.id, recipient.id, service.id)
+        if fingerprint in self._unknown_owner_changes:
+            self.task.warning(
+                "Проверьте владельца",
+                "Прошлый запрос мог выполниться. Перед повтором проверьте CRM."
+            )
+            return
+        self._request_id += 1
+        request_id = self._request_id
+        self._set_busy(True)
+        self.task.busy_inline(
+            "Передача камеры",
+            f"{service.camera_name}: {client.login} → {recipient.login}"
+        )
+        gateway = self.gateway
+        def work():
+            try:
+                payload, refreshed = gateway.transfer_camera(
+                    client, service.id, recipient, move_in_vc=False
+                )
+                self.operationReady.emit(
+                    request_id, "owner_changed",
+                    (service, recipient, payload, refreshed), None
+                )
+            except BillingWriteOutcomeUnknown as exc:
+                self.operationReady.emit(
+                    request_id, "owner_unknown", fingerprint, exc
+                )
+            except Exception as exc:
+                self.operationReady.emit(
+                    request_id, "owner_error", None, exc
+                )
+        threading.Thread(
+            target=work, name="billing-owner-put", daemon=True
+        ).start()
 
     def _selected_camera_services(self):
         if self.client is None:
@@ -1679,6 +1802,10 @@ class TariffsPage(QWidget):
             self._unknown_status_changes.add(result)
             self.task.warning("Проверьте статус камеры", self._safe_error(error))
             return
+        if operation == "owner_unknown":
+            self._unknown_owner_changes.add(result)
+            self.task.warning("Проверьте владельца камеры", self._safe_error(error))
+            return
         if error is not None:
             self.task.error("Операция биллинга не выполнена", self._safe_error(error))
             return
@@ -1689,6 +1816,18 @@ class TariffsPage(QWidget):
             if service in self.client.services:
                 self.task.hide()
                 self._show_camera_history(service, rows)
+        elif operation == "owner_changed":
+            if self.client is None:
+                return
+            service, recipient, _payload, refreshed = result
+            if refreshed is not None and refreshed.id == self.client.id:
+                self.client = refreshed
+                self._render_client(refreshed)
+            self.task.done(
+                "Камера передана в биллинге",
+                f"{service.camera_name} → {recipient.login} (№ {recipient.id}). "
+                "Перенос в админке VC не выполнялся.",
+            )
         elif operation == "status_changed":
             if self.client is None:
                 return
