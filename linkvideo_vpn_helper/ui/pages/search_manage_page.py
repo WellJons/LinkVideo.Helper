@@ -1307,6 +1307,7 @@ class SearchManagePage(QWidget):
         cl.addWidget(ct)
 
         grid = QGridLayout()
+        grid.setObjectName("ClientManagementActionsGrid")
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(8)
 
