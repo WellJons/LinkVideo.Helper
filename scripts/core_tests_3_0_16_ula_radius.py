@@ -41,13 +41,22 @@ with tempfile.TemporaryDirectory() as temp:
     )
     assert ula_radius_configured(ula)
 
+    # The database username in Ula.ini is never an implicit employee login
+    # when RADIUS is enabled.
+    try:
+        create_ula_gateway(details, "synthetic-only", config_dir=str(ula))
+    except UlaReadError as exc:
+        assert "личный логин" in str(exc)
+    else:
+        raise AssertionError("RADIUS must require the employee login explicitly")
+
     # Only a 32-bit OCI shipped with Ula: 64-bit Helper must fail safely.
     write_pe(ula / "oci.dll", 0x014c)
     assert _oci_architecture(ula / "oci.dll") == "x86"
     with patch.dict(os.environ, {"PATH": "", "ORACLE_HOME": ""}):
         assert find_oracle_client(ula) is None
         try:
-            create_ula_gateway(details, "synthetic-only", config_dir=str(ula))
+            create_ula_gateway(details, "synthetic-only", config_dir=str(ula), login_username="employee")
         except UlaReadError as exc:
             assert "RADIUS" in str(exc) and "x64" in str(exc)
         else:
@@ -63,7 +72,7 @@ with tempfile.TemporaryDirectory() as temp:
         try:
             create_ula_gateway(
                 details, "synthetic-only", config_dir=str(ula),
-                thick_client_dir=str(ula),
+                thick_client_dir=str(ula), login_username="employee",
             )
         except UlaReadError as exc:
             assert "x64" in str(exc)
@@ -84,13 +93,14 @@ with tempfile.TemporaryDirectory() as temp:
         with patch.dict(sys.modules, {"oracledb": fake}):
             gw = create_ula_gateway(
                 details, "synthetic-only", config_dir=str(ula),
+                login_username="employee",
             )
             assert calls[0][0] == "init"
             assert calls[0][1]["lib_dir"] == str(client.resolve())
             assert calls[0][1]["config_dir"] == str(ula.resolve())
             conn = gw._connect()
             assert calls[1] == ("connect", {
-                "user": "operator", "dsn": "127.0.0.1/1521/TEST",
+                "user": "employee", "dsn": "127.0.0.1/1521/TEST",
                 "has_password": True,
             })
             conn.close()
