@@ -36,8 +36,11 @@ with tempfile.TemporaryDirectory() as folder:
 app = QApplication.instance() or QApplication([])
 requested = []
 
-def fake_factory(details, password, *, thick_client_dir="", config_dir="", login_username=None):
-    requested.append((details, password, thick_client_dir, config_dir, login_username))
+def fake_factory(
+    details, password, *, thick_client_dir="", config_dir="",
+    login_username=None, auth_mode="password",
+):
+    requested.append((details, password, thick_client_dir, config_dir, login_username, auth_mode))
     return object()
 
 page = UlaServicesTab(gateway_factory=fake_factory)
@@ -49,6 +52,7 @@ gateway = page._make_gateway()
 assert gateway is not None and len(requested) == 1
 assert requested[0][0].username == "fictional"
 assert requested[0][4] == "fictional"
+assert requested[0][5] == "password"
 page._ula_db_username = "technical-from-ini"
 page.username.setText("operator-other")
 page._make_gateway()
@@ -60,6 +64,13 @@ assert requested[0][3] == ""  # no Ula.ini imported in this UI-only test
 assert page.password.echoMode() == page.password.EchoMode.Password
 assert not page.advanced_panel.isVisible()
 assert page.more_button.objectName() == "UlaOracleAdvancedToggle"
+assert page.auth_mode.itemData(1) == "external"
+page.auth_mode.setCurrentIndex(page.auth_mode.findData("external"))
+assert not page.password.isVisible()
+assert page.password.text() == ""
+page._make_gateway()
+assert requested[-1][5] == "external"
+assert requested[-1][1] == ""
 assert page.findChild(QTableWidget, "UlaServicesTable") is page.services
 assert page.layout().itemAt(1).widget() is page.message, (
     "Oracle diagnostics must be visible before the long forms, not below tables"
