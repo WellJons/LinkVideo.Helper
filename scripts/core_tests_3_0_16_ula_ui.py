@@ -36,8 +36,8 @@ with tempfile.TemporaryDirectory() as folder:
 app = QApplication.instance() or QApplication([])
 requested = []
 
-def fake_factory(details, password, *, thick_client_dir="", config_dir=""):
-    requested.append((details, password, thick_client_dir, config_dir))
+def fake_factory(details, password, *, thick_client_dir="", config_dir="", login_username=None):
+    requested.append((details, password, thick_client_dir, config_dir, login_username))
     return object()
 
 page = UlaServicesTab(gateway_factory=fake_factory)
@@ -48,10 +48,13 @@ page.password.setText("not-a-real-password")
 gateway = page._make_gateway()
 assert gateway is not None and len(requested) == 1
 assert requested[0][0].username == "fictional"
+assert requested[0][4] == "fictional"
+page._ula_db_username = "technical-from-ini"
 page.username.setText("operator-other")
 page._make_gateway()
-assert requested[-1][0].username == "operator-other", (
-    "Oracle/RADIUS login must be editable, independent of imported Ula.ini username"
+assert requested[-1][0].username == "technical-from-ini"
+assert requested[-1][4] == "operator-other", (
+    "Oracle/RADIUS employee login must be independent of Ula.ini database username"
 )
 assert requested[0][3] == ""  # no Ula.ini imported in this UI-only test
 assert page.password.echoMode() == page.password.EchoMode.Password
