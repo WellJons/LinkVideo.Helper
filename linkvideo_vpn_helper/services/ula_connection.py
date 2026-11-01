@@ -101,8 +101,8 @@ def _oci_architecture(dll: Path) -> str:
         return "unknown"
 
 
-def find_oracle_client(config_dir: str | Path = "") -> Path | None:
-    """Locate an already installed 64-bit OCI; never search the whole drive.
+def find_oracle_client(config_dir: str | Path = "", *, architecture: str = "x64") -> Path | None:
+    """Locate an installed OCI of the requested architecture; no drive scan.
 
     Search only the Ula install, configured Oracle paths and normal program
     locations. The PE header check avoids loading a 32-bit Ula OCI into the
@@ -135,7 +135,9 @@ def find_oracle_client(config_dir: str | Path = "") -> Path | None:
         add(part)
 
     # Probe a single directory level only; avoid a recursive filesystem scan.
-    for env_name in ("ProgramFiles", "ProgramW6432"):
+    if architecture not in ("x64", "x86"):
+        raise ValueError("Unsupported Oracle architecture")
+    for env_name in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
         root = os.environ.get(env_name)
         if not root:
             continue
@@ -153,7 +155,7 @@ def find_oracle_client(config_dir: str | Path = "") -> Path | None:
 
     for folder in candidates:
         dll = folder / "oci.dll"
-        if dll.is_file() and _oci_architecture(dll) == "x64":
+        if dll.is_file() and _oci_architecture(dll) == architecture:
             return folder.resolve()
     return None
 
@@ -191,19 +193,37 @@ def create_ula_gateway(
         dll = lib_dir / "oci.dll"
         if not dll.is_file():
             raise UlaReadError("Выбранная папка не содержит oci.dll.")
-        if _oci_architecture(dll) != "x64":
-            raise UlaReadError(
-                "Выбрана несовместимая oci.dll (нужен x64). "
-                "32-битную библиотеку установленной Ula загрузить в Helper нельзя."
-            )
+        client_arch = _oci_architecture(dll)
+        if client_arch not in ("x86", "x64"):
+            raise UlaReadError("Указанная oci.dll не является совместимой библиотекой Oracle.")
     elif radius:
-        lib_dir = find_oracle_client(config_dir)
+        lib_dir = find_oracle_client(config_dir, architecture="x64")
         if lib_dir is None:
+            lib_dir = find_oracle_client(config_dir, architecture="x86")
+        client_arch = _oci_architecture(lib_dir / "oci.dll") if lib_dir else "unknown"
+    else:
+        client_arch = "x64"
+
+    if radius and client_arch == "x86":
+        from linkvideo_vpn_helper.services.ula_x86_bridge import (
+            UlaX86BridgeGateway, find_bridge_exe,
+        )
+        if find_bridge_exe() is None:
             raise UlaReadError(
-                "Ula использует RADIUS, но подходящий Oracle Client x64 на этом ПК "
-                "не обнаружен. 32-битный клиент Ula несовместим с Helper x64. "
-                "Проверьте установленный клиент; при наличии выберите его в дополнительных настройках."
+                "Обнаружен Oracle Client x86, но 32-битный компонент Helper "
+                "не найден. Установите свежую тестовую RC-сборку."
             )
+        return UlaX86BridgeGateway(
+            details=details, login=login, password=password,
+            client_dir=lib_dir.resolve(), config_dir=config_dir,
+        )
+    if radius and lib_dir is None:
+        raise UlaReadError(
+            "RADIUS включён, но библиотека oci.dll не найдена ни в папке Ula, "
+            "ни среди установленных Oracle Client x86/x64."
+        )
+    if client_arch == "x86":
+        raise UlaReadError("Клиент Oracle x86 используется только через RADIUS-мост.")
     try:
         import oracledb
     except ImportError as exc:
