@@ -67,6 +67,13 @@ with tempfile.TemporaryDirectory() as temp:
                 login_username="employee",
             )
             assert isinstance(gw_x86, UlaX86BridgeGateway)
+            gw_external = create_ula_gateway(
+                details, "", config_dir=str(ula),
+                login_username="employee", auth_mode="external",
+            )
+            assert isinstance(gw_external, UlaX86BridgeGateway)
+            assert gw_external._password == ""
+            assert gw_external._auth_mode == "external"
             with patch(
                 "linkvideo_vpn_helper.services.ula_x86_bridge.run_bridge",
                 return_value={"rows": []},
@@ -96,13 +103,27 @@ with tempfile.TemporaryDirectory() as temp:
         fake = types.ModuleType("oracledb")
         fake.DB_TYPE_CURSOR = "REF_CURSOR"
         fake.init_oracle_client = lambda **kw: calls.append(("init", kw))
-        fake.makedsn = lambda host, port, *, sid: f"{host}/{port}/{sid}"
-        fake.connect = lambda **kw: calls.append(("connect", {
-            "user": kw["user"], "dsn": kw["dsn"],
-            "has_password": bool(kw["password"]),
-        })) or types.SimpleNamespace(
-            close=lambda: None, autocommit=None, call_timeout=None,
+        fake.makedsn = lambda host, port, *, sid=None, service_name=None: (
+            f"{host}/{port}/{sid or service_name}"
         )
+        class FakeCursor:
+            def execute(self, statement):
+                assert "AUTHENTICATED_IDENTITY" in statement
+            def fetchone(self):
+                return ("employee", "TECHNICAL")
+            def close(self):
+                return None
+        def fake_connect(**kw):
+            calls.append(("connect", {
+                "user": kw.get("user"), "dsn": kw["dsn"],
+                "has_password": bool(kw.get("password")),
+                "external": kw.get("externalauth", False),
+            }))
+            return types.SimpleNamespace(
+                close=lambda: None, autocommit=None, call_timeout=None,
+                cursor=lambda: FakeCursor(),
+            )
+        fake.connect = fake_connect
         with patch.dict(sys.modules, {"oracledb": fake}):
             gw = create_ula_gateway(
                 details, "synthetic-only", config_dir=str(ula),
@@ -114,9 +135,19 @@ with tempfile.TemporaryDirectory() as temp:
             conn = gw._connect()
             assert calls[1] == ("connect", {
                 "user": "employee", "dsn": "127.0.0.1/1521/TEST",
-                "has_password": True,
+                "has_password": True, "external": False,
             })
             conn.close()
+
+            external = create_ula_gateway(
+                details, "", config_dir=str(ula),
+                login_username="employee", auth_mode="external",
+            )
+            external._connect().close()
+            assert calls[-1] == ("connect", {
+                "user": None, "dsn": "127.0.0.1/1521/TEST",
+                "has_password": False, "external": True,
+            })
 
     (ula / "sqlnet.ora").write_text("SQLNET.AUTHENTICATION_SERVICES=(NONE)\n")
     assert not ula_radius_configured(ula)
