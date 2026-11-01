@@ -284,7 +284,11 @@ def create_ula_gateway(
             # after initialization requires restarting the application.
             raise
 
-    dsn = oracledb.makedsn(details.host, details.port, sid=details.sid)
+    # The successful Ula RADIUS TNS CONNECT uses SERVICE_NAME, not SID.
+    dsn = oracledb.makedsn(
+        details.host, details.port,
+        **({"service_name": details.sid} if auth_mode == "external" else {"sid": details.sid}),
+    )
 
     def connect():
         if auth_mode == "external":
