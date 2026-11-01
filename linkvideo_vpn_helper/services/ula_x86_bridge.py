@@ -33,8 +33,10 @@ def find_bridge_exe() -> Path | None:
 
 def run_bridge(
     action: str, *, details, login: str, password: str,
-    client_dir: Path, config_dir: str, **params,
+    client_dir: Path, config_dir: str, auth_mode: str = "password", **params,
 ) -> dict:
+    if auth_mode not in ("password", "external"):
+        raise UlaReadError("Неподдерживаемый режим авторизации Oracle.")
     bridge = find_bridge_exe()
     if bridge is None:
         raise UlaReadError(
@@ -45,7 +47,8 @@ def run_bridge(
         "action": action,
         "details": asdict(details),
         "login": login,
-        "password": password,
+        "password": password if auth_mode == "password" else "",
+        "auth_mode": auth_mode,
         "client_dir": str(client_dir),
         "config_dir": str(config_dir),
     }
@@ -90,18 +93,22 @@ def run_bridge(
 class UlaX86BridgeGateway:
     """Gateway API expected by the existing Ula page, one worker per request."""
 
-    def __init__(self, *, details, login: str, password: str, client_dir: Path, config_dir: str):
+    def __init__(
+        self, *, details, login: str, password: str, client_dir: Path,
+        config_dir: str, auth_mode: str = "password",
+    ):
         self._details = details
         self._login = login
         self._password = password
         self._client_dir = client_dir
         self._config_dir = config_dir
+        self._auth_mode = auth_mode
 
     def _invoke(self, action, **params):
         return run_bridge(
             action, details=self._details, login=self._login,
             password=self._password, client_dir=self._client_dir,
-            config_dir=self._config_dir, **params,
+            config_dir=self._config_dir, auth_mode=self._auth_mode, **params,
         )["rows"]
 
     def _connect(self):
