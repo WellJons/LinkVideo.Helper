@@ -129,6 +129,9 @@ class UlaServicesTab(QWidget):
         self.auth_mode.setObjectName("UlaOracleAuthMode")
         self.auth_mode.addItem("RADIUS — логин и пароль сотрудника", "radius")
         self.auth_mode.addItem("Обычный вход Oracle — логин и пароль", "password")
+        # Before import, do not require RADIUS settings. Importing a Ula.ini
+        # with RADIUS selects the corresponding mode automatically.
+        self.auth_mode.setCurrentIndex(self.auth_mode.findData("password"))
         self.auth_mode.currentIndexChanged.connect(self._sync_auth_mode)
         method_row.addWidget(self.auth_mode, 1)
         setup.addLayout(method_row)
