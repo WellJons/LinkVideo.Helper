@@ -215,11 +215,11 @@ def create_ula_gateway(
     details = details.validated()
     from linkvideo_vpn_helper.services.ula_oracle_gateway import UlaReadError
     radius = ula_radius_configured(config_dir)
-    if auth_mode not in ("password", "external"):
+    if auth_mode not in ("password", "radius", "external"):
         raise UlaReadError("Неподдерживаемый режим авторизации Oracle.")
-    if auth_mode == "external" and not radius:
+    if auth_mode in ("radius", "external") and not radius:
         raise UlaReadError(
-            "Внешняя RADIUS-авторизация недоступна: в Ula.ini нет sqlnet.ora с RADIUS."
+            "Для RADIUS нужен sqlnet.ora из установленной Ula."
         )
     # Ula.ini [DB]/UserName configures the original application's database
     # endpoint and may be a service account. The operator credential must be
@@ -229,7 +229,7 @@ def create_ula_gateway(
         raise UlaReadError("Введите личный логин сотрудника Ula для Oracle/RADIUS.")
     if not login:
         login = details.username
-    if auth_mode == "password" and (not isinstance(password, str) or not password):
+    if auth_mode != "external" and (not isinstance(password, str) or not password):
         raise ValueError("Введите пароль сотрудника для Oracle/RADIUS.")
     if len(login) > 128 or any(ch.isspace() for ch in login):
         raise ValueError("Некорректный логин сотрудника Oracle/RADIUS.")
@@ -262,7 +262,7 @@ def create_ula_gateway(
             )
         return UlaX86BridgeGateway(
             details=details, login=login,
-            password=password if auth_mode == "password" else "",
+            password=password if auth_mode != "external" else "",
             client_dir=lib_dir.resolve(), config_dir=config_dir,
             auth_mode=auth_mode,
         )
@@ -292,7 +292,7 @@ def create_ula_gateway(
     # The successful Ula RADIUS TNS CONNECT uses SERVICE_NAME, not SID.
     dsn = oracledb.makedsn(
         details.host, details.port,
-        **({"service_name": details.sid} if auth_mode == "external" else {"sid": details.sid}),
+        **({"service_name": details.sid} if auth_mode in ("radius", "external") else {"sid": details.sid}),
     )
 
     def connect():
