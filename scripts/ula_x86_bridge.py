@@ -76,7 +76,11 @@ def _perform(request: dict) -> dict:
     os.environ["PATH"] = str(dll_folder) + os.pathsep + os.environ.get("PATH", "")
     os.environ["TNS_ADMIN"] = str(net_folder)
     cx_Oracle.init_oracle_client(lib_dir=str(dll_folder), config_dir=str(net_folder))
-    dsn = cx_Oracle.makedsn(details.host, details.port, sid=details.sid)
+    # Match the captured successful Ula RADIUS CONNECT_DATA: SERVICE_NAME.
+    dsn = cx_Oracle.makedsn(
+        details.host, details.port,
+        **({"service_name": details.sid} if auth_mode == "external" else {"sid": details.sid}),
+    )
 
     def connect():
         if auth_mode == "external":
