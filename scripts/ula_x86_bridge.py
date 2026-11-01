@@ -105,8 +105,12 @@ def _perform(request: dict) -> dict:
 
 def main() -> int:
     if sys.argv[1:] == ["--self-test"]:
-        # Self-test doesn't need OCI or database access.
-        return 0 if struct.calcsize("P") == 4 else 1
+        # Test bitness and bundled Python driver without contacting Oracle.
+        import cx_Oracle
+        return 0 if (
+            struct.calcsize("P") == 4
+            and hasattr(cx_Oracle, "DB_TYPE_CURSOR")
+        ) else 1
     if sys.argv[1:] != ["--stdio-once"]:
         return 2
     try:
