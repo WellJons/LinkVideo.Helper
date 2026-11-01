@@ -10,6 +10,8 @@ import types
 from pathlib import Path
 from unittest.mock import patch
 
+from linkvideo_vpn_helper.services.ula_x86_bridge import UlaX86BridgeGateway
+
 from linkvideo_vpn_helper.services.ula_connection import (
     UlaConnectionDetails, _oci_architecture, create_ula_gateway,
     find_oracle_client, ula_radius_configured,
@@ -55,12 +57,23 @@ with tempfile.TemporaryDirectory() as temp:
     assert _oci_architecture(ula / "oci.dll") == "x86"
     with patch.dict(os.environ, {"PATH": "", "ORACLE_HOME": ""}):
         assert find_oracle_client(ula) is None
-        try:
-            create_ula_gateway(details, "synthetic-only", config_dir=str(ula), login_username="employee")
-        except UlaReadError as exc:
-            assert "RADIUS" in str(exc) and "x64" in str(exc)
-        else:
-            raise AssertionError("RADIUS with x86-only OCI must not use Thin")
+        assert find_oracle_client(ula, architecture="x86") == ula.resolve()
+        with patch(
+            "linkvideo_vpn_helper.services.ula_x86_bridge.find_bridge_exe",
+            return_value=root / "synthetic-sidecar.exe",
+        ):
+            gw_x86 = create_ula_gateway(
+                details, "synthetic-only", config_dir=str(ula),
+                login_username="employee",
+            )
+            assert isinstance(gw_x86, UlaX86BridgeGateway)
+            with patch(
+                "linkvideo_vpn_helper.services.ula_x86_bridge.run_bridge",
+                return_value={"rows": []},
+            ) as bridge:
+                gw_x86._connect().close()
+                assert bridge.call_args.args[0] == "test"
+                assert bridge.call_args.kwargs["login"] == "employee"
 
     client = root / "existing-oracle-x64"
     client.mkdir()
@@ -69,15 +82,15 @@ with tempfile.TemporaryDirectory() as temp:
 
     with patch.dict(os.environ, {"PATH": str(client), "ORACLE_HOME": ""}):
         assert find_oracle_client(ula) == client.resolve()
-        try:
-            create_ula_gateway(
+        with patch(
+            "linkvideo_vpn_helper.services.ula_x86_bridge.find_bridge_exe",
+            return_value=root / "synthetic-sidecar.exe",
+        ):
+            gw_explicit = create_ula_gateway(
                 details, "synthetic-only", config_dir=str(ula),
                 thick_client_dir=str(ula), login_username="employee",
             )
-        except UlaReadError as exc:
-            assert "x64" in str(exc)
-        else:
-            raise AssertionError("An explicitly selected x86 OCI must be rejected")
+            assert isinstance(gw_explicit, UlaX86BridgeGateway)
 
         calls = []
         fake = types.ModuleType("oracledb")
