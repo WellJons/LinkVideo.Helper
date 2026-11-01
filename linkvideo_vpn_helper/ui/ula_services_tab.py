@@ -30,7 +30,7 @@ def _safe_error(error: Exception) -> str:
     if codes:
         code = codes[0]
         explanations = {
-            "ORA-01017": "Oracle отклонила вход. Пароль от окна Ula может отличаться от пароля подключения к БД; проверьте используемую Ula учётную запись и режим RADIUS.",
+            "ORA-01017": "Oracle отклонила авторизацию сотрудника. Проверьте разрешённость этой учётной записи для RADIUS/Oracle; пароль окна Ula может использовать другой механизм.",
             "ORA-12505": "Oracle Listener не распознал указанный SID.",
             "ORA-12514": "Oracle Listener не распознал указанное имя службы.",
             "ORA-12541": "Oracle Listener недоступен по этому адресу и порту.",
@@ -55,6 +55,7 @@ class UlaServicesTab(QWidget):
         self._busy = False
         self._hits = ()
         self._ula_config_dir = ""
+        self._ula_db_username = ""
         self._build()
         self.operationFinished.connect(self._finished)
 
@@ -85,13 +86,13 @@ class UlaServicesTab(QWidget):
 
         connection = Card()
         setup = QVBoxLayout(connection)
-        title = QLabel("Вход в Ula / Oracle")
+        title = QLabel("Вход сотрудника Ula")
         title.setObjectName("SectionTitle")
         setup.addWidget(title)
         guide = QLabel(
-            "Импортируйте Ula.ini из установленной Ula. Параметры Oracle и "
-            "совместимый клиент определяются автоматически, если доступны. "
-            "Пароль от окна Ula не обязательно является паролем Oracle/RADIUS."
+            "Импортируйте Ula.ini из установленной программы. Затем укажите "
+            "личные логин и пароль сотрудника. Технический UserName из Ula.ini "
+            "не используется вместо учётной записи сотрудника."
         )
         guide.setWordWrap(True)
         guide.setObjectName("Muted")
@@ -106,25 +107,25 @@ class UlaServicesTab(QWidget):
         setup.addLayout(row)
 
         login_row = QHBoxLayout()
-        login_label = QLabel("Логин Oracle / RADIUS")
+        login_label = QLabel("Логин сотрудника")
         login_row.addWidget(login_label)
         self.username = QLineEdit()
         self.username.setObjectName("UlaOracleUsername")
-        self.username.setPlaceholderText("Имя пользователя для Oracle / RADIUS")
+        self.username.setPlaceholderText("Личный логин Ula / Oracle RADIUS")
         self.username.setToolTip(
-            "При импорте заполняется UserName из Ula.ini. Это может быть не "
-            "персональный логин сотрудника Ula."
+            "Введите личный логин. UserName из Ula.ini может быть технической "
+            "учётной записью; он не подставляется автоматически."
         )
         login_row.addWidget(self.username, 1)
         setup.addLayout(login_row)
 
         password_row = QHBoxLayout()
-        password_label = QLabel("Пароль Oracle / RADIUS")
+        password_label = QLabel("Пароль сотрудника")
         password_row.addWidget(password_label)
         self.password = QLineEdit()
         self.password.setObjectName("UlaOraclePassword")
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
-        self.password.setPlaceholderText("Пароль для Oracle/RADIUS (не обязательно от окна Ula)")
+        self.password.setPlaceholderText("Пароль сотрудника Ula")
         self.password.setToolTip("Пароль остаётся в памяти на время работы; в файлы и логи не записывается.")
         self.password.returnPressed.connect(self._test_connection)
         password_row.addWidget(self.password, 1)
@@ -303,7 +304,9 @@ class UlaServicesTab(QWidget):
         self.host.setText(settings.host)
         self.port.setText(str(settings.port))
         self.sid.setText(settings.sid)
-        self.username.setText(settings.username)
+        self._ula_db_username = settings.username
+        self.username.clear()
+        self.password.clear()
         self._ula_config_dir = str(Path(file).parent)
         if ula_radius_configured(self._ula_config_dir):
             detected = find_oracle_client(self._ula_config_dir)
@@ -314,19 +317,20 @@ class UlaServicesTab(QWidget):
             )
             self.message.setText(
                 "В Ula.ini найден RADIUS. " + status +
-                " Поле логина заполнено UserName из Ula.ini; при необходимости "
-                "измените его на персональный логин Oracle/RADIUS."
+                " Теперь введите личные учётные данные сотрудника; "
+                "имя пользователя из Ula.ini не подставляется."
             )
         else:
             self.message.setText(
-                "Параметры из Ula.ini загружены. Если для входа в Ula используется "
-                "отдельный пароль, он может не подходить для прямого подключения Oracle."
+                "Параметры из Ula.ini загружены. Введите учётные данные "
+                "сотрудника, разрешённые для подключения Oracle."
             )
 
     def _details(self):
         return UlaConnectionDetails(
             self.host.text().strip(), int(self.port.text() or "0"),
-            self.sid.text().strip(), self.username.text().strip()
+            self.sid.text().strip(),
+            self._ula_db_username or self.username.text().strip()
         ).validated()
 
     def _run(self, action, fn):
@@ -359,6 +363,7 @@ class UlaServicesTab(QWidget):
             self._details(), self.password.text(),
             thick_client_dir=self.thick_client.text().strip(),
             config_dir=self._ula_config_dir,
+            login_username=self.username.text().strip(),
         )
 
     def _test_connection(self):
