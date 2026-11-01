@@ -57,13 +57,13 @@ def _perform(request: dict) -> dict:
     login = request.get("login")
     password = request.get("password")
     auth_mode = request.get("auth_mode", "password")
-    if auth_mode not in ("password", "external"):
+    if auth_mode not in ("password", "radius", "external"):
         raise ValueError("Unknown authentication mode")
     client = request.get("client_dir")
     config = request.get("config_dir")
     if not isinstance(login, str) or not login.strip() or len(login) > 128:
         raise ValueError("Login is required")
-    if auth_mode == "password" and (not isinstance(password, str) or not password):
+    if auth_mode != "external" and (not isinstance(password, str) or not password):
         raise ValueError("Password is required")
     if not isinstance(client, str) or not isinstance(config, str):
         raise ValueError("Missing client config")
@@ -81,7 +81,7 @@ def _perform(request: dict) -> dict:
     # Match the captured successful Ula RADIUS CONNECT_DATA: SERVICE_NAME.
     dsn = cx_Oracle.makedsn(
         details.host, details.port,
-        **({"service_name": details.sid} if auth_mode == "external" else {"sid": details.sid}),
+        **({"service_name": details.sid} if auth_mode in ("radius", "external") else {"sid": details.sid}),
     )
 
     def connect():
