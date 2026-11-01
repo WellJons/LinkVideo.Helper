@@ -160,10 +160,46 @@ def find_oracle_client(config_dir: str | Path = "", *, architecture: str = "x64"
     return None
 
 
+def check_external_identity(connection, employee_login: str) -> None:
+    """Fail closed if Oracle did not authenticate the intended employee.
+
+    Externalauth may select a local OS user, wallet identity or service
+    account. Creating a session alone is not evidence of employee rights.
+    Never show identifying information or connection metadata in errors.
+    """
+    from linkvideo_vpn_helper.services.ula_oracle_gateway import UlaReadError
+    cursor = connection.cursor()
+    try:
+        cursor.execute(
+            "SELECT SYS_CONTEXT('USERENV', 'AUTHENTICATED_IDENTITY'), "
+            "SYS_CONTEXT('USERENV', 'SESSION_USER') FROM DUAL"
+        )
+        row = cursor.fetchone()
+    finally:
+        cursor.close()
+
+    if not row or len(row) != 2:
+        raise UlaReadError(
+            "Oracle не вернула сведения о проверенной личности RADIUS."
+        )
+    identity, session_user = (str(v or "").strip() for v in row)
+    expected = employee_login.casefold()
+    def matched(value):
+        normalized = value.casefold()
+        # OPS$ is Oracle's configured operating-system username prefix.
+        return normalized == expected or normalized == "ops$" + expected
+
+    if not any(map(matched, (identity, session_user))):
+        raise UlaReadError(
+            "Внешняя авторизация создала Oracle-сеанс, но не подтвердила "
+            "личность указанного сотрудника. Доступ к клиентам не предоставлен."
+        )
+
+
 def create_ula_gateway(
     details: UlaConnectionDetails, password: str, *,
     thick_client_dir: str = "", config_dir: str = "",
-    login_username: str | None = None,
+    login_username: str | None = None, auth_mode: str = "password",
 ):
     """Create a gateway with lazy driver/connection; does not connect yet.
 
@@ -174,6 +210,12 @@ def create_ula_gateway(
     details = details.validated()
     from linkvideo_vpn_helper.services.ula_oracle_gateway import UlaReadError
     radius = ula_radius_configured(config_dir)
+    if auth_mode not in ("password", "external"):
+        raise UlaReadError("Неподдерживаемый режим авторизации Oracle.")
+    if auth_mode == "external" and not radius:
+        raise UlaReadError(
+            "Внешняя RADIUS-авторизация недоступна: в Ula.ini нет sqlnet.ora с RADIUS."
+        )
     # Ula.ini [DB]/UserName configures the original application's database
     # endpoint and may be a service account. The operator credential must be
     # explicitly supplied in RADIUS mode; never silently fall back to it.
@@ -182,7 +224,7 @@ def create_ula_gateway(
         raise UlaReadError("Введите личный логин сотрудника Ula для Oracle/RADIUS.")
     if not login:
         login = details.username
-    if not isinstance(password, str) or not password:
+    if auth_mode == "password" and (not isinstance(password, str) or not password):
         raise ValueError("Введите пароль сотрудника для Oracle/RADIUS.")
     if len(login) > 128 or any(ch.isspace() for ch in login):
         raise ValueError("Некорректный логин сотрудника Oracle/RADIUS.")
@@ -214,8 +256,10 @@ def create_ula_gateway(
                 "не найден. Установите свежую тестовую RC-сборку."
             )
         return UlaX86BridgeGateway(
-            details=details, login=login, password=password,
+            details=details, login=login,
+            password=password if auth_mode == "password" else "",
             client_dir=lib_dir.resolve(), config_dir=config_dir,
+            auth_mode=auth_mode,
         )
     if radius and lib_dir is None:
         raise UlaReadError(
@@ -243,13 +287,24 @@ def create_ula_gateway(
     dsn = oracledb.makedsn(details.host, details.port, sid=details.sid)
 
     def connect():
-        connection = oracledb.connect(
-            user=login, password=password, dsn=dsn,
-            tcp_connect_timeout=8,
-        )
-        connection.call_timeout = 12000
-        connection.autocommit = False
-        return connection
+        if auth_mode == "external":
+            connection = oracledb.connect(
+                dsn=dsn, externalauth=True, tcp_connect_timeout=8,
+            )
+        else:
+            connection = oracledb.connect(
+                user=login, password=password, dsn=dsn,
+                tcp_connect_timeout=8,
+            )
+        try:
+            connection.call_timeout = 12000
+            connection.autocommit = False
+            if auth_mode == "external":
+                check_external_identity(connection, login)
+            return connection
+        except Exception:
+            connection.close()
+            raise
 
     from linkvideo_vpn_helper.services.ula_oracle_gateway import UlaOracleReadOnlyGateway
     return UlaOracleReadOnlyGateway(connect, oracledb.DB_TYPE_CURSOR)
