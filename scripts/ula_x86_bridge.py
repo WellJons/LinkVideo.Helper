@@ -16,13 +16,15 @@ from dataclasses import asdict
 from pathlib import Path
 
 from linkvideo_vpn_helper.services.ula_connection import (
-    UlaConnectionDetails, _oci_architecture, check_external_identity,
+    UlaConnectionDetails, UlaIdentityError, _oci_architecture, check_external_identity,
 )
 from linkvideo_vpn_helper.services.ula_oracle_gateway import UlaOracleReadOnlyGateway
 
 
 def _safe_message(exc: Exception) -> str:
     # Avoid raw cx_Oracle errors: they may include connection descriptors.
+    if isinstance(exc, UlaIdentityError):
+        return "ULA-IDENTITY"
     code = re.search(r"\b(?:ORA|DPI)-\d{4,5}\b", str(exc))
     if code:
         return code.group(0)
