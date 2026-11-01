@@ -35,7 +35,7 @@ def run_bridge(
     action: str, *, details, login: str, password: str,
     client_dir: Path, config_dir: str, auth_mode: str = "password", **params,
 ) -> dict:
-    if auth_mode not in ("password", "external"):
+    if auth_mode not in ("password", "radius", "external"):
         raise UlaReadError("Неподдерживаемый режим авторизации Oracle.")
     bridge = find_bridge_exe()
     if bridge is None:
@@ -47,7 +47,7 @@ def run_bridge(
         "action": action,
         "details": asdict(details),
         "login": login,
-        "password": password if auth_mode == "password" else "",
+        "password": password if auth_mode != "external" else "",
         "auth_mode": auth_mode,
         "client_dir": str(client_dir),
         "config_dir": str(config_dir),
