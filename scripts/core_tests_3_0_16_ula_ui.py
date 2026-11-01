@@ -64,13 +64,18 @@ assert requested[0][3] == ""  # no Ula.ini imported in this UI-only test
 assert page.password.echoMode() == page.password.EchoMode.Password
 assert not page.advanced_panel.isVisible()
 assert page.more_button.objectName() == "UlaOracleAdvancedToggle"
-assert page.auth_mode.itemData(1) == "external"
-page.auth_mode.setCurrentIndex(page.auth_mode.findData("external"))
-assert not page.password.isVisible()
-assert page.password.text() == ""
+assert page.auth_mode.itemData(0) == "radius"
+assert page.auth_mode.itemData(1) == "password"
+page.auth_mode.setCurrentIndex(page.auth_mode.findData("radius"))
+assert not page.password.isHidden()
+assert page.password.text() == "not-a-real-password"
 page._make_gateway()
-assert requested[-1][5] == "external"
-assert requested[-1][1] == ""
+assert requested[-1][5] == "radius"
+assert requested[-1][1] == "not-a-real-password"
+page.auth_mode.setCurrentIndex(page.auth_mode.findData("password"))
+assert page.password.text() == "not-a-real-password"
+page.auth_mode.setCurrentIndex(page.auth_mode.findData("radius"))
+assert page.password.text() == "not-a-real-password"
 assert page.findChild(QTableWidget, "UlaServicesTable") is page.services
 assert page.layout().itemAt(1).widget() is page.message, (
     "Oracle diagnostics must be visible before the long forms, not below tables"
