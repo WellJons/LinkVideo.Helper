@@ -9,6 +9,12 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from linkvideo_vpn_helper.services.ula_oracle_gateway import UlaReadError
+
+
+class UlaIdentityError(UlaReadError):
+    """Authenticated Oracle session is not proven to belong to the operator."""
+
 
 @dataclass(frozen=True)
 class UlaConnectionDetails:
@@ -167,7 +173,6 @@ def check_external_identity(connection, employee_login: str) -> None:
     account. Creating a session alone is not evidence of employee rights.
     Never show identifying information or connection metadata in errors.
     """
-    from linkvideo_vpn_helper.services.ula_oracle_gateway import UlaReadError
     cursor = connection.cursor()
     try:
         cursor.execute(
@@ -179,7 +184,7 @@ def check_external_identity(connection, employee_login: str) -> None:
         cursor.close()
 
     if not row or len(row) != 2:
-        raise UlaReadError(
+        raise UlaIdentityError(
             "Oracle не вернула сведения о проверенной личности RADIUS."
         )
     identity, session_user = (str(v or "").strip() for v in row)
@@ -190,7 +195,7 @@ def check_external_identity(connection, employee_login: str) -> None:
         return normalized == expected or normalized == "ops$" + expected
 
     if not any(map(matched, (identity, session_user))):
-        raise UlaReadError(
+        raise UlaIdentityError(
             "Внешняя авторизация создала Oracle-сеанс, но не подтвердила "
             "личность указанного сотрудника. Доступ к клиентам не предоставлен."
         )
