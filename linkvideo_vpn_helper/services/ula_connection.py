@@ -161,18 +161,29 @@ def find_oracle_client(config_dir: str | Path = "") -> Path | None:
 def create_ula_gateway(
     details: UlaConnectionDetails, password: str, *,
     thick_client_dir: str = "", config_dir: str = "",
+    login_username: str | None = None,
 ):
     """Create a gateway with lazy driver/connection; does not connect yet.
 
     Password stays in memory only; callers must discard this gateway after use.
-    For RADIUS, use the operator's existing Ula.sqlnet.ora in OCI Thick
-    mode; Thin deliberately cannot authenticate through RADIUS.
+    For RADIUS, use the operator's existing Ula.sqlnet.ora in OCI Thick mode.
+    Do not use the possibly technical Ula.ini UserName as an employee login.
     """
     details = details.validated()
-    if not isinstance(password, str) or not password:
-        raise ValueError("Введите пароль учётной записи Ula.")
     from linkvideo_vpn_helper.services.ula_oracle_gateway import UlaReadError
     radius = ula_radius_configured(config_dir)
+    # Ula.ini [DB]/UserName configures the original application's database
+    # endpoint and may be a service account. The operator credential must be
+    # explicitly supplied in RADIUS mode; never silently fall back to it.
+    login = str(login_username or "").strip()
+    if radius and not login:
+        raise UlaReadError("Введите личный логин сотрудника Ula для Oracle/RADIUS.")
+    if not login:
+        login = details.username
+    if not isinstance(password, str) or not password:
+        raise ValueError("Введите пароль сотрудника для Oracle/RADIUS.")
+    if len(login) > 128 or any(ch.isspace() for ch in login):
+        raise ValueError("Некорректный логин сотрудника Oracle/RADIUS.")
     # A Ula installation often contains a 32-bit OCI. Never try to load that
     # DLL into the 64-bit Helper. Prefer an existing compatible installation.
     lib_dir = Path(thick_client_dir) if thick_client_dir else None
@@ -213,7 +224,7 @@ def create_ula_gateway(
 
     def connect():
         connection = oracledb.connect(
-            user=details.username, password=password, dsn=dsn,
+            user=login, password=password, dsn=dsn,
             tcp_connect_timeout=8,
         )
         connection.call_timeout = 12000
