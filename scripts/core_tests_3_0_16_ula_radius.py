@@ -67,6 +67,13 @@ with tempfile.TemporaryDirectory() as temp:
                 login_username="employee",
             )
             assert isinstance(gw_x86, UlaX86BridgeGateway)
+            gw_radius = create_ula_gateway(
+                details, "employee-radius-password", config_dir=str(ula),
+                login_username="employee", auth_mode="radius",
+            )
+            assert isinstance(gw_radius, UlaX86BridgeGateway)
+            assert gw_radius._auth_mode == "radius"
+            assert gw_radius._password == "employee-radius-password"
             gw_external = create_ula_gateway(
                 details, "", config_dir=str(ula),
                 login_username="employee", auth_mode="external",
@@ -139,6 +146,15 @@ with tempfile.TemporaryDirectory() as temp:
             })
             conn.close()
 
+            radius_login = create_ula_gateway(
+                details, "employee-radius-password", config_dir=str(ula),
+                login_username="employee", auth_mode="radius",
+            )
+            radius_login._connect().close()
+            assert calls[-1] == ("connect", {
+                "user": "employee", "dsn": "127.0.0.1/1521/TEST",
+                "has_password": True, "external": False,
+            })
             external = create_ula_gateway(
                 details, "", config_dir=str(ula),
                 login_username="employee", auth_mode="external",
