@@ -24,7 +24,11 @@ from linkvideo_vpn_helper.ui.components import Card, StatusPill
 def _safe_error(error: Exception) -> str:
     # Never put password, raw connection descriptors or filesystem paths
     # from third-party errors into screenshots, UI, logs or support reports.
-    if isinstance(error, (ValueError, TypeError, UlaReadError)):
+    if isinstance(error, (ValueError, TypeError)):
+        return str(error)[:170]
+    if isinstance(error, UlaReadError) and not re.search(
+        r"\b(?:ORA|DPY|DPI)-\d{4,5}\b", str(error)
+    ):
         return str(error)[:170]
     codes = re.findall(r"\b(?:ORA|DPY|DPI)-\d{4,5}\b", str(error))
     if codes:
@@ -90,9 +94,10 @@ class UlaServicesTab(QWidget):
         title.setObjectName("SectionTitle")
         setup.addWidget(title)
         guide = QLabel(
-            "Импортируйте Ula.ini из установленной программы. Затем укажите "
-            "личные логин и пароль сотрудника. Технический UserName из Ula.ini "
-            "не используется вместо учётной записи сотрудника."
+            "Импортируйте Ula.ini и укажите личный логин. Для установленной "
+            "Ula можно попробовать внешний вход Oracle/RADIUS без передачи "
+            "пароля в Oracle. Технический UserName из Ula.ini не используется "
+            "как логин сотрудника."
         )
         guide.setWordWrap(True)
         guide.setObjectName("Muted")
@@ -119,9 +124,19 @@ class UlaServicesTab(QWidget):
         login_row.addWidget(self.username, 1)
         setup.addLayout(login_row)
 
+        method_row = QHBoxLayout()
+        method_row.addWidget(QLabel("Способ подключения"))
+        self.auth_mode = QComboBox()
+        self.auth_mode.setObjectName("UlaOracleAuthMode")
+        self.auth_mode.addItem("Вход по логину и паролю Oracle", "password")
+        self.auth_mode.addItem("Внешняя RADIUS-авторизация (как Ula)", "external")
+        self.auth_mode.currentIndexChanged.connect(self._sync_auth_mode)
+        method_row.addWidget(self.auth_mode, 1)
+        setup.addLayout(method_row)
+
         password_row = QHBoxLayout()
-        password_label = QLabel("Пароль сотрудника")
-        password_row.addWidget(password_label)
+        self.password_label = QLabel("Пароль сотрудника")
+        password_row.addWidget(self.password_label)
         self.password = QLineEdit()
         self.password.setObjectName("UlaOraclePassword")
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
@@ -181,6 +196,7 @@ class UlaServicesTab(QWidget):
         advanced_layout.addLayout(client_row)
         self.advanced_panel.hide()
         setup.addWidget(self.advanced_panel)
+        self._sync_auth_mode()
 
         self.test_button = QPushButton("Проверить соединение")
         self.test_button.setObjectName("UlaTestConnection")
@@ -275,6 +291,14 @@ class UlaServicesTab(QWidget):
         root.insertWidget(1, self.message)
         root.addStretch(1)
 
+    def _sync_auth_mode(self, *_):
+        password_mode = self.auth_mode.currentData() != "external"
+        self.password_label.setVisible(password_mode)
+        self.password.setVisible(password_mode)
+        if not password_mode:
+            # External OCI authentication must not reuse a password typed earlier.
+            self.password.clear()
+
     def _toggle_advanced(self):
         self.advanced_panel.setVisible(not self.advanced_panel.isVisible())
         self.more_button.setText(
@@ -309,6 +333,7 @@ class UlaServicesTab(QWidget):
         self.password.clear()
         self._ula_config_dir = str(Path(file).parent)
         if ula_radius_configured(self._ula_config_dir):
+            self.auth_mode.setCurrentIndex(self.auth_mode.findData("external"))
             detected_x64 = find_oracle_client(self._ula_config_dir)
             detected_x86 = (
                 find_oracle_client(self._ula_config_dir, architecture="x86")
@@ -328,10 +353,12 @@ class UlaServicesTab(QWidget):
                 )
             self.message.setText(
                 "В Ula.ini найден RADIUS. " + status +
-                " Теперь введите личные учётные данные сотрудника; "
-                "имя пользователя из Ula.ini не подставляется."
+                " Выбран внешний RADIUS-вход без передачи пароля. "
+                "Введите свой логин; после подключения Oracle проверит "
+                "подтверждённую личность сотрудника."
             )
         else:
+            self.auth_mode.setCurrentIndex(self.auth_mode.findData("password"))
             self.message.setText(
                 "Параметры из Ula.ini загружены. Введите учётные данные "
                 "сотрудника, разрешённые для подключения Oracle."
@@ -375,6 +402,7 @@ class UlaServicesTab(QWidget):
             thick_client_dir=self.thick_client.text().strip(),
             config_dir=self._ula_config_dir,
             login_username=self.username.text().strip(),
+            auth_mode=str(self.auth_mode.currentData()),
         )
 
     def _test_connection(self):
@@ -442,7 +470,14 @@ class UlaServicesTab(QWidget):
             return
         self.state.set_status("Подключено", "success")
         if action == "connect":
-            self.message.setText("Oracle авторизовала подключение. Теперь можно искать клиента.")
+            self.message.setText(
+                "Oracle-соединение установлено"
+                + (
+                    ", личность сотрудника подтверждена. Можно искать клиента."
+                    if self.auth_mode.currentData() == "external"
+                    else ". Можно искать клиента."
+                )
+            )
         elif action == "find":
             self.hits_table.setRowCount(len(result))
             for i, hit in enumerate(result):
