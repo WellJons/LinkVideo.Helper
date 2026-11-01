@@ -84,6 +84,11 @@ def run_bridge(
     if not payload["ok"]:
         message = payload.get("error")
         code = re.fullmatch(r"(?:ORA|DPI)-\d{4,5}", str(message or ""))
+        if message == "ULA-IDENTITY":
+            raise UlaReadError(
+                "Oracle открыл внешний сеанс, но не подтвердил личность "
+                "указанного сотрудника. Поиск клиентов заблокирован."
+            )
         raise UlaReadError(code.group(0) if code else "Не удалось выполнить запрос Oracle x86.")
     if not isinstance(payload.get("rows"), list):
         raise UlaReadError("Некорректные данные в ответе Oracle x86.")
