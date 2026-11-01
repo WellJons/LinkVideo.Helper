@@ -166,11 +166,11 @@ class UlaServicesTab(QWidget):
         self.thick_client = QLineEdit()
         self.thick_client.setObjectName("UlaOracleInstantClient")
         self.thick_client.setPlaceholderText(
-            "Oracle Instant Client x64 (папка с oci.dll; необходим для RADIUS)"
+            "Папка Oracle Client x86/x64 с oci.dll (необязательно)"
         )
         self.thick_client.setToolTip(
-            "Для штатной авторизации Ula через RADIUS нужен Oracle Thick "
-            "с 64-битным Instant Client; 32-битный клиент Ula не подходит."
+            "Oracle Client x64 загружается напрямую. Клиент x86 используется "
+            "через встроенный 32-битный модуль Helper."
         )
         client_row = QHBoxLayout()
         client_row.addWidget(self.thick_client, 1)
@@ -284,7 +284,7 @@ class UlaServicesTab(QWidget):
 
     def _choose_client_dir(self):
         folder = QFileDialog.getExistingDirectory(
-            self, "Папка 64-битного Oracle Instant Client с oci.dll",
+            self, "Папка установленного Oracle Client с oci.dll",
             self.thick_client.text().strip() or str(Path.home()),
         )
         if folder:
@@ -309,12 +309,23 @@ class UlaServicesTab(QWidget):
         self.password.clear()
         self._ula_config_dir = str(Path(file).parent)
         if ula_radius_configured(self._ula_config_dir):
-            detected = find_oracle_client(self._ula_config_dir)
-            status = (
-                "Совместимый Oracle Client x64 обнаружен автоматически."
-                if detected else
-                "Oracle Client x64 не найден автоматически. При необходимости откройте расширенные настройки."
+            detected_x64 = find_oracle_client(self._ula_config_dir)
+            detected_x86 = (
+                find_oracle_client(self._ula_config_dir, architecture="x86")
+                if detected_x64 is None else None
             )
+            if detected_x64:
+                status = "Обнаружен совместимый Oracle Client x64."
+            elif detected_x86:
+                status = (
+                    "Найден установленный Oracle Client x86. Helper будет "
+                    "использовать встроенный 32-битный модуль."
+                )
+            else:
+                status = (
+                    "Библиотека oci.dll не найдена. В расширенных настройках "
+                    "можно указать папку существующего Oracle Client x86/x64."
+                )
             self.message.setText(
                 "В Ula.ini найден RADIUS. " + status +
                 " Теперь введите личные учётные данные сотрудника; "
@@ -370,6 +381,7 @@ class UlaServicesTab(QWidget):
         try:
             gateway = self._make_gateway()
         except Exception as exc:
+            self.state.set_status("Ошибка", "warning")
             self.message.setText(_safe_error(exc))
             return
         def work():
@@ -386,6 +398,7 @@ class UlaServicesTab(QWidget):
             query = self.search_text.text().strip()
             mode = int(self.search_type.currentData())
         except Exception as exc:
+            self.state.set_status("Ошибка", "warning")
             self.message.setText(_safe_error(exc))
             return
         self._run("find", lambda: gateway.search_clients(query, search_type=mode))
@@ -397,6 +410,7 @@ class UlaServicesTab(QWidget):
             inactive = bool(self.include_inactive.isChecked())
             grouped = bool(self.group_client.isChecked())
         except Exception as exc:
+            self.state.set_status("Ошибка", "warning")
             self.message.setText(_safe_error(exc))
             return
         self._run("services", lambda: gateway.list_services(
