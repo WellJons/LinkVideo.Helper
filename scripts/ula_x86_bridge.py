@@ -91,7 +91,7 @@ def _perform(request: dict) -> dict:
         finally:
             connection.close()
 
-    gw = UlaOracleReadOnlyGateway(connect, cx_Oracle.CURSOR)
+    gw = UlaOracleReadOnlyGateway(connect, cx_Oracle.DB_TYPE_CURSOR)
     if action == "find":
         hits = gw.search_clients(request.get("query", ""), search_type=request.get("search_type", 0))
         return {"ok": True, "rows": [asdict(hit) for hit in hits]}
