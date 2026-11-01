@@ -137,6 +137,15 @@ with tempfile.TemporaryDirectory() as root:
     assert "user" not in oracle_calls[2][1]
     assert "password" not in oracle_calls[2][1]
 
+    request["auth_mode"] = "radius"
+    request["password"] = "synthetic-radius-password"
+    with patch.dict(sys.modules, {"cx_Oracle": fake}):
+        assert _perform(request) == {"ok": True, "rows": []}
+    assert oracle_calls[-2][1] == {"sid": None, "service_name": "TEST"}
+    assert oracle_calls[-1][1]["user"] == "employee"
+    assert oracle_calls[-1][1]["password"] == "synthetic-radius-password"
+    assert "externalauth" not in oracle_calls[-1][1]
+
     assert _safe_message(Exception("ORA-01017: secret data")) == "ORA-01017"
     assert _safe_message(Exception("sensitive connection details")) == (
         "Операция Ula завершилась ошибкой."
