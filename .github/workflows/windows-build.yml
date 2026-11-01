@@ -26,10 +26,25 @@ jobs:
       - name: Checkout exact release source
         uses: actions/checkout@v4
 
+      # Ula ships with an Oracle x86 client. Build an isolated x86 worker
+      # before the main 64-bit application; never distribute OCI itself.
+      - name: Set up Python 3.10 x86 for Ula RADIUS bridge
+        if: startsWith(github.ref, 'refs/heads/rc/')
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          architecture: 'x86'
+
+      - name: Build self-tested Ula Oracle x86 bridge
+        if: startsWith(github.ref, 'refs/heads/rc/')
+        shell: pwsh
+        run: ./scripts/build_ula_x86_bridge.ps1
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          architecture: 'x64'
           cache: 'pip'
 
       - name: Set up Go
