@@ -16,7 +16,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from linkvideo_vpn_helper.services.ula_connection import (
-    UlaConnectionDetails, _oci_architecture,
+    UlaConnectionDetails, _oci_architecture, check_external_identity,
 )
 from linkvideo_vpn_helper.services.ula_oracle_gateway import UlaOracleReadOnlyGateway
 
@@ -54,11 +54,14 @@ def _perform(request: dict) -> dict:
     details = UlaConnectionDetails(**details_raw).validated()
     login = request.get("login")
     password = request.get("password")
+    auth_mode = request.get("auth_mode", "password")
+    if auth_mode not in ("password", "external"):
+        raise ValueError("Unknown authentication mode")
     client = request.get("client_dir")
     config = request.get("config_dir")
     if not isinstance(login, str) or not login.strip() or len(login) > 128:
         raise ValueError("Login is required")
-    if not isinstance(password, str) or not password:
+    if auth_mode == "password" and (not isinstance(password, str) or not password):
         raise ValueError("Password is required")
     if not isinstance(client, str) or not isinstance(config, str):
         raise ValueError("Missing client config")
@@ -76,13 +79,25 @@ def _perform(request: dict) -> dict:
     dsn = cx_Oracle.makedsn(details.host, details.port, sid=details.sid)
 
     def connect():
-        connection = cx_Oracle.connect(
-            user=login.strip(), password=password, dsn=dsn,
-            encoding="UTF-8", nencoding="UTF-8",
-        )
-        connection.call_timeout = 12000
-        connection.autocommit = False
-        return connection
+        if auth_mode == "external":
+            connection = cx_Oracle.connect(
+                dsn=dsn, externalauth=True, encoding="UTF-8",
+                nencoding="UTF-8",
+            )
+        else:
+            connection = cx_Oracle.connect(
+                user=login.strip(), password=password, dsn=dsn,
+                encoding="UTF-8", nencoding="UTF-8",
+            )
+        try:
+            connection.call_timeout = 12000
+            connection.autocommit = False
+            if auth_mode == "external":
+                check_external_identity(connection, login.strip())
+            return connection
+        except Exception:
+            connection.close()
+            raise
 
     if action == "test":
         connection = connect()
