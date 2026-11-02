@@ -9,6 +9,7 @@ No B2O passwords, camera tokens or bot tokens are stored in this database.
 """
 
 import hashlib
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import re
@@ -36,10 +37,20 @@ class InviteStore:
                 "invited_at INTEGER NOT NULL)"
             )
 
+    @contextmanager
     def _connect(self):
+        # sqlite3.Connection.__exit__ commits but does NOT close the file.
+        # Explicit close is mandatory, especially on Windows service hosts.
         conn = sqlite3.connect(self.path, timeout=8, isolation_level=None)
-        conn.execute("PRAGMA busy_timeout=8000")
-        return conn
+        try:
+            conn.execute("PRAGMA busy_timeout=8000")
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     @staticmethod
     def _hash(secret: str) -> str:
