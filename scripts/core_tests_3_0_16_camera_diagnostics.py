@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import QApplication
 from linkvideo_vpn_helper.services.archive_service_core import B2OService
 from linkvideo_vpn_helper.services.archive_service import ArchiveService
@@ -104,11 +104,13 @@ with tempfile.TemporaryDirectory() as td:
     panel = CameraDiagnosticsPanel(settings)
     assert panel.camera_id.placeholderText()
     assert not hasattr(panel, "thumbnail")  # No enormous empty preview.
-    panel._on_result(0, report, "")
-    assert "Серийный номер: SN123" in panel.summary.text()
-    assert "Название: Вход" in panel.summary.text()
-    assert "TCP:8554" in panel.summary.text()
-    panel._on_result(0, None, "Камера не найдена")
+    from linkvideo_vpn_helper.services.camera_lookup import CameraChoice
+    choice = CameraChoice("12345", 241, "Россия", "Вход")
+    panel._on_result(0, (choice,), "")
+    assert panel.list.count() == 1
+    assert "Найдено камер: 1" in panel.summary.text()
+    assert panel.list.item(0).data(Qt.ItemDataRole.UserRole) == choice
+    panel._on_result(0, (), "Камера не найдена")
     assert panel.status.text() == "Ошибка"
 
     b2o = B2OService(settings)
