@@ -128,7 +128,10 @@ def evaluate_transcode(camera: dict, rules: object) -> tuple[str, str]:
 def load_transcode_rules(settings) -> dict:
     """Read a bounded local policy; never fetch remote executable rules."""
     import json
-    value = str(settings.value("camera/transcode_rules_json", "", str) or "")
+    getter = getattr(settings, "value", None)
+    if not callable(getter):
+        return {}
+    value = str(getter("camera/transcode_rules_json", "", str) or "")
     if not value or len(value) > 20000:
         return {}
     try:
