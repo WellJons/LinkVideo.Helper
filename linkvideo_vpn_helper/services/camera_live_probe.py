@@ -274,20 +274,28 @@ def _probe_rtsp(report: CameraDiagnostics, *, ffmpeg_path: str = "") -> RtspStat
     if result.returncode != 0:
         _RTSP_STATUS.message = _rtsp_error_category(result.stderr)
         return None
-    if not 50_000 <= len(result.stdout) <= 12_000_000:
-        _RTSP_STATUS.message = "RTSP: получено недостаточно видеоданных."
+    if not 1_000 <= len(result.stdout) <= 12_000_000:
+        _RTSP_STATUS.message = "RTSP: не получено достаточно видео для анализа."
         return None
 
+    # FFmpeg versions differ in -progress format. Parse explicit media time
+    # first, and use the ordinary progress time=... line only if needed.
     progress = result.stderr
     times = re.findall(rb"(?:out_time_us|out_time_ms)=(\d+)", progress)
-    frames = re.findall(rb"(?:^|\n)frame=(\d+)", progress)
-    if not times or not frames:
-        _RTSP_STATUS.message = "RTSP: FFmpeg не вернул счётчики кадров."
-        return None
-    duration = int(times[-1]) / 1_000_000
-    frame_count = int(frames[-1])
+    frames = re.findall(rb"(?:^|\n)frame=\s*(\d+)", progress)
+    if times:
+        duration = int(times[-1]) / 1_000_000
+    else:
+        clock = re.findall(rb"(?:out_time|time)=([0-9]{2}):([0-9]{2}):([0-9]{2}\.[0-9]+)", progress)
+        duration = (
+            int(clock[-1][0]) * 3600 + int(clock[-1][1]) * 60 + float(clock[-1][2])
+            if clock else 0.0
+        )
+    if not frames:
+        frames = re.findall(rb"frame=\s*(\d+)", progress)
+    frame_count = int(frames[-1]) if frames else 0
     if not 0.5 <= duration <= 7.0 or frame_count <= 0:
-        _RTSP_STATUS.message = "RTSP: недостаточно кадров для замера."
+        _RTSP_STATUS.message = "RTSP: FFmpeg не смог измерить FPS (нет счётчиков кадров/времени)."
         return None
     bitrate = len(result.stdout) * 8.0 / duration / 1_000_000
     fps = frame_count / duration
