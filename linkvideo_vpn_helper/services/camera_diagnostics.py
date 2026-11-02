@@ -38,6 +38,7 @@ class CameraDiagnostics:
     # Exact RTSP endpoint is not presented in UI; it may contain a password.
     rtsp_url: str = field(default="", repr=False, compare=False)
     port_source: str = ""
+    rtsp_host: str = ""
     # Only the modal uses raw API metadata to locate an approved live playlist.
     # Never log it: it may contain signed URLs.
     metadata: dict = field(default_factory=dict, repr=False, compare=False)
