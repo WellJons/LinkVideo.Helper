@@ -49,6 +49,60 @@ def search_by_login(login: str, b2o: B2OService, credentials, *,
 
     results: list[CameraChoice] = []
     crm_error = ""
+    b2o_error = ""
+    token = b2o.token()
+
+    def lookup_ru():
+        if not token:
+            return []
+        cameras = []
+        for page in range(1, 5):
+            payload = b2o.request_json(
+                b2o.CAMERAS_URL.format(operator=241), token,
+                {"Count": "50", "Page": str(page),
+                 "Search": query, "Show_deleted_cameras": "0"},
+                timeout=8,
+            )
+            rows = payload.get("data") if isinstance(payload, dict) else None
+            if not isinstance(rows, list):
+                raise CameraSearchError("B2O не вернул список камер.")
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                owner = next(
+                    (str(row[key]).strip() for key in _OWNERS
+                     if isinstance(row.get(key), str) and row[key].strip()), ""
+                )
+                if owner.casefold() != query.casefold():
+                    continue
+                vc = str(row.get("id_camera") or "").strip()
+                if not vc.isascii() or not vc.isdecimal() or int(vc) <= 0:
+                    continue
+                cameras.append(CameraChoice(
+                    camera_id=vc, operator_id=241, country="Россия",
+                    label=str(row.get("camera_name") or row.get("short_name")
+                              or "linkvideo_" + vc)[:160],
+                    customer_login=owner,
+                    status=str(row.get("camera_status") or "")[:80],
+                ))
+            if len(rows) < 50:
+                break
+        return cameras
+
+    # An 11-digit login is overwhelmingly a customer login, not a B2O ID.
+    # The RU inventory is usually one fast request. Return verified exact
+    # owner matches without waiting for a second CRM authentication.
+    phone_login = bool(re.fullmatch(r"[0-9]{10,12}", query))
+    ru_checked = False
+    if phone_login:
+        ru_checked = True
+        try:
+            results.extend(lookup_ru())
+        except Exception:
+            b2o_error = "B2O не предоставил список российских камер."
+        if results:
+            return tuple(results)
+
     try:
         if crm_factory is not None:
             gateway = crm_factory(credentials)
@@ -58,15 +112,19 @@ def search_by_login(login: str, b2o: B2OService, credentials, *,
             )
             transport = BillingTokenTransport(response.token, header_mode="auto")
             gateway = BillingEditableGateway(transport)
-
         hits = gateway.search_clients(query)
-        for hit in hits:
+        # Search is fuzzy: load only exact client logins to avoid showing
+        # unrelated cameras and making a separate request for each hit.
+        exact_hits = [
+            hit for hit in hits
+            if str(getattr(hit, "login", "") or "").casefold() == query.casefold()
+        ]
+        for hit in exact_hits[:5]:
             client = gateway.find_client_by_hit(hit)
             operator = {"Беларусь": 1741, "Казахстан": 1721}.get(client.country)
-            if operator is None:
+            if operator is None or client.login.casefold() != query.casefold():
                 continue
             for camera in client.services:
-                # CRM service ID is not the B2O camera ID.
                 vc = str(camera.camera_vc_id or "").strip()
                 if not vc.isascii() or not vc.isdecimal() or int(vc) <= 0:
                     continue
@@ -78,50 +136,13 @@ def search_by_login(login: str, b2o: B2OService, credentials, *,
                     tariff=camera.tariff_name, crm_id=camera.camera_id,
                 ))
     except Exception:
-        # CRM can be unavailable even when the B2O login is valid.
         crm_error = "Нет доступа к CRM или поиск клиентов недоступен."
 
-    # RU cameras do not use the BY/KZ CRM contract. Query the B2O inventory,
-    # but never accept results where owner login is missing/ambiguous.
-    b2o_error = ""
-    token = b2o.token()
-    if token:
+    if not ru_checked:
         try:
-            for page in range(1, 5):
-                payload = b2o.request_json(
-                    b2o.CAMERAS_URL.format(operator=241), token,
-                    {"Count": "50", "Page": str(page),
-                     "Search": query, "Show_deleted_cameras": "0"},
-                    timeout=12,
-                )
-                rows = payload.get("data") if isinstance(payload, dict) else None
-                if not isinstance(rows, list):
-                    raise CameraSearchError("B2O не вернул список камер.")
-                for row in rows:
-                    if not isinstance(row, dict):
-                        continue
-                    owner = next(
-                        (str(row[key]).strip() for key in _OWNERS
-                         if isinstance(row.get(key), str) and row[key].strip()), ""
-                    )
-                    if owner.casefold() != query.casefold():
-                        continue
-                    vc = str(row.get("id_camera") or "").strip()
-                    if not vc.isascii() or not vc.isdecimal() or int(vc) <= 0:
-                        continue
-                    results.append(CameraChoice(
-                        camera_id=vc, operator_id=241, country="Россия",
-                        label=str(row.get("camera_name") or row.get("short_name")
-                                  or "linkvideo_" + vc)[:160],
-                        customer_login=owner,
-                        status=str(row.get("camera_status") or "")[:80],
-                    ))
-                if len(rows) < 50:
-                    break
+            results.extend(lookup_ru())
         except Exception:
             b2o_error = "B2O не предоставил список российских камер."
-    else:
-        b2o_error = "Для российских камер требуется подключение админки."
 
     unique = {}
     for camera in results:
@@ -184,6 +205,20 @@ def search_all_cameras(
                                   not results[key].customer_login):
             results[key] = choice
 
+    # For phone-shaped numbers search customer inventory FIRST. Do not try
+    # three country IDs and three full serial inventories before the login.
+    if re.fullmatch(r"[0-9]{10,12}", query):
+        try:
+            choices = tuple(login_search(query, b2o, credentials))
+            if choices:
+                for choice in choices:
+                    remember(choice)
+                return tuple(results.values())
+        except CameraSearchError as exc:
+            problems.append(str(exc))
+        except Exception:
+            problems.append("Поиск по логину временно недоступен.")
+
     if explicit_id:
         operators = (
             (b2o.resolve_operator_id(query, 241),)
@@ -237,7 +272,11 @@ def search_all_cameras(
             # reported when no other method produced a verified result.
             problems.append("Проверка серийного номера недоступна.")
 
-    if not prefix:
+    # An exact, verified ID or serial match needs no additional CRM login.
+    if results:
+        return tuple(results.values())
+
+    if not prefix and not re.fullmatch(r"[0-9]{10,12}", query):
         try:
             for choice in login_search(query, b2o, credentials):
                 remember(choice)
