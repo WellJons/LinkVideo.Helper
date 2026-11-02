@@ -50,6 +50,9 @@ class MainWindow(QMainWindow):
         self.registry = ServerRegistry(self.settings)
         self.search = FastSearchService(service)
         self.archive = ArchiveService(self.settings)
+        from linkvideo_vpn_helper.services.work_account_auth import WorkAccountAuth
+        self.work_account = WorkAccountAuth(credentials, self.settings, self)
+        self.work_account.b2oChanged.connect(self.work_account.on_b2o_result)
         self.updater = UpdateService()
         self._page_cache: dict[str, QWidget] = {}
         self._current_key = ""
@@ -75,6 +78,9 @@ class MainWindow(QMainWindow):
         # startup triggers unnecessary native widgets and occasional transient
         # process/window activity on operator workstations.
         self._preload_queue = []
+        # Verify the B2O service with the same employee credentials without
+        # opening another login dialog or blocking the main window.
+        QTimer.singleShot(150, self.work_account.ensure_b2o)
         # Автоматически проверяем обновления после запуска, но не показываем
         # пользователю сообщения об успешной проверке/сетевой ошибке.
         QTimer.singleShot(2200, lambda: self._check_updates(startup=True))
@@ -212,16 +218,16 @@ class MainWindow(QMainWindow):
             page = VPNServersPage(self.service, self.credentials, self.registry, self)
         elif key == "archive":
             from linkvideo_vpn_helper.ui.pages.archive_download_page import ArchiveDownloadPage
-            page = ArchiveDownloadPage(self.archive, self.settings, self)
+            page = ArchiveDownloadPage(self.archive, self.settings, self, work_account=self.work_account)
         elif key == "diagnostics":
             from linkvideo_vpn_helper.ui.pages.archive_diagnostics_page import ArchiveDiagnosticsPage
-            page = ArchiveDiagnosticsPage(self.archive, self.settings, self)
+            page = ArchiveDiagnosticsPage(self.archive, self.settings, self, work_account=self.work_account)
         elif key == "inactive":
             from linkvideo_vpn_helper.ui.pages.inactive_clients_page import InactiveClientsPage
             page = InactiveClientsPage(self.service, self.credentials, self.registry, self)
         elif key == "tariffs":
             from linkvideo_vpn_helper.ui.pages.tariffs_page import TariffsPage
-            page = TariffsPage(self, settings=self.settings)
+            page = TariffsPage(self, settings=self.settings, work_account=self.work_account)
         elif key == "new_agent":
             from linkvideo_vpn_helper.ui.pages.new_agent_page import NewAgentPage
             page = NewAgentPage(self.settings, self.credentials, self)
@@ -466,6 +472,7 @@ class MainWindow(QMainWindow):
         )
         if not dialog.exec():
             return
+        self.work_account.clear()
         for key in ("username", "password"):
             self.settings.remove(key)
         self.settings.setValue("remember", False)
