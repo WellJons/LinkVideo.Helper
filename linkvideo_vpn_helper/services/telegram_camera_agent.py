@@ -71,7 +71,8 @@ class TelegramCameraAgent:
 
     def _request(self, method: str, payload: dict | None = None,
                  photo: bytes | None = None):
-        if method not in ("getUpdates", "sendMessage", "sendPhoto"):
+        if method not in ("getUpdates", "sendMessage", "sendPhoto",
+                          "answerCallbackQuery", "editMessageText", "setMyCommands"):
             raise ValueError("Неизвестный метод Telegram.")
         data = payload or {}
         if photo is None:
@@ -291,7 +292,8 @@ def service_main():
     # B2O access before the camera commands can succeed unattended.
     from linkvideo_vpn_helper.services.telegram_b2o_session import BotB2OService
     b2o = BotB2OService()
-    TelegramCameraAgent(token, frozenset(), b2o, invites=store).run_forever()
+    from linkvideo_vpn_helper.services.telegram_bot_menu import TelegramMenuAgent
+    TelegramMenuAgent(token, frozenset(), b2o, invites=store).run_forever()
 
 
 def main():
