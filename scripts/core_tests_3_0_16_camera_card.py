@@ -122,7 +122,7 @@ with tempfile.TemporaryDirectory() as td:
     class FakeOpen:
         def open(self, request, timeout=5):
             if request.full_url.split("?", 1)[0].endswith(".m3u8"):
-                return FakeResponse(b"#EXTM3U\\n#EXTINF:2.0,\\nsegment.ts\\n")
+                return FakeResponse(b"#EXTM3U\n#EXTINF:2.0,\nsegment.ts\n")
             if request.full_url.endswith("segment.ts"):
                 return FakeResponse(b"x" * 500000)
             raise AssertionError("Unexpected media request")
