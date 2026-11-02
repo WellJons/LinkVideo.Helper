@@ -328,9 +328,21 @@ class MainWindow(QMainWindow):
             logger = logging.getLogger("linkvideo.helper")
             started = time.monotonic()
             logger.info("PAGE | First open (%s) | begin", key)
-            page = self._factory(key)
-            self._page_cache[key] = page
-            self.stack.addPage(key, page)
+            from linkvideo_vpn_helper.ui.first_page_window_guard import (
+                FirstPageWindowGuard,
+            )
+            guard = FirstPageWindowGuard()
+            app = QApplication.instance()
+            if app is not None:
+                app.installEventFilter(guard)
+            try:
+                page = self._factory(key)
+                self._page_cache[key] = page
+                self.stack.addPage(key, page)
+            finally:
+                if app is not None:
+                    app.removeEventFilter(guard)
+                guard.release()
             logger.info(
                 "PAGE | First open (%s) | built in %.0f ms",
                 key, (time.monotonic() - started) * 1000,
