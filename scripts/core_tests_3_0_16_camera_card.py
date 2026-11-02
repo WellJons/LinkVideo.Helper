@@ -7,12 +7,15 @@ from types import SimpleNamespace
 from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtWidgets import QApplication, QWidget, QDialog
+from PySide6.QtWidgets import QApplication, QWidget, QDialog, QPushButton
 from linkvideo_vpn_helper.services.archive_service_core import B2OService
 from linkvideo_vpn_helper.services.billing_gateway import BillingClient, BillingService
-from linkvideo_vpn_helper.services.camera_lookup import CameraChoice, search_by_login
+from linkvideo_vpn_helper.services.camera_lookup import (
+    CameraChoice, search_by_login, search_all_cameras,
+)
 from linkvideo_vpn_helper.services.camera_live_probe import parse_recent_segment
 from linkvideo_vpn_helper.ui.camera_detail_dialog import CameraDetailDialog
+from linkvideo_vpn_helper.ui.camera_diagnostics_panel import CameraDiagnosticsPanel
 from linkvideo_vpn_helper.ui.first_page_window_guard import FirstPageWindowGuard
 
 app = QApplication.instance() or QApplication([])
@@ -45,6 +48,50 @@ with tempfile.TemporaryDirectory() as td:
     assert {(x.operator_id, x.camera_id) for x in choices} == {
         (1741, "777"), (241, "12345")
     }
+    # A numeric serial is NOT automatically a camera ID. Show only actual
+    # B2O cameras verified through detail or exact serial matching.
+    def verified_detail(_service, value, operator, **kwargs):
+        if str(value) not in ("12345", "linkvideo_12345") or operator != 241:
+            raise LookupError("not an existing ID")
+        return SimpleNamespace(
+            camera_id="linkvideo_12345", name="Главный вход",
+            status="online", metadata={"id_camera": 12345},
+        )
+
+    serial_camera = search_all_cameras(
+        "89130903662", b2o, creds, detail_reader=verified_detail,
+        serial_resolver=lambda serial, token, service:
+            ("Россия", "12345") if serial == "89130903662" else None,
+        login_search=lambda *args: (),
+    )
+    assert len(serial_camera) == 1
+    assert serial_camera[0].camera_id == "12345"
+    assert serial_camera[0].label == "Главный вход"
+    assert search_all_cameras(
+        "98765432101", b2o, creds, detail_reader=verified_detail,
+        serial_resolver=lambda *args: None, login_search=lambda *args: (),
+    ) == ()
+    login_cameras = search_all_cameras(
+        "customer.demo", b2o, creds,
+        serial_resolver=lambda *args: None,
+        login_search=lambda *args: choices,
+    )
+    assert len(login_cameras) == 2
+
+    panel = CameraDiagnosticsPanel(
+        settings, customer_search=lambda *args: login_cameras,
+        preview_loader=lambda country, number, token: b"",
+    )
+    assert not hasattr(panel, "mode")
+    assert not hasattr(panel, "operator")
+    panel._on_result(0, login_cameras, "")
+    assert panel.list.count() == 2
+    first = panel.list.itemWidget(panel.list.item(0))
+    assert first is not None
+    assert first.findChild(QPushButton, "CameraSearchOpen") is not None
+    assert panel._thumb_labels[0].size().width() == 160
+    panel.close()
+
     playlist = "#EXTM3U\n#EXTINF:2.0,\nsegment.ts\n"
     base = "https://b2o-vcore77.video.goodline.info/live/test.m3u8"
     segment = parse_recent_segment(playlist, base)
