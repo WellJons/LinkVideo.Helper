@@ -52,6 +52,7 @@ class TelegramMenuAgent(TelegramCameraAgent):
         self.current_client: dict[int, str] = {}
         self.client_cameras: dict[int, tuple[CameraChoice, ...]] = {}
         self.waiting_vpn_login: set[int] = set()
+        self.vpn_country: dict[int, str] = {}
         self.vpn_pending: dict[int, object] = {}
         self.vpn_operations = TelegramVPNOperations()
 
@@ -222,15 +223,41 @@ class TelegramMenuAgent(TelegramCameraAgent):
 
     def _begin_vpn(self, chat: int):
         self.waiting_login.discard(chat)
+        self.waiting_vpn_login.discard(chat)
+        self.vpn_country.pop(chat, None)
+        self.vpn_pending.pop(chat, None)
+        self._request("sendMessage", {
+            "chat_id": chat,
+            "text": "Выбери страну для нового VPN. Бот автоматически "
+                    "подберёт свободный сервер только в выбранной стране:",
+            "reply_markup": {"inline_keyboard": [
+                [{"text": "🇷🇺 Россия", "callback_data": "vpn_country:ru"}],
+                [{"text": "🇰🇿 Казахстан", "callback_data": "vpn_country:kz"}],
+                [{"text": "🇧🇾 Беларусь", "callback_data": "vpn_country:by"}],
+                [{"text": "❌ Отмена", "callback_data": "vpn_cancel"}],
+            ]},
+        })
+
+    def _select_vpn_country(self, chat: int, region: str):
+        countries = {"ru": "Россия", "kz": "Казахстан", "by": "Беларусь"}
+        country = countries.get(region)
+        if country is None:
+            return
+        self.vpn_country[chat] = country
         self.waiting_vpn_login.add(chat)
         self.vpn_pending.pop(chat, None)
-        self._say(chat, "Введи логин нового VPN-клиента. "
-                  "По умолчанию: Россия, 3 NAT-порта, 1 учётная запись.")
+        self._say(chat, f"Страна: {country}. Введи логин нового VPN-клиента. "
+                  "Создаётся 1 учётная запись и 3 NAT-порта.")
 
     def _prepare_vpn(self, chat: int, login: str):
         # Never mutate RouterOS before the Telegram user confirms.
         self._say(chat, "Проверяю доступность VPN-серверов и свободный логин…")
-        proposal = self.vpn_operations.prepare(login, "Россия", 3)
+        country = self.vpn_country.get(chat)
+        if country not in ("Россия", "Казахстан", "Беларусь"):
+            self.waiting_vpn_login.discard(chat)
+            self._say(chat, "Сначала выбери страну VPN.")
+            return
+        proposal = self.vpn_operations.prepare(login, country, 3)
         self.waiting_vpn_login.discard(chat)
         self.vpn_pending[chat] = proposal
         notice = (
@@ -278,7 +305,11 @@ class TelegramMenuAgent(TelegramCameraAgent):
         data = str(callback.get("data") or "")
         if data == "vpn_cancel":
             self.vpn_pending.pop(ident, None)
+            self.waiting_vpn_login.discard(ident)
+            self.vpn_country.pop(ident, None)
             self._say(ident, "Создание VPN отменено.")
+        elif re.fullmatch(r"vpn_country:(ru|kz|by)", data):
+            self._select_vpn_country(ident, data.partition(":")[2])
         elif re.fullmatch(r"vpn_confirm:[0-9a-f]{24}", data):
             self._confirm_vpn(ident, data.partition(":")[2])
         elif data == "find":
