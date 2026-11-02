@@ -68,7 +68,7 @@ def resolve_employee_username(
         raise UlaReadError(
             "Не удалось выполнить SEC.RESOLVE_USERNAME через разрешённую "
             "служебную сессию Oracle."
-        ) from exc
+        ) from None
     finally:
         if conn is not None:
             try:
@@ -96,4 +96,4 @@ def connect_employee_two_stage(
     except Exception as exc:
         raise UlaReadError(
             "Oracle отклонила второй этап авторизации или соединение недоступно."
-        ) from exc
+        ) from None
