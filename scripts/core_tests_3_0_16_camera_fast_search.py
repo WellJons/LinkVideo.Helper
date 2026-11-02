@@ -88,7 +88,7 @@ with patch.object(CameraDetailDialog, "refresh", return_value=None):
     with patch("linkvideo_vpn_helper.ui.camera_detail_dialog.threading.Thread.start",
                return_value=None):
         dialog._on_details((0, prior), "")
-    assert "B2O: error" in dialog.status.text()
+    assert "Камера не в сети" in dialog.status.text()
     before = dialog.info.text()
     assert "Зал" in before
     dialog._on_details((0, None), "Temporary B2O failure")
