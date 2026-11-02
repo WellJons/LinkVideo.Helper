@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-"""Read-only Telegram camera helper, disabled until the operator configures it.
+"""Read-only camera helper with optional Telegram invite enrollment.
 
-Uses the B2O session of the *same Windows user* as LinkVideo.Helper. Access
-requires an explicit Telegram user-ID allowlist AND a private chat. No RTSP
-credentials, B2O tokens or camera streaming URLs go to Telegram.
+The bot runs separately from the desktop GUI. Credentials must be provisioned
+for its own Windows service identity before unattended use; never silently use
+another person's Windows profile. No RTSP secrets or B2O tokens go to Telegram.
 """
 
+import argparse
 import io
 import json
 import os
@@ -14,6 +15,10 @@ import re
 import secrets
 import time
 from dataclasses import dataclass, field
+
+from linkvideo_vpn_helper.services.telegram_invites import (
+    InviteStore, invitation_url, state_database_path,
+)
 from urllib.request import Request, urlopen
 
 from PySide6.QtCore import QSettings
@@ -53,6 +58,7 @@ class TelegramCameraAgent:
     bot_token: str = field(repr=False)
     allowed_users: frozenset[int]
     b2o: B2OService = field(repr=False)
+    invites: InviteStore | None = field(default=None, repr=False)
     offset: int = 0
     selection: dict[int, dict[str, CameraChoice]] = field(default_factory=dict, repr=False)
     last_request: dict[int, float] = field(default_factory=dict, repr=False)
@@ -60,8 +66,8 @@ class TelegramCameraAgent:
     def __post_init__(self):
         if not _TOKEN.fullmatch(self.bot_token):
             raise ValueError("LINKVIDEO_TELEGRAM_BOT_TOKEN некорректен.")
-        if not self.allowed_users:
-            raise ValueError("Нужен непустой allowlist Telegram ID.")
+        if not self.allowed_users and self.invites is None:
+            raise ValueError("Нужен список пользователей или база приглашений.")
 
     def _request(self, method: str, payload: dict | None = None,
                  photo: bytes | None = None):
@@ -207,26 +213,39 @@ class TelegramCameraAgent:
             return
         sender = message.get("from") or {}
         chat_obj = message.get("chat") or {}
-        if (sender.get("id") not in self.allowed_users or
-                chat_obj.get("type") != "private" or
+        if (chat_obj.get("type") != "private" or
+                type(sender.get("id")) is not int or
                 sender.get("id") != chat_obj.get("id")):
             return
         chat = int(chat_obj["id"])
         command = str(message.get("text") or "").strip()
         if not command.startswith("/"):
             return
+        chunks = command.split(maxsplit=1)
+        verb = chunks[0].split("@", 1)[0].lower()
+        argument = chunks[1].strip() if len(chunks) > 1 else ""
+
+        is_allowed = (
+            chat in self.allowed_users or
+            (self.invites is not None and self.invites.is_member(chat))
+        )
+        if not is_allowed:
+            if (self.invites is not None and verb == "/start" and argument
+                    and self.invites.accept(chat, argument)):
+                self._say(chat, "Доступ к LinkVideo-боту открыт. "
+                          "Отправьте /help для списка команд.")
+            elif verb == "/start":
+                self._say(chat, "Доступ только по ссылке-приглашению.")
+            return
         now = time.monotonic()
         if now - self.last_request.get(chat, -10000) < 3:
             return
         self.last_request[chat] = now
-        chunks = command.split(maxsplit=1)
-        verb = chunks[0].split("@", 1)[0].lower()
-        argument = chunks[1].strip() if len(chunks) > 1 else ""
         try:
             if verb in ("/start", "/help"):
                 self._say(chat, "LinkVideo · камеры\n/client ЛОГИН — найти камеры\n"
                           "/camera ID — диагностика и битрейт\n"
-                          "Только приватный чат, доступ по Telegram ID.")
+                          "Только приватный чат, доступ по приглашению.")
             elif verb == "/client":
                 if not _LOGIN.fullmatch(argument):
                     self._say(chat, "Укажите логин клиента из 10–12 цифр.")
@@ -258,14 +277,42 @@ class TelegramCameraAgent:
 
 
 def main():
-    token = os.environ.get("LINKVIDEO_TELEGRAM_BOT_TOKEN", "").strip()
-    allowed = allowed_ids_from_env(
-        os.environ.get("LINKVIDEO_TELEGRAM_ALLOWED_IDS", "")
+    parser = argparse.ArgumentParser(
+        description="LinkVideo Telegram bot, independent from the desktop GUI."
     )
+    commands = parser.add_subparsers(dest="command")
+    invite = commands.add_parser("invite", help="Create an invitation URL")
+    invite.add_argument("--username", required=True)
+    invite.add_argument("--hours", type=int, default=24)
+    invite.add_argument("--uses", type=int, default=1)
+    revoke = commands.add_parser("revoke", help="Revoke previously invited access")
+    revoke.add_argument("--id", required=True, type=int)
+    args = parser.parse_args()
+
+    store = InviteStore(state_database_path())
+    if args.command == "invite":
+        print(invitation_url(
+            args.username.lstrip("@"),
+            store.create(hours=args.hours, uses=args.uses),
+        ))
+        return
+    if args.command == "revoke":
+        store.revoke(args.id)
+        print("Доступ отозван.")
+        return
+
+    token = os.environ.get("LINKVIDEO_TELEGRAM_BOT_TOKEN", "").strip()
+    optional_legacy_ids = os.environ.get("LINKVIDEO_TELEGRAM_ALLOWED_IDS", "").strip()
+    allowed = allowed_ids_from_env(optional_legacy_ids) if optional_legacy_ids else frozenset()
+    # This service process must have its *own* B2O session in its own
+    # Windows profile. The current desktop user's session is NOT shared.
     b2o = B2OService(QSettings("LinkVideo", "LinkVideo.Helper"))
     if not b2o.token():
-        raise RuntimeError("Сначала подключите админку в LinkVideo.Helper.")
-    TelegramCameraAgent(token, allowed, b2o).run_forever()
+        raise RuntimeError(
+            "В служебной учётной записи Windows отсутствует B2O-сессия. "
+            "Настройте независимые учётные данные сервиса."
+        )
+    TelegramCameraAgent(token, allowed, b2o, invites=store).run_forever()
 
 
 if __name__ == "__main__":
