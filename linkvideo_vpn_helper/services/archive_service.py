@@ -174,8 +174,29 @@ class ArchiveService(_CoreArchiveService):
                     hls_fallback_hosts=player_hosts,
                 )
         else:
-            plan = []
-            gaps = [ArchiveGap(start_ts, end_ts)]
+            # The player sometimes omits media while Nimble still exposes
+            # recording intervals in its documented DVR timeline. Probe only
+            # the B2O-confirmed primary host with a bounded timeout: no broad
+            # scan of guessed servers or repeated management-port requests.
+            if progress:
+                progress("Проверяю DVR-таймлайн", f"{camera.server} · резервный способ")
+            try:
+                timeline_slices = self._probe_host_fast(
+                    camera.server, camera, start_ts, end_ts, "timeline"
+                )
+            except Exception:
+                timeline_slices = []
+            player_slices = list(timeline_slices)
+            plan = self._build_plan(player_slices, start_ts, end_ts)
+            gaps = self._gaps(plan, start_ts, end_ts)
+            if player_slices:
+                self._remember_history_hosts(camera.label, [camera.server])
+                self._remember_global_hosts(operator_id, [camera.server])
+                if plan and not gaps:
+                    return ArchiveDiscovery(
+                        camera, start_ts, end_ts, plan, [], checked,
+                        errors, [],
+                    )
 
         if cancel_event is not None and cancel_event.is_set():
             raise OperationCancelled("Операция отменена пользователем")
