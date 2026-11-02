@@ -73,6 +73,84 @@ def camera_address(camera: dict) -> str:
 
 
 
+def expected_side_task(camera: dict) -> tuple[str, str]:
+    """LinkVideo media rules: based on the available encoded stream codecs.
+
+    This is a *recommendation*, not proof the existing side-task runs.
+    A transcoding output may differ from its original input; compare source
+    codecs when B2O makes them available.
+    """
+    video = readable_video_codec(
+        camera.get("source_video_codec") or camera.get("camera_video_codec")
+        or camera.get("nimble_main_video_codec")
+    )
+    audio = readable_audio_codec(
+        camera.get("source_audio_codec") or camera.get("camera_audio_codec")
+        or camera.get("nimble_main_audio_codec")
+    )
+    if video not in ("H.264", "H.265"):
+        return "Не определён", "Исходный видеокодек неизвестен или не H.264/H.265."
+    if audio == "AAC":
+        return "Не требуется", f"{video} + AAC: транскод не требуется."
+    if audio == "Не указан":
+        muted = str(camera.get("mute_sound") or "0").lower() in ("1", "true")
+        sound_needed = str(camera.get("need_sound") or "0").lower() in ("1", "true")
+        if muted or not sound_needed:
+            return "Не требуется", "Аудиодорожки нет; mute включён или звук не требуется."
+        return "Без звука — проверить mute", (
+            "Аудиодорожка отсутствует: транскод не обязателен, "
+            "но при включённом звуке нужно проверить настройку mute."
+        )
+    if video == "H.264":
+        return "Regular RTMP_push side-task", (
+            f"H.264 + {audio}: для приведения аудио к AAC "
+            "требуется Regular RTMP_push side-task."
+        )
+    return "Custom RTSP side-task", (
+        f"H.265 + {audio}: для приведения аудио к AAC "
+        "требуется Custom RTSP side-task."
+    )
+
+
+def _configured_side_task(camera: dict) -> str:
+    """Only accept an explicit side-task type, never infer from numeric IDs."""
+    for key in ("side_task_type", "sidetask_type", "side_task_mode",
+                "side_task_name", "transcoding_task_type"):
+        raw = camera.get(key)
+        if not isinstance(raw, str):
+            continue
+        value = raw.casefold().replace("-", "_")
+        if "rtmp" in value and "push" in value:
+            return "Regular RTMP_push side-task"
+        if "rtsp" in value and ("custom" in value or "side" in value):
+            return "Custom RTSP side-task"
+        if value in ("none", "disabled", "off"):
+            return "Не требуется"
+    return ""
+
+
+def assess_linkvideo_transcode(camera: dict) -> tuple[str, str]:
+    """Apply the company codec rule without falsely confirming side-task state."""
+    expected, reason = expected_side_task(camera)
+    configured = _configured_side_task(camera)
+    if expected in ("Не определён", "Без звука — проверить mute"):
+        return expected, reason
+    if not configured:
+        if expected == "Не требуется":
+            return "Не требуется", reason + (
+                " Активность side-task в этих полях B2O не подтверждена."
+            )
+        return expected, reason + (
+            " Тип фактически настроенной side-task в карточке B2O не указан; "
+            "совпадение с требованием пока не проверено."
+        )
+    if configured == expected:
+        return "Соответствует", reason + " Настройка side-task совпадает."
+    return "Несоответствие", (
+        reason + f" В B2O задано: {configured}; требуется: {expected}."
+    )
+
+
 def evaluate_transcode(camera: dict, rules: object) -> tuple[str, str]:
     """Compare B2O configuration only against an explicit operator policy.
 
@@ -83,8 +161,8 @@ def evaluate_transcode(camera: dict, rules: object) -> tuple[str, str]:
     Camera > tariff > default. No policy means no red/green verdict.
     """
     summary, _note = transcode_summary(camera)
-    if not isinstance(rules, dict):
-        return summary, "Правила проверки транскода не настроены."
+    if not isinstance(rules, dict) or not rules:
+        return assess_linkvideo_transcode(camera)
     groups = (("cameras", str(camera.get("id_camera") or "")),
               ("tariffs", str(camera.get("id_tariff") or "")))
     rule = None
@@ -96,7 +174,7 @@ def evaluate_transcode(camera: dict, rules: object) -> tuple[str, str]:
     if rule is None:
         rule = rules.get("default")
     if not isinstance(rule, dict) or not rule:
-        return summary, "Правила проверки транскода не настроены."
+        return assess_linkvideo_transcode(camera)
     problems = []
     for item, parser, label in (
         ("video_codec", readable_video_codec, "Видеокодек"),
