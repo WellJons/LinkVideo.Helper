@@ -75,8 +75,24 @@ with tempfile.TemporaryDirectory() as temp:
         }})
 
     inbound("🔐 Создать VPN")
-    assert 12345678 in agent.waiting_vpn_login
+    assert 12345678 not in agent.waiting_vpn_login
     assert not backend.created
+    first_prompt = sent[-1][1]
+    keyboard = first_prompt["reply_markup"]["inline_keyboard"]
+    assert [row[0]["callback_data"] for row in keyboard[:3]] == [
+        "vpn_country:ru", "vpn_country:kz", "vpn_country:by",
+    ]
+    assert all(name in first_prompt["text"] for name in ["страну"])
+    def callback(value):
+        agent.handle_update({"callback_query": {
+            "id": "test",
+            "data": value,
+            "from": {"id": 12345678},
+            "message": {"chat": {"id": 12345678, "type": "private"}},
+        }})
+    callback("vpn_country:ru")
+    assert agent.vpn_country[12345678] == "Россия"
+    assert 12345678 in agent.waiting_vpn_login
     agent.last_request.pop(12345678, None)
     inbound("89200000001")
     assert len(agent.vpn_pending) == 1
@@ -85,13 +101,6 @@ with tempfile.TemporaryDirectory() as temp:
     assert sent[-1][1]["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == (
         "vpn_confirm:" + token
     )
-    def callback(value):
-        agent.handle_update({"callback_query": {
-            "id": "test",
-            "data": value,
-            "from": {"id": 12345678},
-            "message": {"chat": {"id": 12345678, "type": "private"}},
-        }})
     callback("vpn_confirm:" + token)
     assert backend.created == ["89200000001"]
     assert "fixture-created-client-secret" in sent[-1][1]["text"]
