@@ -292,19 +292,25 @@ class ArchiveDownloadPage(QWidget):
         if token:
             self.auth_pill.set_status("B2O подключён", "success")
             self.auth_user.setText(login)
-            self.btn_auth.setText("Переподключить B2O" if self.work_account else "Сменить вход")
+            self.btn_auth.setText("Проверить доступ" if self.work_account else "Сменить вход")
         else:
-            self.auth_pill.set_status("Нужен вход B2O", "warning")
+            self.auth_pill.set_status("Нужен вход в админку" if self.work_account else "Нужен вход B2O", "warning")
             self.auth_user.setText(self.work_account.username if self.work_account else "")
-            self.btn_auth.setText("Повторить B2O" if self.work_account else "Войти в B2O")
+            self.btn_auth.setText("Войти в админку" if self.work_account else "Войти в B2O")
 
     def _authorize(self):
         if self.work_account is not None:
+            if not self.work_account.has_credentials:
+                self.task.show()
+                self.task.warning("Нужен вход в админку",
+                                  "Введите данные админки в едином окне авторизации.")
+                self.work_account.loginRequested.emit()
+                return
+            if self.work_account.b2o_busy:
+                return
             self.btn_auth.setEnabled(False)
             self.task.show()
             self.task.busy("Авторизация B2O", "Подключаю рабочую учётную запись…")
-            if self.work_account.b2o_busy:
-                return
             self.work_account.ensure_b2o(force=True)
             return
         dialog = B2OLoginDialog(self.service.b2o.login_name(), self)
