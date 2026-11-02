@@ -7,6 +7,7 @@ Sensitive camera RTSP URLs and service passwords never leave the bot host.
 """
 
 from dataclasses import replace
+from linkvideo_vpn_helper.services.telegram_vpn_operations import TelegramVPNOperations
 import re
 import time
 from urllib.parse import urlencode
@@ -39,7 +40,7 @@ def camera_state(status: str) -> str:
 
 def menu_keyboard():
     return {"keyboard": [
-        [{"text": "🔎 Найти клиента"}],
+        [{"text": "🔎 Найти клиента"}, {"text": "🔐 Создать VPN"}],
         [{"text": "📋 Последние камеры"}, {"text": "ℹ️ Помощь"}],
     ], "resize_keyboard": True, "is_persistent": True}
 
@@ -50,6 +51,9 @@ class TelegramMenuAgent(TelegramCameraAgent):
         self.waiting_login: set[int] = set()
         self.current_client: dict[int, str] = {}
         self.client_cameras: dict[int, tuple[CameraChoice, ...]] = {}
+        self.waiting_vpn_login: set[int] = set()
+        self.vpn_pending: dict[int, object] = {}
+        self.vpn_operations = TelegramVPNOperations()
 
     def _request(self, method, payload=None, photo=None):
         # Native Bot API commands; the inherited implementation already
@@ -207,6 +211,50 @@ class TelegramMenuAgent(TelegramCameraAgent):
             ]},
         })
 
+    def _begin_vpn(self, chat: int):
+        self.waiting_login.discard(chat)
+        self.waiting_vpn_login.add(chat)
+        self.vpn_pending.pop(chat, None)
+        self._say(chat, "Введи логин нового VPN-клиента. "
+                  "По умолчанию: Россия, 3 NAT-порта, 1 учётная запись.")
+
+    def _prepare_vpn(self, chat: int, login: str):
+        # Never mutate RouterOS before the Telegram user confirms.
+        self._say(chat, "Проверяю доступность VPN-серверов и свободный логин…")
+        proposal = self.vpn_operations.prepare(login, "Россия", 3)
+        self.waiting_vpn_login.discard(chat)
+        self.vpn_pending[chat] = proposal
+        notice = (
+            "Подтверди создание VPN:\n"
+            f"Страна: {proposal.country}\n"
+            f"Сервер: {proposal.server}\n"
+            f"Логин: {proposal.expected_login}\n"
+            f"Учёток: 1 · NAT-портов: {proposal.ports}\n"
+            "После подтверждения клиент будет реально создан на MikroTik."
+        )
+        self._request("sendMessage", {
+            "chat_id": chat,
+            "text": notice,
+            "reply_markup": {"inline_keyboard": [[
+                {"text": "✅ Создать VPN", "callback_data":
+                 "vpn_confirm:" + proposal.request_id},
+                {"text": "❌ Отмена", "callback_data": "vpn_cancel"},
+            ]]},
+        })
+
+    def _confirm_vpn(self, chat: int, token: str):
+        proposal = self.vpn_pending.get(chat)
+        if proposal is None or proposal.request_id != token:
+            self._say(chat, "Заявка недоступна или уже выполнена. Создай новую.")
+            return
+        # Pop before any network calls: a repeated callback cannot run twice.
+        self.vpn_pending.pop(chat, None)
+        self._say(chat, "Создаю VPN на MikroTik через проверенный механизм Helper…")
+        record = self.vpn_operations.execute(chat, proposal)
+        # Return exactly the human-readable VPN record the desktop emits.
+        # This includes a new VPN password, only to the invited PRIVATE chat.
+        self._say(chat, "✅ VPN создан\n\n" + record.copy_text())
+
     def _handle_callback(self, callback: dict):
         sender = callback.get("from") or {}
         message = callback.get("message") or {}
@@ -219,7 +267,12 @@ class TelegramMenuAgent(TelegramCameraAgent):
         if callback_id:
             self._request("answerCallbackQuery", {"callback_query_id": callback_id})
         data = str(callback.get("data") or "")
-        if data == "find":
+        if data == "vpn_cancel":
+            self.vpn_pending.pop(ident, None)
+            self._say(ident, "Создание VPN отменено.")
+        elif re.fullmatch(r"vpn_confirm:[0-9a-f]{24}", data):
+            self._confirm_vpn(ident, data.partition(":")[2])
+        elif data == "find":
             self.waiting_login.add(ident)
             self._say(ident, "Введи логин клиента (10–12 цифр).")
         elif data == "back":
@@ -237,7 +290,7 @@ class TelegramMenuAgent(TelegramCameraAgent):
             except Exception:
                 sender = (callback.get("from") or {}).get("id")
                 if type(sender) is int and self._allowed(sender):
-                    self._say(sender, "Ошибка получения данных. Проверь доступ B2O.")
+                    self._say(sender, "Не удалось выполнить действие. Проверь соединение и настройки бота.")
             return
         message = update.get("message")
         if not isinstance(message, dict):
@@ -272,6 +325,7 @@ class TelegramMenuAgent(TelegramCameraAgent):
                 self._say(chat, "LinkVideo · поиск камер\n"
                           "🔎 Найти клиента — поиск по логину\n"
                           "📋 Последние камеры — открыть последний список\n"
+                          "🔐 Создать VPN — проверка и подтверждение создания\n"
                           "/client ЛОГИН — быстрый поиск")
                 self._request("sendMessage", {
                     "chat_id": chat, "text": "Выбери действие:",
@@ -282,11 +336,15 @@ class TelegramMenuAgent(TelegramCameraAgent):
                     self._show_client(chat, param)
                 else:
                     self._say(chat, "Укажи логин клиента из 10–12 цифр.")
+            elif raw == "🔐 Создать VPN" or verb == "/vpn":
+                self._begin_vpn(chat)
             elif raw == "🔎 Найти клиента":
                 self.waiting_login.add(chat)
                 self._say(chat, "Введи логин клиента (10–12 цифр).")
             elif raw == "📋 Последние камеры":
                 self._show_page(chat, 0)
+            elif chat in self.waiting_vpn_login:
+                self._prepare_vpn(chat, raw)
             elif chat in self.waiting_login:
                 if _LOGIN.fullmatch(raw):
                     self._show_client(chat, raw)
@@ -297,12 +355,14 @@ class TelegramMenuAgent(TelegramCameraAgent):
             elif raw:
                 self._say(chat, "Выбери «Найти клиента» в меню.")
         except Exception:
-            self._say(chat, "Не удалось получить камеры. Проверь авторизацию B2O.")
+            self._say(chat, "Не удалось выполнить операцию. Проверь настройки "
+                      "B2O или MikroTik на компьютере с ботом.")
 
     def run_forever(self):
         self._request("setMyCommands", {"commands": [
             {"command": "start", "description": "Главное меню"},
             {"command": "client", "description": "Поиск камер по логину"},
+            {"command": "vpn", "description": "Создать VPN клиента"},
             {"command": "help", "description": "Помощь"},
         ]})
         while True:
