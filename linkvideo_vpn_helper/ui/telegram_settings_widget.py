@@ -82,8 +82,9 @@ class TelegramSettingsWidget(QWidget):
         self.stop_button.setObjectName("TelegramBotStop")
         self.stop_button.clicked.connect(lambda: self._start("stop", {}))
         buttons.addWidget(self.stop_button)
-        self.refresh_button = QPushButton("Проверить")
-        self.refresh_button.clicked.connect(self._refresh_state)
+        self.refresh_button = QPushButton("Проверить Telegram")
+        self.refresh_button.setObjectName("TelegramProbe")
+        self.refresh_button.clicked.connect(lambda: self._start("probe", {}))
         buttons.addWidget(self.refresh_button)
         buttons.addStretch(1)
         for button in (self.link_button, self.save_button, self.stop_button, self.refresh_button):
