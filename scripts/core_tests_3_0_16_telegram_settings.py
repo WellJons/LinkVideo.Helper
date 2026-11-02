@@ -79,6 +79,12 @@ with tempfile.TemporaryDirectory() as td:
             time.sleep(0.01)
         assert "?start=" in ui.generated_link.text()
         assert "123456789" in ui.employee_list.text()
+        ui.refresh_button.click()
+        deadline = time.monotonic() + 3
+        while ui._busy and time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(0.01)
+        assert sent[-1] == {"operation": "probe"}
         ui.close()
 
     class Registry:
@@ -98,5 +104,43 @@ with tempfile.TemporaryDirectory() as td:
         assert page.telegram_panel.url_input.objectName() == "TelegramBotLink"
         assert page.telegram_panel.token_input.objectName() == "TelegramBotToken"
         page.close()
+
+
+# Verify bot token and saved link only against Telegram's getMe identity.
+from linkvideo_vpn_helper.services.telegram_service_runtime import probe_telegram_bot
+from io import BytesIO
+
+class FakeResponse:
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        return False
+    def read(self, max_bytes):
+        return b'{"ok":true,"result":{"username":"LinkVideoHelperBot"}}'
+
+with patch(
+    "linkvideo_vpn_helper.services.telegram_service_runtime.service_token",
+    return_value="123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+), patch(
+    "linkvideo_vpn_helper.services.telegram_service_runtime.public_bot_link",
+    return_value="https://t.me/LinkVideoHelperBot",
+), patch(
+    "urllib.request.urlopen", return_value=FakeResponse()
+):
+    assert "LinkVideoHelperBot" in probe_telegram_bot()
+with patch(
+    "linkvideo_vpn_helper.services.telegram_service_runtime.service_token",
+    return_value="123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+), patch(
+    "linkvideo_vpn_helper.services.telegram_service_runtime.public_bot_link",
+    return_value="https://t.me/OtherTestBot",
+), patch(
+    "urllib.request.urlopen", return_value=FakeResponse()
+):
+    try:
+        probe_telegram_bot()
+        raise AssertionError("Mismatched bot link was accepted.")
+    except RuntimeError:
+        pass
 
 print("CORE TESTS 3.0.16 TELEGRAM SETTINGS + WINDOWS TASK FRONTEND OK")
