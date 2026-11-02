@@ -83,7 +83,7 @@ def _protect_machine(value: str) -> str:
         raise RuntimeError("DPAPI для бота доступен только на Windows.")
     # Use the machine DPAPI scope for SYSTEM/admin. ACLs limit which users
     # can read the ciphertext, because machine DPAPI alone is not an ACL.
-    from ctypes import POINTER, Structure, byref, c_char, create_string_buffer, sizeof
+    from ctypes import POINTER, Structure, byref, c_char, create_string_buffer
 
     class Blob(Structure):
         _fields_ = [("cbData", wintypes.DWORD), ("pbData", POINTER(c_char))]
@@ -129,7 +129,10 @@ def _unprotect_machine(encoded: str) -> str:
     try:
         return ctypes.string_at(target.pbData, target.cbData).decode("utf-8")
     finally:
-        ctypes.windll.kernel32.LocalFree(target.pbData)
+        free = ctypes.windll.kernel32.LocalFree
+        free.argtypes = [ctypes.c_void_p]
+        free.restype = ctypes.c_void_p
+        free(ctypes.cast(target.pbData, ctypes.c_void_p))
 
 
 def public_bot_link() -> str:
@@ -208,6 +211,64 @@ def _save_link_and_token(link: str, token: str):
     tmp.replace(config_file())
     _restrict(config_file(), members_can_read=False)
     _save_public_link(url)
+
+
+def save_service_b2o_credentials(login: str, password: str) -> None:
+    """Explicit provision of the bot's local B2O identity (not GUI credentials)."""
+    login = str(login or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.@-]{3,100}", login):
+        raise ValueError("Неверный логин B2O.")
+    if not isinstance(password, str) or not 1 <= len(password) <= 256:
+        raise ValueError("Введите пароль B2O для фонового бота.")
+    _ensure_folders()
+    # Verify with B2O in memory; never persist the API token from the test.
+    from linkvideo_vpn_helper.services.archive_service_core import B2OService
+
+    class TempSettings:
+        def __init__(self):
+            self._data = {}
+        def value(self, key, default="", typ=None):
+            return self._data.get(key, default)
+        def setValue(self, key, value):
+            self._data[key] = value
+        def remove(self, key):
+            self._data.pop(key, None)
+
+    try:
+        B2OService(TempSettings()).login(login, password)
+    except Exception:
+        raise RuntimeError(
+            "B2O отклонил логин/пароль или сервер недоступен."
+        ) from None
+    secret_path = config_file().parent / "b2o_service.json"
+    temp = secret_path.with_suffix(".new")
+    temp.write_text(json.dumps({
+        "username_machine": _protect_machine(login),
+        "password_machine": _protect_machine(password),
+    }, ensure_ascii=False), encoding="utf-8")
+    _restrict(temp, members_can_read=False)
+    temp.replace(secret_path)
+    _restrict(secret_path, members_can_read=False)
+
+
+def service_b2o_credentials() -> tuple[str, str]:
+    try:
+        filename = config_file().parent / "b2o_service.json"
+        fields = json.loads(filename.read_text(encoding="utf-8"))
+        return (
+            _unprotect_machine(str(fields["username_machine"])),
+            _unprotect_machine(str(fields["password_machine"])),
+        )
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        raise RuntimeError("Авторизация B2O для службы не настроена.") from exc
+
+
+def service_b2o_configured() -> bool:
+    return (config_file().parent / "b2o_service.json").is_file()
+
+
+def clear_service_b2o_credentials():
+    (config_file().parent / "b2o_service.json").unlink(missing_ok=True)
 
 
 def _save_public_link(link: str):
@@ -315,6 +376,15 @@ def administer_operation(source_path: str):
                                  str(data.get("token") or ""))
             install_startup_task()
             response = "Настройки сохранены, фоновая задача установлена."
+        elif operation == "b2o_configure":
+            save_service_b2o_credentials(
+                str(data.get("b2o_login") or ""),
+                str(data.get("b2o_password") or ""),
+            )
+            response = "B2O подключён для автономного бота; учётные данные защищены Windows."
+        elif operation == "b2o_clear":
+            clear_service_b2o_credentials()
+            response = "Автономная авторизация B2O удалена."
         elif operation == "add":
             user_id = int(data["telegram_id"])
             InviteStore(state_database_path()).grant(user_id)
@@ -339,13 +409,19 @@ def administer_operation(source_path: str):
             json.dumps({"ok": True, "message": response}, ensure_ascii=False),
             "utf-8",
         )
-    except Exception:
-        # No credential-bearing exceptions / URLs are forwarded.
+    except Exception as exc:
+        # Never return raw exceptions containing tokens, URLs, or passwords.
+        category = (
+            "B2O отклонил учётные данные или недоступен."
+            if operation == "b2o_configure" else
+            "Ошибка прав Windows или проверки фоновой задачи."
+            if operation in ("configure", "stop", "save_link") else
+            "Не удалось изменить список доступа/проверить Telegram."
+        )
         try:
             raw = json.loads(path.read_text("utf-8"))
             Path(str(raw["result_path"])).write_text(
-                json.dumps({"ok": False, "message": "Не удалось применить настройку. "
-                            "Проверьте права администратора, ссылку и данные."},
+                json.dumps({"ok": False, "message": category},
                            ensure_ascii=False), "utf-8",
             )
         except Exception:
@@ -377,19 +453,27 @@ def admin_action(payload: dict) -> str:
                 raise RuntimeError("Не удалось подготовить защищённый запрос UAC.")
         # Powershell sees only a path; bot token is never supplied as a CLI arg.
         # Start-Process returns a process exit code after the elevated helper.
+        # PowerShell Start-Process joins -ArgumentList strings internally:
+        # quote the full command line, so paths with spaces cannot be split.
+        argument_line = subprocess.list2cmdline(
+            ["--telegram-admin-op", str(request)]
+        ).replace("'", "''")
         script = (
-            "$p = Start-Process -FilePath " +
-            "'" + str(Path(sys.executable).resolve()).replace("'", "''") + "'" +
-            " -ArgumentList " +
-            "'--telegram-admin-op', '" + str(request).replace("'", "''") + "'" +
-            " -Verb RunAs -PassThru -Wait -WindowStyle Hidden; " +
+            "$ErrorActionPreference = 'Stop'; "
+            "$p = Start-Process -FilePath '" +
+            str(Path(sys.executable).resolve()).replace("'", "''") +
+            "' -ArgumentList '" + argument_line +
+            "' -Verb RunAs -PassThru -Wait; "
             "if ($null -eq $p) { exit 2 }; exit $p.ExitCode"
         )
         started = _run_hidden([
             "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script,
         ], timeout=120)
         if started.returncode != 0 or not answer.exists():
-            raise RuntimeError("Настройка отменена или не разрешена Windows.")
+            raise RuntimeError(
+                "Повышенный процесс не запустился или не записал ответ. "
+                "Проверьте UAC, антивирус и права на %TEMP%."
+            )
         try:
             result = json.loads(answer.read_text("utf-8"))
             if not result.get("ok"):
