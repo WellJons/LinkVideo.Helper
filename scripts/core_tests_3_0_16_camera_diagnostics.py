@@ -16,51 +16,100 @@ from linkvideo_vpn_helper.services.camera_diagnostics import inspect_camera
 from linkvideo_vpn_helper.ui.camera_diagnostics_panel import CameraDiagnosticsPanel
 
 class FakeB2O:
-    def resolve_operator_id(self, _id, operator):
-        return operator
-    def operator_country(self, _operator):
-        return "Россия"
-    def camera(self, operator, camera_id):
-        return SimpleNamespace(
-            camera_id="12345", label="linkvideo_12345",
-            server="b2o-vcore77.video.goodline.info",
-            raw={"camera_ip": "192.0.2.42", "rtsp_port": "8554"},
-        )
-    def token(self):
-        return "synthetic-token"
+    CAMERA_URL = B2OService.CAMERA_URL
+    normalize_camera_id = B2OService.normalize_camera_id
+    resolve_operator_id = B2OService.resolve_operator_id
+    operator_country = B2OService.operator_country
+    normalize_vcore_host = B2OService.normalize_vcore_host
+    token = lambda self: "synthetic-token"
+
+    def request_json(self, url, token, headers=None, timeout=15):
+        assert url.endswith("/operators/241/cameras/12345")
+        assert token == "synthetic-token"
+        # Deliberately lacks signature, main_stream_name and server_name:
+        # archive retrieval must not be a prerequisite for camera information.
+        return {"data": {
+            "id_camera": 12345,
+            "camera_name": "Вход",
+            "camera_status": "online",
+            "camera_ip": "192.0.2.42",
+            "rtsp_port": "8554",
+            "serial_number": "SN123",
+            "archive_depth": 7,
+        }}
 
 with patch("linkvideo_vpn_helper.services.camera_diagnostics._ping_windows",
            return_value="ICMP: ответ получен.") as ping, patch(
         "linkvideo_vpn_helper.services.camera_diagnostics._test_tcp",
-        return_value="TCP:8554 — открыт с этого компьютера.") as tcp, patch(
-        "linkvideo_vpn_helper.services.camera_diagnostics.fetch_camera_preview",
-        return_value=b"not-a-real-image") as preview:
+        return_value="TCP:8554 — открыт с этого компьютера.") as tcp:
     report = inspect_camera(FakeB2O(), "12345", 241)
     assert report.camera_id == "linkvideo_12345"
+    assert report.name == "Вход" and report.status == "online"
+    assert report.server == ""  # Missing DVR is fine for read-only info.
     assert report.ip == "192.0.2.42" and report.rtsp_port == 8554
-    assert report.preview == b"not-a-real-image"
+    assert report.preview is None  # The information page never loads thumbnails.
     ping.assert_called_once_with("192.0.2.42")
     tcp.assert_called_once_with("192.0.2.42", 8554)
-    assert preview.call_args.args[:2] == ("Россия", "12345")
+
 
 class WithoutIP(FakeB2O):
-    def camera(self, *_):
-        return SimpleNamespace(camera_id="12345", label="linkvideo_12345",
-            server="example.video.goodline.info",
-            raw={"camera_ip": "127.0.0.1", "rtsp_port": 554})
+    def request_json(self, *args, **kwargs):
+        return {"data": {"id_camera": 12345, "camera_ip": "127.0.0.1"}}
 
 with patch("linkvideo_vpn_helper.services.camera_diagnostics._test_tcp") as tcp:
-    report = inspect_camera(WithoutIP(), "12345", 241, with_preview=False)
-    assert not report.ip and "не проверялся" in report.tcp_text
+    report_no_ip = inspect_camera(WithoutIP(), "12345", 241)
+    assert not report_no_ip.ip and "не выполнялась" in report_no_ip.tcp_text
     tcp.assert_not_called()
+
+from linkvideo_vpn_helper.services.camera_diagnostics import CameraLookupError
+
+class Unauthorized(FakeB2O):
+    token = lambda self: ""
+
+try:
+    inspect_camera(Unauthorized(), "12345", 241)
+except CameraLookupError as exc:
+    assert "Админка" in str(exc)
+else:
+    raise AssertionError("No login must block camera request")
+
+class MissingCamera(FakeB2O):
+    def request_json(self, *args, **kwargs):
+        raise RuntimeError("B2O: HTTP 404 при запросе данных")
+
+try:
+    inspect_camera(MissingCamera(), "12345", 241)
+except CameraLookupError as exc:
+    assert "Камера не найдена" in str(exc)
+else:
+    raise AssertionError("404 must be actionable")
+
+# An exact serial lookup may find a different B2O camera ID.
+class SerialCamera(FakeB2O):
+    def request_json(self, url, token, headers=None, timeout=15):
+        if url.endswith("/cameras/89788549499"):
+            raise RuntimeError("B2O: HTTP 404 при запросе данных")
+        assert url.endswith("/cameras/12345")
+        return {"data": {"id_camera": 12345, "serial_number": "89788549499"}}
+
+with patch("linkvideo_vpn_helper.services.agent_b2o_preview.b2o_camera_for_serial",
+           return_value=("Россия", "12345")) as exact_serial:
+    serial_report = inspect_camera(SerialCamera(), "89788549499", 241, with_network=False)
+    assert serial_report.camera_id == "linkvideo_12345"
+    exact_serial.assert_called_once()
 
 app = QApplication.instance() or QApplication([])
 with tempfile.TemporaryDirectory() as td:
     settings = QSettings(str(Path(td) / "settings.ini"), QSettings.Format.IniFormat)
     panel = CameraDiagnosticsPanel(settings)
     assert panel.camera_id.placeholderText()
+    assert not hasattr(panel, "thumbnail")  # No enormous empty preview.
     panel._on_result(0, report, "")
-    assert "TCP не проверялся" in panel.summary.text()
+    assert "Серийный номер: SN123" in panel.summary.text()
+    assert "Название: Вход" in panel.summary.text()
+    assert "TCP:8554" in panel.summary.text()
+    panel._on_result(0, None, "Камера не найдена")
+    assert panel.status.text() == "Ошибка"
 
     b2o = B2OService(settings)
     b2o.token = lambda: "fake-token"
