@@ -101,6 +101,69 @@ with tempfile.TemporaryDirectory() as temporary:
         assert not settings.contains("billing/crm/password_dpapi")
         page.close()
 
+    # The sidebar exposes one billing connection for both endpoint sessions.
+    # Exercise the presentation and retry logic without opening a real window.
+    from linkvideo_vpn_helper.ui.main_window import MainWindow
+
+    class FakeLabel:
+        def __init__(self):
+            self.value = ""
+            self.hint = ""
+        def setText(self, value):
+            self.value = value
+        def setToolTip(self, value):
+            self.hint = value
+
+    class FakeButton:
+        def __init__(self):
+            self.enabled = True
+        def setEnabled(self, value):
+            self.enabled = bool(value)
+
+    class FakeCRMPage:
+        def __init__(self):
+            self.billing_login = SimpleNamespace(_busy=False)
+            self.calls = 0
+        def _connect_work_account(self):
+            self.calls += 1
+
+    fake_crm_page = FakeCRMPage()
+    retried = []
+    fake_work_account = SimpleNamespace(
+        b2o_busy=False,
+        ensure_b2o=lambda *, force=False: retried.append(force),
+    )
+    fake_window = SimpleNamespace(
+        _work_b2o_ok=None,
+        _work_crm_ok=None,
+        work_billing=FakeLabel(),
+        work_reconnect_billing=FakeButton(),
+        work_account=fake_work_account,
+        _page_cache={"tariffs": fake_crm_page},
+        _ensure_page=lambda key: fake_crm_page,
+    )
+    fake_window._refresh_work_billing_status = lambda: (
+        MainWindow._refresh_work_billing_status(fake_window)
+    )
+    MainWindow._reconnect_work_billing(fake_window)
+    assert retried == [True] and fake_crm_page.calls == 1
+    assert "подключение" in fake_window.work_billing.value
+    MainWindow._on_work_b2o_status(fake_window, True, "")
+    assert "частично" in fake_window.work_billing.value
+    MainWindow._on_work_crm_status(fake_window, True)
+    assert fake_window.work_billing.value == "✓ Биллинг · подключён"
+    assert "B2O" in fake_window.work_billing.hint
+    assert "CRM" in fake_window.work_billing.hint
+    MainWindow._on_work_crm_status(fake_window, False)
+    assert "часть функций недоступна" in fake_window.work_billing.value
+    fake_crm_page.billing_login._busy = True
+    MainWindow._refresh_work_billing_status(fake_window)
+    assert fake_window.work_reconnect_billing.enabled is False
+    fake_crm_page.billing_login._busy = False
+    fake_work_account.b2o_busy = True
+    MainWindow._refresh_work_billing_status(fake_window)
+    assert fake_window.work_reconnect_billing.enabled is False
+
     # Both archive pages must silently use the same work account and must
     # never open their own B2O password dialog in the main Helper workflow.
     from linkvideo_vpn_helper.services.archive_service import ArchiveService
