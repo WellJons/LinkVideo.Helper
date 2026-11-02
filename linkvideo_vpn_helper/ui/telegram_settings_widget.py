@@ -213,9 +213,7 @@ class TelegramSettingsWidget(QWidget):
             self.status.set_status("Не настроен", "neutral")
         self.url_input.setText(public_bot_link() or self.url_input.text())
         try:
-            people = InviteStore(state_database_path()).members() if (
-                state_database_path().exists()
-            ) else ()
+            people = InviteStore.list_members(state_database_path())
             self.employee_list.setText(
                 "Разрешённые Telegram ID: " + ", ".join(map(str, people))
                 if people else "Добавленных сотрудников пока нет."
