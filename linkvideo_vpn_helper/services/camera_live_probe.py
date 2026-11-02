@@ -14,7 +14,6 @@ import time
 import os
 import subprocess
 from pathlib import Path
-from functools import lru_cache
 
 from linkvideo_vpn_helper.services.camera_diagnostics import (
     CameraDiagnostics, _ping_windows, _test_tcp,
@@ -200,14 +199,21 @@ def _recent_archive_sample(report: CameraDiagnostics, opener):
 
 
 
-@lru_cache(maxsize=1)
+_verified_ffmpeg = ""
+
+
 def _cached_ffmpeg() -> str:
-    """Existing FFmpeg only: opening a camera must not download executables."""
+    """Reuse validated local FFmpeg; do not cache an absent binary forever."""
+    global _verified_ffmpeg
+    if _verified_ffmpeg and Path(_verified_ffmpeg).is_file():
+        return _verified_ffmpeg
+    _verified_ffmpeg = ""
     from linkvideo_vpn_helper.services.archive_service_core import ArchiveService
     for candidate in ArchiveService._ffmpeg_candidates():
         path = Path(candidate)
         if path.is_file() and ArchiveService._ffmpeg_usable(path):
-            return str(path)
+            _verified_ffmpeg = str(path)
+            return _verified_ffmpeg
     return ""
 
 
@@ -304,7 +310,9 @@ def probe_live_camera(report: CameraDiagnostics, *, opener=None) -> LiveProbe:
 
     stamp = _display_timestamp(report.last_stream)
     # Prefer actual administrator RTSP over a historical DVR sample.
-    measured = _probe_rtsp(report) if report.rtsp_url else None
+    # Missing FFmpeg is a local prerequisite, not a camera outage.
+    missing_ffmpeg = bool(report.rtsp_url and not _cached_ffmpeg())
+    measured = _probe_rtsp(report) if report.rtsp_url and not missing_ffmpeg else None
     if measured is not None:
         return LiveProbe(
             f"≈{measured.bitrate_mbps:.2f} Мбит/с",
@@ -347,7 +355,10 @@ def probe_live_camera(report: CameraDiagnostics, *, opener=None) -> LiveProbe:
             "Не измерен", stamp, network,
             "Нет доступного медиасегмента: проверены только подтверждённые "
             "live-URL и подписанные недавние архивные плейлисты. "
-            "Доступность HTTPS-сервера не подтверждает передачу видео.",
+            "Доступность HTTPS-сервера не подтверждает передачу видео."
+            + (" Локальный FFmpeg отсутствует: для прямого RTSP-замера "
+               "сначала подготовьте FFmpeg через раздел скачивания архива."
+               if missing_ffmpeg else ""),
         )
 
     opener = opener or build_opener(_NoRedirect())
