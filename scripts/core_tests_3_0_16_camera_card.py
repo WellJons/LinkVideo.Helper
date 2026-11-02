@@ -38,7 +38,7 @@ with tempfile.TemporaryDirectory() as td:
     )
     class Gateway:
         def search_clients(self, query):
-            return (query,)
+            return (SimpleNamespace(login=query),)
         def find_client_by_hit(self, hit):
             return client
     creds = SimpleNamespace(username="demo", password="fixture-only")
