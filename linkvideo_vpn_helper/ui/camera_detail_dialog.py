@@ -350,6 +350,8 @@ class CameraDetailDialog(QWidget):
         self._set_facts(lines)
         self.refresh_btn.setEnabled(True)
 
+        cancellation = self._cancel_event
+
         def preview_worker():
             try:
                 b2o = B2OService(self.settings)
