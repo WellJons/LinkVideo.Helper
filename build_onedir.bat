@@ -24,13 +24,5 @@ if errorlevel 1 exit /b 1
 %PY% -m PyInstaller --noconfirm --clean LinkVideo.Helper.spec
 if errorlevel 1 exit /b 1
 
-rem The 32-bit RADIUS sidecar is built separately and must remain outside
-rem the 64-bit PyInstaller runtime so it can load an existing Ula OCI x86.
-if defined ULA_BRIDGE_X86_PATH (
-    if not exist "%ULA_BRIDGE_X86_PATH%" exit /b 1
-    copy /Y "%ULA_BRIDGE_X86_PATH%" "dist\LinkVideo.Helper\LinkVideo.UlaBridge32.exe" >nul
-    if errorlevel 1 exit /b 1
-)
-
 echo.
 echo Build ready: dist\LinkVideo.Helper\LinkVideo.Helper.exe
