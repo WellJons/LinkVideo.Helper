@@ -233,8 +233,9 @@ def search_all_cameras(
                     ))
         except Exception:
             # A missing/unauthorized serial endpoint does not invalidate
-            # positive results from other exact search modes.
-            pass
+            # positive results from other exact search modes, but it must be
+            # reported when no other method produced a verified result.
+            problems.append("Проверка серийного номера недоступна.")
 
     if not prefix:
         try:
