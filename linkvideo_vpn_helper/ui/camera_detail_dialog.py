@@ -47,6 +47,14 @@ class CameraDetailDialog(QDialog):
         self.telemetryReady.connect(self._on_telemetry)
         QTimer.singleShot(0, self.refresh)
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        # The clicked search-row button must not cause Qt to open the nested
+        # scroll view halfway down the camera card.
+        QTimer.singleShot(
+            0, lambda: self.detail_scroll.verticalScrollBar().setValue(0)
+        )
+
     def _build(self):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(16, 16, 16, 16)
@@ -73,6 +81,7 @@ class CameraDetailDialog(QDialog):
         outer.addLayout(header)
 
         scroll = QScrollArea(self)
+        self.detail_scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -92,7 +101,7 @@ class CameraDetailDialog(QDialog):
         self.image = QLabel("Загружаю превью…")
         self.image.setObjectName("CameraCardPreview")
         self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.image.setMinimumHeight(258)
+        self.image.setMinimumHeight(225)
         self.image.setMinimumWidth(310)
         self.image.setWordWrap(True)
         self.image.setStyleSheet(
@@ -109,7 +118,7 @@ class CameraDetailDialog(QDialog):
         metrics = Card(kind="hero")
         metrics_layout = QVBoxLayout(metrics)
         metrics_layout.setContentsMargins(16, 16, 16, 16)
-        metrics_layout.setSpacing(12)
+        metrics_layout.setSpacing(8)
         top = QLabel("Состояние потока")
         top.setObjectName("CardTitle")
         metrics_layout.addWidget(top)
@@ -218,8 +227,13 @@ class CameraDetailDialog(QDialog):
             self.diagnostic_text.setText("Диагностика невозможна без карточки камеры.")
             self.refresh_btn.setEnabled(True)
             return
-        self.status.set_status("Данные получены", "success")
-        self.heading.setText(report.name or report.camera_id)
+        self.status.set_status("Карточка загружена", "success")
+        title = str(self.choice.label or "").strip()
+        self.heading.setText(
+            report.name or (title if title and not title.lower().startswith(
+                ("linkvideo_", "linkvideoby_", "linkvideokz_")
+            ) else report.camera_id)
+        )
         lines = [
             ("ID", report.camera_id),
             ("Страна", report.operator),
@@ -299,7 +313,9 @@ class CameraDetailDialog(QDialog):
         self.rate.setText(data.bitrate_mbps)
         self.last.setText(data.last_stream)
         self.connection.setText(
-            "Проверка завершена" if "ICMP" in data.connectivity or "TCP" in data.connectivity
-            else "Нет адреса"
+            "Медиасервер: HTTPS доступен"
+            if "TCP:443 — открыт" in data.connectivity
+            else ("Сервер не отвечает" if "TCP:443" in data.connectivity
+                  else "Нет данных о доступности самой камеры")
         )
         self.diagnostic_text.setText(data.connectivity + "\n\n" + data.detail)
