@@ -138,6 +138,11 @@ class ArchiveService(_CoreArchiveService):
         errors: list[str] = []
         checked: list[str] = []
         operator_id = self.b2o.resolve_operator_id(camera.label, operator_id)
+        # The authenticated camera record is authoritative for its current DVR.
+        # Learn newly assigned hosts immediately, even if the requested period
+        # contains no archive. Player/timeline hosts are learned after probing.
+        self._remember_history_hosts(camera.label, [camera.server])
+        self._remember_global_hosts(operator_id, [camera.server])
 
         if progress:
             progress("Определяю DVR по плейлисту", f"{camera.server} · выбранный период")
