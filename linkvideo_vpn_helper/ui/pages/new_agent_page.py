@@ -45,6 +45,9 @@ class NewAgentPage(QWidget):
         self._preview_request = 0
         self._image_enhance = None
         self._video_streams = None
+        self.work_account = getattr(parent, "work_account", None)
+        if self.work_account is not None:
+            self.work_account.b2oChanged.connect(self._on_work_b2o_connected)
         self.operationReady.connect(self._on_ready)
         self.cameraPreviewReady.connect(self._on_preview_ready)
         self._build()
@@ -390,9 +393,15 @@ class NewAgentPage(QWidget):
         self.preview_btn.show()
         self.preview_btn.setEnabled(True)
         if not token:
-            self.preview_label.setText(
-                "Для превью войдите в B2O в разделе «Скачать архив»."
-            )
+            if self.work_account is not None:
+                self.preview_label.setText(
+                    "B2O подключается через рабочую учётную запись Helper…"
+                )
+                self.work_account.ensure_b2o()
+            else:
+                self.preview_label.setText(
+                    "Для превью войдите в B2O в разделе «Скачать архив»."
+                )
             return
 
         def work():
@@ -405,6 +414,18 @@ class NewAgentPage(QWidget):
                 result = None
             self.cameraPreviewReady.emit(generation, serial, result)
         self._spawn(work)
+
+    def _on_work_b2o_connected(self, ok: bool, message: str) -> None:
+        if self.camera is None:
+            return
+        if ok:
+            # A first preview may have been requested while automatic B2O
+            # login was still in progress. Retry only after authorization.
+            self._start_preview()
+        elif self.preview_label.isVisible():
+            self.preview_label.setText(
+                "Превью недоступно: B2O не подтвердил рабочую учётную запись."
+            )
 
     def _on_preview_ready(self, request_id, serial, payload):
         if (request_id != self._preview_request or self.camera is None
