@@ -79,7 +79,8 @@ _ALLOWED_PASS_SITES = {
     ("linkvideo_vpn_helper/ui/components_compat.py", "clear_effect", "Exception"): 1,
     ("linkvideo_vpn_helper/ui/components_compat.py", "popup_destroyed", "Exception"): 1,
     ("linkvideo_vpn_helper/ui/main_window.py", "_go", "Exception"): 3,
-    ("linkvideo_vpn_helper/ui/main_window.py", "_logout", "Exception"): 1,
+    # Only OS launch failures are intentionally ignored after credentials were cleared.
+    ("linkvideo_vpn_helper/ui/main_window.py", "_logout", "OSError"): 1,
     ("linkvideo_vpn_helper/ui/main_window.py", "_preload_next_page", "Exception"): 1,
     ("linkvideo_vpn_helper/ui/main_window.py", "_servers_changed", "Exception"): 2,
     ("linkvideo_vpn_helper/ui/main_window.py", "keyPressEvent", "Exception"): 1,
