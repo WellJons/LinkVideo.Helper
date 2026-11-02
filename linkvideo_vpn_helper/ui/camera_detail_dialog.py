@@ -42,6 +42,7 @@ class CameraDetailDialog(QWidget):
         self.preview_loader = preview_loader
         self.live_probe = live_probe
         self._generation = 0
+        self._cancel_event = threading.Event()
         self._preview_bytes = b""
         self._last_report = None
         self._last_telemetry = None
@@ -232,9 +233,24 @@ class CameraDetailDialog(QWidget):
             box.addWidget(value_widget)
             self.facts.addWidget(tile, index // 3, index % 3)
 
+    def _safe_emit(self, signal, *values):
+        try:
+            signal.emit(*values)
+        except RuntimeError:
+            # Worker finished after the user navigated away and Qt deleted
+            # the page. Never let background callbacks crash the process.
+            pass
+
+    def deactivate(self):
+        self._cancel_event.set()
+        self._generation += 1
+
     def refresh(self):
         if not self.refresh_btn.isEnabled():
             return
+        self._cancel_event.set()
+        self._cancel_event = threading.Event()
+        cancellation = self._cancel_event
         self._generation += 1
         generation = self._generation
         self.refresh_btn.setEnabled(False)
@@ -261,11 +277,11 @@ class CameraDetailDialog(QWidget):
                     self.choice.operator_id, with_network=False,
                     with_preview=False,
                 )
-                self.detailsReady.emit((generation, report), "")
+                self._safe_emit(self.detailsReady, (generation, report), "")
             except CameraLookupError as exc:
-                self.detailsReady.emit((generation, None), str(exc))
+                self._safe_emit(self.detailsReady, (generation, None), str(exc))
             except Exception:
-                self.detailsReady.emit(
+                self._safe_emit(self.detailsReady, 
                     (generation, None),
                     "Не удалось получить карточку камеры. Проверьте права и ID.",
                 )
@@ -341,14 +357,16 @@ class CameraDetailDialog(QWidget):
                     report.camera_id, self.choice.operator_id
                 )
                 blob = self.preview_loader(report.operator, number, b2o.token())
-                self.previewReady.emit((generation, blob), "")
+                self._safe_emit(self.previewReady, (generation, blob), "")
             except Exception:
-                self.previewReady.emit(
+                self._safe_emit(self.previewReady, 
                     (generation, None), "Не удалось получить последнее изображение."
                 )
 
         def telemetry_worker():
             try:
+                if cancellation.is_set():
+                    return
                 b2o = B2OService(self.settings)
                 stream, stream_status = fetch_camera_stream_with_status(
                     b2o, report.camera_id, self.choice.operator_id
@@ -365,7 +383,7 @@ class CameraDetailDialog(QWidget):
                     # real authorized RTSP endpoint exists. Keep Qt responsive
                     # and serialize first-use setup across multiple cameras.
                     if not _cached_ffmpeg():
-                        self.telemetryProgress.emit(
+                        self._safe_emit(self.telemetryProgress, 
                             generation, "Подготавливаю FFmpeg для RTSP-замера…"
                         )
                         with _FFMPEG_SETUP_LOCK:
@@ -373,25 +391,30 @@ class CameraDetailDialog(QWidget):
                                 from linkvideo_vpn_helper.services.archive_service_core import ArchiveService
                                 try:
                                     ArchiveService(self.settings).ensure_ffmpeg(
+                                        cancel_event=cancellation,
                                         progress=lambda stage, detail:
-                                            self.telemetryProgress.emit(
+                                            self._safe_emit(self.telemetryProgress, 
                                                 generation,
                                                 f"{stage}: {detail}"[:180],
                                             )
                                     )
                                 except Exception:
-                                    self.telemetryProgress.emit(
+                                    self._safe_emit(self.telemetryProgress, 
                                         generation, "FFmpeg недоступен — проверю доступный архив."
                                     )
+                if cancellation.is_set():
+                    return
                 data = self.live_probe(sample)
+                if cancellation.is_set():
+                    return
                 if stream_status:
                     data = replace(
                         data,
                         detail=stream_status + "\n" + data.detail,
                     )
-                self.telemetryReady.emit((generation, data))
+                self._safe_emit(self.telemetryReady, (generation, data))
             except Exception:
-                self.telemetryReady.emit((generation, None))
+                self._safe_emit(self.telemetryReady, (generation, None))
 
         threading.Thread(target=preview_worker, name="camera-card-preview",
                          daemon=True).start()
