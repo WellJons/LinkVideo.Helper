@@ -587,6 +587,9 @@ class TariffsPage(QWidget):
         self.auth_btn.setMinimumHeight(40)
         self.auth_btn.setProperty("role", "soft")
         self.auth_btn.clicked.connect(self._open_login)
+        if self.work_account is not None:
+            # CRM is managed from the sole work-account panel in the sidebar.
+            self.auth_btn.hide()
         header.addWidget(self.auth_btn, 0, Qt.AlignmentFlag.AlignTop)
         root.addLayout(header)
         # The CRM is a separate token-based service. B2O credentials can be
