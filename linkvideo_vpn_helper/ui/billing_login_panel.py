@@ -271,7 +271,9 @@ class BillingLoginPanel(Card):
             self.store.clear()
             self.status.set_status("Биллинг подключён", "success")
             self.message.setText("CRM подтверждён через рабочую учётную запись.")
-            self.connected_account.setText(self._active_username)
+            self.connected_account.setText(
+            self._active_username if self._central_login else self.username.text().strip()
+        )
             self.login_form.hide()
             self.connected_row.show()
             return
