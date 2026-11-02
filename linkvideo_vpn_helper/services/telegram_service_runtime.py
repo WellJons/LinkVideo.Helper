@@ -364,9 +364,17 @@ def admin_action(payload: dict) -> str:
         answer = Path(td) / "response.json"
         request.write_text(json.dumps({**payload, "result_path": str(answer)},
                                       ensure_ascii=False), encoding="utf-8")
-        # tempfile creates a per-user directory. Do not strip the owner's
-        # ACL: the non-elevated GUI must still read the status response.
-        # The UAC helper only receives the file path, never the token in argv.
+        # A standard user may authenticate UAC as a DIFFERENT admin account.
+        # Grant local Administrators access to the private, random staging
+        # folder and the existing request; keep the requester access so it
+        # can read response.json. No permissions are granted to other users.
+        for path, acl in ((Path(td), "*S-1-5-32-544:(OI)(CI)F"),
+                          (request, "*S-1-5-32-544:F")):
+            granted = _run_hidden(
+                ["icacls.exe", str(path), "/grant", acl], timeout=8
+            )
+            if granted.returncode:
+                raise RuntimeError("Не удалось подготовить защищённый запрос UAC.")
         # Powershell sees only a path; bot token is never supplied as a CLI arg.
         # Start-Process returns a process exit code after the elevated helper.
         script = (
