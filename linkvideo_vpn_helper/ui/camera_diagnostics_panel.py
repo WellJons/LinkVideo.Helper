@@ -9,7 +9,7 @@ from PySide6.QtCore import Qt, QSize, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QFormLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QPushButton, QVBoxLayout, QWidget,
+    QPushButton, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from linkvideo_vpn_helper.services.archive_service_core import B2OService
@@ -43,8 +43,14 @@ class CameraDiagnosticsPanel(QWidget):
             self.work_account.b2oChanged.connect(self._on_b2o_changed)
 
     def _build(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 16, 12, 18)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 10, 12, 10)
+        root.setSpacing(0)
+        self.view_stack = QStackedWidget(self)
+        self.view_stack.setObjectName("CameraInformationPages")
+        self.search_view = QWidget(self)
+        layout = QVBoxLayout(self.search_view)
+        layout.setContentsMargins(0, 6, 0, 8)
         layout.setSpacing(14)
 
         search_card = Card(kind="hero")
@@ -102,6 +108,8 @@ class CameraDiagnosticsPanel(QWidget):
         body.addWidget(self.list)
         layout.addWidget(results)
         layout.addStretch(1)
+        self.view_stack.addWidget(self.search_view)
+        root.addWidget(self.view_stack, 1)
 
     def _check(self):
         if not self.run_button.isEnabled():
@@ -315,7 +323,23 @@ class CameraDiagnosticsPanel(QWidget):
             self._show_camera(camera)
 
     def _show_camera(self, camera):
-        self._active_card = CameraDetailDialog(camera, self._settings, self)
-        self._active_card.show()
-        self._active_card.raise_()
-        self._active_card.activateWindow()
+        # Match VPN client navigation: replace search results in the same
+        # workspace, not a floating window with an independent taskbar entry.
+        previous = self._active_card
+        card = CameraDetailDialog(camera, self._settings, self.view_stack)
+        card.backRequested.connect(self._back_to_results)
+        self._active_card = card
+        self.view_stack.addWidget(card)
+        self.view_stack.setCurrentWidget(card)
+        if previous is not None:
+            self.view_stack.removeWidget(previous)
+            previous.deleteLater()
+
+    def _back_to_results(self):
+        self.view_stack.setCurrentWidget(self.search_view)
+        # Keep found cameras and their previews intact when navigating back.
+        if self._active_card is not None:
+            card = self._active_card
+            self._active_card = None
+            self.view_stack.removeWidget(card)
+            card.deleteLater()
