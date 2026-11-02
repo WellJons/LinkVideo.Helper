@@ -65,12 +65,13 @@ def _restrict(path: Path, *, members_can_read: bool):
     if os.name != "nt":
         raise RuntimeError("Служба поддерживается только на Windows.")
     # icacls SID syntax uses * before SID; names depend on Windows locale.
+    prefix = "(OI)(CI)" if path.is_dir() else ""
     args = [
         "icacls", str(path), "/inheritance:r", "/grant:r",
-        "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F",
+        f"*S-1-5-18:{prefix}F", f"*S-1-5-32-544:{prefix}F",
     ]
     if members_can_read:
-        args.append("*S-1-5-11:(OI)(CI)RX")
+        args.append(f"*S-1-5-11:{prefix}RX")
     result = _run_hidden(args)
     if result.returncode != 0:
         raise RuntimeError("Не удалось ограничить доступ к конфигурации бота.")
