@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from xml.sax.saxutils import escape as xml_escape
 
 from linkvideo_vpn_helper.services.telegram_invites import (
     InviteStore, invitation_url, state_database_path,
@@ -194,23 +195,58 @@ def _save_public_link(link: str):
 
 def _task_command():
     executable = Path(sys.executable).resolve()
-    # Task must launch the installed EXE, NOT a Python script in a temp folder.
+    # A privileged startup task may only start the installer-managed binary
+    # under Program Files, never a user-writable portable copy.
     if not getattr(sys, "frozen", False):
         raise RuntimeError("Установка фоновой задачи доступна только из EXE Helper.")
-    return f'"{executable}" --telegram-worker'
+    root = Path(os.environ.get("ProgramFiles", r"C:\Program Files")).resolve()
+    expected = root / "LinkVideo.Helper" / "LinkVideo.Helper.exe"
+    if executable != expected.resolve():
+        raise RuntimeError("Устанавливать бота можно только из Program Files.")
+    return str(executable)
+
+
+def _startup_task_xml(executable: str) -> str:
+    """Long-running LocalSystem task, no 72-hour limit, restart on failure."""
+    if not executable or not Path(executable).is_absolute():
+        raise ValueError("Укажите абсолютный путь к программе.")
+    exe = xml_escape(executable)
+    return (
+        '<?xml version="1.0" encoding="UTF-16"?>\n'
+        '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">'
+        '<RegistrationInfo><Description>LinkVideo Telegram background worker</Description>'
+        '</RegistrationInfo>'
+        '<Triggers><BootTrigger><Enabled>true</Enabled></BootTrigger></Triggers>'
+        '<Principals><Principal id="BotSystem">'
+        '<UserId>S-1-5-18</UserId><LogonType>ServiceAccount</LogonType>'
+        '<RunLevel>HighestAvailable</RunLevel></Principal></Principals>'
+        '<Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>'
+        '<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>'
+        '<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>'
+        '<StartWhenAvailable>true</StartWhenAvailable>'
+        '<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>'
+        '<RestartOnFailure><Interval>PT1M</Interval><Count>50</Count></RestartOnFailure>'
+        '<Enabled>true</Enabled></Settings>'
+        '<Actions Context="BotSystem"><Exec>'
+        f'<Command>{exe}</Command><Arguments>--telegram-worker</Arguments>'
+        '</Exec></Actions></Task>'
+    )
 
 
 def install_startup_task():
     if os.name != "nt":
         raise RuntimeError("Автозапуск доступен только в Windows.")
-    cmd = _task_command()
-    # schtasks does not store the bot token or any credentials in task args.
-    result = _run_hidden([
-        "schtasks.exe", "/Create", "/F", "/TN", TASK, "/SC", "ONSTART",
-        "/RU", "SYSTEM", "/RL", "HIGHEST", "/TR", cmd,
-    ])
-    if result.returncode:
-        raise RuntimeError("Не удалось установить фоновую задачу Windows.")
+    executable = _task_command()
+    # No secrets or B2O login details in the task XML or command line.
+    with tempfile.TemporaryDirectory(prefix="lv-bot-task-") as temp_dir:
+        xml_path = Path(temp_dir) / "worker.xml"
+        xml_path.write_bytes(("\ufeff" + _startup_task_xml(executable)).encode("utf-16-le"))
+        result = _run_hidden([
+            "schtasks.exe", "/Create", "/F", "/TN", TASK,
+            "/XML", str(xml_path),
+        ])
+        if result.returncode:
+            raise RuntimeError("Не удалось установить фоновую задачу Windows.")
     started = _run_hidden(["schtasks.exe", "/Run", "/TN", TASK])
     if started.returncode:
         raise RuntimeError("Задача установлена, но пока не запущена.")
@@ -228,7 +264,10 @@ def uninstall_startup_task():
 def is_task_installed() -> bool:
     if os.name != "nt":
         return False
-    return _run_hidden(["schtasks.exe", "/Query", "/TN", TASK]).returncode == 0
+    try:
+        return _run_hidden(["schtasks.exe", "/Query", "/TN", TASK], timeout=3).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
 
 
 def administer_operation(source_path: str):
