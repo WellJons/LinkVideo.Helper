@@ -225,6 +225,9 @@ class BillingLoginPanel(Card):
         except Exception:
             self.loginFailed.emit("Нет действующей рабочей учётной записи Helper.")
             return False
+        # Central admin login must not reveal the DPAPI-decrypted password in
+        # the dormant legacy CRM form. Only the request object holds it.
+        self.password.clear()
         self._begin_login(request, central=True)
         return True
 
