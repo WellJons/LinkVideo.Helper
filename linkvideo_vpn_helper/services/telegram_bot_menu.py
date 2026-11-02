@@ -169,6 +169,15 @@ class TelegramMenuAgent(TelegramCameraAgent):
         if stream is not None:
             report = replace(report, rtsp_url=stream.url,
                              rtsp_host=stream.host, rtsp_port=stream.port)
+        if stream is not None:
+            from linkvideo_vpn_helper.services.camera_live_probe import _cached_ffmpeg
+            if not _cached_ffmpeg():
+                from linkvideo_vpn_helper.services.archive_service_core import ArchiveService
+                try:
+                    ArchiveService(self.b2o.settings).ensure_ffmpeg()
+                except (OSError, ValueError, RuntimeError):
+                    # The normal probe will state that FFmpeg is not available.
+                    pass
         result = probe_live_camera(report)
         # The recent-archive fallback is not a CURRENT bitrate.
         current = result.source == "RTSP"
