@@ -45,6 +45,9 @@ class NewAgentPage(QWidget):
         self._preview_request = 0
         self._image_enhance = None
         self._video_streams = None
+        self.work_account = getattr(parent, "work_account", None)
+        if self.work_account is not None:
+            self.work_account.b2oChanged.connect(self._on_work_b2o_connected)
         self.operationReady.connect(self._on_ready)
         self.cameraPreviewReady.connect(self._on_preview_ready)
         self._build()
@@ -390,9 +393,15 @@ class NewAgentPage(QWidget):
         self.preview_btn.show()
         self.preview_btn.setEnabled(True)
         if not token:
-            self.preview_label.setText(
-                "Для превью войдите в B2O в разделе «Скачать архив»."
-            )
+            if self.work_account is not None:
+                self.preview_label.setText(
+                    "B2O подключается через рабочую учётную запись Helper…"
+                )
+                self.work_account.ensure_b2o()
+            else:
+                self.preview_label.setText(
+                    "Для превью войдите в B2O в разделе «Скачать архив»."
+                )
             return
 
         def work():
@@ -405,6 +414,18 @@ class NewAgentPage(QWidget):
                 result = None
             self.cameraPreviewReady.emit(generation, serial, result)
         self._spawn(work)
+
+    def _on_work_b2o_connected(self, ok: bool, message: str) -> None:
+        if self.camera is None:
+            return
+        if ok:
+            # A first preview may have been requested while automatic B2O
+            # login was still in progress. Retry only after authorization.
+            self._start_preview()
+        elif self.preview_label.isVisible():
+            self.preview_label.setText(
+                "Превью недоступно: B2O не подтвердил рабочую учётную запись."
+            )
 
     def _on_preview_ready(self, request_id, serial, payload):
         if (request_id != self._preview_request or self.camera is None
@@ -463,9 +484,9 @@ class NewAgentPage(QWidget):
         for tile in self.rotation_buttons:
             tile.setEnabled(found and not self._busy)
         self.bitrate.setEnabled(found and not self._busy)
-        self.bitrate_input.setEnabled(found and not self._busy)
+        self.bitrate_input.setEnabled(found and not self._busy and self._video_streams is not None)
         for _, preset in self.bitrate_presets:
-            preset.setEnabled(found and not self._busy)
+            preset.setEnabled(found and not self._busy and self._video_streams is not None)
         ready = found and not self._busy and bool(action)
         if action == "rotation":
             ready = ready and self._image_enhance is not None
@@ -560,9 +581,11 @@ class NewAgentPage(QWidget):
         self.camera = None
         self._image_enhance = None
         self._video_streams = None
-        self.action_combo.blockSignals(True)
-        self.action_combo.setCurrentIndex(0)
-        self.action_combo.blockSignals(False)
+        # Preserve the selected settings tab across camera searches. The new
+        # camera must re-fetch its own settings, not show those of the previous.
+        self.bitrate_input.clear()
+        self.bitrate_current.setText("Текущий битрейт ещё не загружен")
+        self._action_changed()
         self.result_summary.hide()
         self.result_empty.show()
         self.result_symbol.setText("…")
@@ -689,6 +712,10 @@ class NewAgentPage(QWidget):
             )
             self.status.done("Камера найдена", c.serial_number)
             self._start_preview()
+            # A camera search completes while the selected action stays the
+            # same. Explicitly re-query that camera: currentIndexChanged does
+            # not fire when switching serials with the same action selected.
+            self._action_changed()
         elif kind == "rotation_loaded":
             self._image_enhance = payload
             value = int(payload.get("ImageRotation", -1))
@@ -702,7 +729,12 @@ class NewAgentPage(QWidget):
             try:
                 value = str(self.service._main_video_encode_info(payload).get("BitRate", ""))
                 self.bitrate_current.setText(f"Сейчас: {value} Кбит/с")
-                self.bitrate.setValue(int(value))
+                rate = int(value)
+                self.bitrate.setValue(rate)
+                # setValue does not emit valueChanged if two cameras have the
+                # same bitrate; always update the visible editor as well.
+                self.bitrate_input.setText(str(rate))
+                self._sync_bitrate_presets()
                 self.status.done("Настройки потока получены", f"{value} Кбит/с")
             except (TypeError, ValueError, KeyError) as exc:
                 self._video_streams = None
@@ -729,6 +761,8 @@ class NewAgentPage(QWidget):
                         rate = int(self.service._main_video_encode_info(fresh)["BitRate"])
                         self.bitrate_current.setText(f"Сейчас: {rate} Кбит/с")
                         self.bitrate.setValue(rate)
+                        self.bitrate_input.setText(str(rate))
+                        self._sync_bitrate_presets()
                     except (TypeError, KeyError, ValueError):
                         self._video_streams = None
             if action in ("rotation", "bitrate") and fresh is None:

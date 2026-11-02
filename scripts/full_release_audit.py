@@ -78,8 +78,21 @@ _ALLOWED_PASS_SITES = {
     ("linkvideo_vpn_helper/ui/components_compat.py", "_close_popup", "RuntimeError"): 1,
     ("linkvideo_vpn_helper/ui/components_compat.py", "clear_effect", "Exception"): 1,
     ("linkvideo_vpn_helper/ui/components_compat.py", "popup_destroyed", "Exception"): 1,
+    # Orphan Qt widgets may be destroyed while the first-page guard releases.
+    ("linkvideo_vpn_helper/ui/first_page_window_guard.py", "release", "RuntimeError"): 1,
+    # Qt can delete an in-page camera card while its background probe emits.
+    # The signal guard discards only that late UI callback, not probe errors.
+    ("linkvideo_vpn_helper/ui/camera_detail_dialog.py", "_safe_emit", "RuntimeError"): 1,
+    # Privileged Telegram setup returns only a fixed sanitized error code;
+    # never send raw exceptions because they can expose secret file paths.
+    ("linkvideo_vpn_helper/services/telegram_service_runtime.py", "administer_operation", "Exception"): 1,
+    # Camera preview and FFmpeg bootstrap failures are non-fatal: camera
+    # card still reports media probe status. Credentials aren't logged.
+    ("linkvideo_vpn_helper/services/telegram_bot_menu.py", "_show_camera", "(OSError, ValueError, TypeError)"): 1,
+    ("linkvideo_vpn_helper/services/telegram_bot_menu.py", "_show_camera", "(OSError, ValueError, RuntimeError)"): 1,
     ("linkvideo_vpn_helper/ui/main_window.py", "_go", "Exception"): 3,
-    ("linkvideo_vpn_helper/ui/main_window.py", "_logout", "Exception"): 1,
+    # Only OS launch failures are intentionally ignored after credentials were cleared.
+    ("linkvideo_vpn_helper/ui/main_window.py", "_logout", "OSError"): 1,
     ("linkvideo_vpn_helper/ui/main_window.py", "_preload_next_page", "Exception"): 1,
     ("linkvideo_vpn_helper/ui/main_window.py", "_servers_changed", "Exception"): 2,
     ("linkvideo_vpn_helper/ui/main_window.py", "keyPressEvent", "Exception"): 1,

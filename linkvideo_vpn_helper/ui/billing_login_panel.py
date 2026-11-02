@@ -21,6 +21,7 @@ class _LoginEvents(QObject):
 
 class BillingLoginPanel(Card):
     sessionChanged = Signal(bool)
+    loginFailed = Signal(str)
     def __init__(self, settings: QSettings | None = None, parent=None, *,
                  login_checker=None, credential_store: BillingCredentialStore | None = None):
         super().__init__(kind="hero", parent=parent)
@@ -31,6 +32,8 @@ class BillingLoginPanel(Card):
         self._attempt = 0
         self._busy = False
         self._token = ""
+        self._central_login = False
+        self._active_username = ""
         self._events = _LoginEvents(self)
         self._events.done.connect(self._on_login_done)
         self._build()
@@ -204,8 +207,35 @@ class BillingLoginPanel(Card):
             self.status.set_status("Проверьте данные", "warning")
             self.message.setText("Введите логин и пароль корпоративного биллинга.")
             return
+        self._begin_login(request, central=False)
+
+    def login_with_work_account(self, credentials) -> bool:
+        """Validate the separate administrator account without a second UI form.
+
+        The RouterOS password is never sent to CRM. The administrator login
+        is shared with B2O, while their session tokens remain independent.
+        """
+        if self._busy or self._token:
+            return False
+        try:
+            request = BillingLoginRequest(
+                str(getattr(credentials, "username", "") or ""),
+                str(getattr(credentials, "password", "") or ""),
+            )
+        except Exception:
+            self.loginFailed.emit("Нет действующей рабочей учётной записи Helper.")
+            return False
+        # Central admin login must not reveal the DPAPI-decrypted password in
+        # the dormant legacy CRM form. Only the request object holds it.
+        self.password.clear()
+        self._begin_login(request, central=True)
+        return True
+
+    def _begin_login(self, request: BillingLoginRequest, *, central: bool) -> None:
         self._attempt += 1
         attempt = self._attempt
+        self._central_login = central
+        self._active_username = request.login.strip()
         self._drop_session()
         self._set_busy(True)
         self.status.set_status("Проверка…", "info")
@@ -227,15 +257,27 @@ class BillingLoginPanel(Card):
         if error is not None:
             self.status.set_status("Вход не подтверждён", "danger")
             self.message.setText(error)
+            self.loginFailed.emit(error)
             return
         token = getattr(outcome, "token", "")
         if not isinstance(token, str) or not token.strip():
             self.status.set_status("Вход не выполнен", "danger")
             self.message.setText("Сервер не выдал токен. Проверьте данные для входа.")
+            self.loginFailed.emit("CRM не выдал токен для рабочей учётной записи.")
             return
         self._token = token
         self.logout_btn.setEnabled(True)
         self.sessionChanged.emit(True)
+        if self._central_login:
+            # Administrator credentials are managed by the account panel,
+            # not by the legacy per-service form. Never erase saved DPAPI data
+            # on a successful CRM login.
+            self.status.set_status("Биллинг подключён", "success")
+            self.message.setText("Доступ подтверждён учётной записью админки.")
+            self.connected_account.setText(self._active_username)
+            self.login_form.hide()
+            self.connected_row.show()
+            return
         try:
             self.store.save(
                 self.username.text(), self.password.text(),

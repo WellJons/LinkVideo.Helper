@@ -26,16 +26,19 @@ class ArchiveDownloadPage(QWidget):
     authReady = Signal(object)
     downloadUpdate = Signal(object)
 
-    def __init__(self, service: ArchiveService, settings, parent=None):
+    def __init__(self, service: ArchiveService, settings, parent=None, *, work_account=None):
         super().__init__(parent)
         self.service = service
         self.settings = settings
+        self.work_account = work_account
         self.discovery: ArchiveDiscovery | None = None
         self._last_output: Path | None = None
         self._retry_action = None
         self._cancel_event = None
         self.discoveryReady.connect(self._on_discovery)
         self.authReady.connect(self._on_auth)
+        if self.work_account is not None:
+            self.work_account.b2oChanged.connect(self._on_work_account_b2o)
         self.downloadUpdate.connect(self._on_download_update)
         self._build()
 
@@ -97,6 +100,10 @@ class ArchiveDownloadPage(QWidget):
         self.auth_user.setObjectName("Muted")
         self.btn_auth = QPushButton("Войти в B2O")
         self.btn_auth.clicked.connect(self._authorize)
+        if self.work_account is not None:
+            # The only visible authentication controls are under the
+            # MikroTik user card. Archive pages show status, not login forms.
+            self.btn_auth.hide()
         auth.addWidget(self.auth_pill)
         auth.addWidget(self.auth_user)
         auth.addStretch(1)
@@ -285,13 +292,27 @@ class ArchiveDownloadPage(QWidget):
         if token:
             self.auth_pill.set_status("B2O подключён", "success")
             self.auth_user.setText(login)
-            self.btn_auth.setText("Сменить вход")
+            self.btn_auth.setText("Проверить доступ" if self.work_account else "Сменить вход")
         else:
-            self.auth_pill.set_status("Нужен вход B2O", "warning")
-            self.auth_user.setText("")
-            self.btn_auth.setText("Войти в B2O")
+            self.auth_pill.set_status("Нужен вход в админку" if self.work_account else "Нужен вход B2O", "warning")
+            self.auth_user.setText(self.work_account.username if self.work_account else "")
+            self.btn_auth.setText("Войти в админку" if self.work_account else "Войти в B2O")
 
     def _authorize(self):
+        if self.work_account is not None:
+            if not self.work_account.has_credentials:
+                self.task.show()
+                self.task.warning("Нужен вход в админку",
+                                  "Введите данные админки в едином окне авторизации.")
+                self.work_account.loginRequested.emit()
+                return
+            if self.work_account.b2o_busy:
+                return
+            self.btn_auth.setEnabled(False)
+            self.task.show()
+            self.task.busy("Авторизация B2O", "Подключаю рабочую учётную запись…")
+            self.work_account.ensure_b2o(force=True)
+            return
         dialog = B2OLoginDialog(self.service.b2o.login_name(), self)
         if not dialog.exec():
             return
@@ -308,6 +329,9 @@ class ArchiveDownloadPage(QWidget):
                 self.authReady.emit(exc)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _on_work_account_b2o(self, ok, message):
+        self._on_auth(None if ok else RuntimeError(message))
 
     def _on_auth(self, error):
         self.btn_auth.setEnabled(True)

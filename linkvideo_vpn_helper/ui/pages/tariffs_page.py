@@ -541,10 +541,11 @@ class TariffsPage(QWidget):
     recipientSearchReady = Signal(int, object, object)
 
     def __init__(self, parent=None, *, gateway: BillingGateway | None = None,
-                 settings: QSettings | None = None):
+                 settings: QSettings | None = None, work_account=None):
         super().__init__(parent)
         self.setObjectName("TariffsPage")
         self.settings = settings if settings is not None else QSettings("LinkVideo", "LinkVideo.Helper")
+        self.work_account = work_account
         self.gateway = gateway if gateway is not None else UnconfiguredBillingGateway()
         self._owned_transport: BillingTokenTransport | None = None
         self._request_id = 0
@@ -561,10 +562,15 @@ class TariffsPage(QWidget):
         self.operationReady.connect(self._on_operation)
         self.cameraPreviewReady.connect(self._on_camera_preview)
         self.billing_login.sessionChanged.connect(self._on_billing_session_changed)
-        # Wait until the whole page and listeners exist, then use only
-        # explicitly remembered Windows DPAPI credentials for a fresh login.
+        if self.work_account is not None:
+            self.billing_login.loginFailed.connect(self._on_work_login_failed)
+        # RouterOS verified the employee on startup. CRM checks the same
+        # credentials independently without another password prompt.
         if gateway is None:
-            QTimer.singleShot(0, self.billing_login.auto_login_remembered)
+            if self.work_account is not None:
+                QTimer.singleShot(0, self._connect_work_account)
+            else:
+                QTimer.singleShot(0, self.billing_login.auto_login_remembered)
 
     def _build(self):
         self.page_scroll, self.page_canvas, root = build_page_scaffold(
@@ -576,11 +582,14 @@ class TariffsPage(QWidget):
             "Клиенты и тарифы",
             "Поиск, камеры и управление тарифами.",
         ), 1)
-        self.auth_btn = QPushButton("Войти в CRM")
+        self.auth_btn = QPushButton("Подключить CRM" if self.work_account else "Войти в CRM")
         self.auth_btn.setObjectName("BillingShowLogin")
         self.auth_btn.setMinimumHeight(40)
         self.auth_btn.setProperty("role", "soft")
         self.auth_btn.clicked.connect(self._open_login)
+        if self.work_account is not None:
+            # CRM is managed from the sole work-account panel in the sidebar.
+            self.auth_btn.hide()
         header.addWidget(self.auth_btn, 0, Qt.AlignmentFlag.AlignTop)
         root.addLayout(header)
         # The CRM is a separate token-based service. B2O credentials can be
@@ -626,7 +635,11 @@ class TariffsPage(QWidget):
         title_row.addStretch(1)
         title_row.addWidget(self.api_status)
         search.addLayout(title_row)
-        self.auth_hint = QLabel("Беларусь и Казахстан · Вход в CRM через окно авторизации")
+        self.auth_hint = QLabel(
+            "Доступ осуществляется через учётную запись «Админка»"
+            if self.work_account else
+            "Беларусь и Казахстан · Вход в CRM через окно авторизации"
+        )
         self.auth_hint.setObjectName("TinyMuted")
         search.addWidget(self.auth_hint)
 
@@ -781,7 +794,7 @@ class TariffsPage(QWidget):
             self._owned_transport = transport
             self.gateway = BillingEditableGateway(transport)
             self.api_status.set_status("Авторизован", "success")
-            self.auth_btn.setText("Сменить вход")
+            self.auth_btn.setText("Переподключить CRM" if self.work_account else "Сменить вход")
             self.auth_hint.setText("CRM подключён · Беларусь и Казахстан")
             self.empty_hint.setText(
                 "Введите логин клиента или номер учётной записи для поиска в CRM."
@@ -789,8 +802,11 @@ class TariffsPage(QWidget):
         else:
             self.gateway = UnconfiguredBillingGateway()
             self.api_status.set_status("API не подключён", "warning")
-            self.auth_btn.setText("Войти в CRM")
-            self.auth_hint.setText("Для поиска и смены тарифа выполните вход в CRM")
+            self.auth_btn.setText("Повторить CRM" if self.work_account else "Войти в CRM")
+            self.auth_hint.setText(
+                "CRM не подключён · повторите вход рабочей учёткой"
+                if self.work_account else "Для поиска и смены тарифа выполните вход в CRM"
+            )
             self.empty_hint.setText(
                 "Войдите в корпоративный биллинг, чтобы искать клиентов."
             )
@@ -2238,8 +2254,39 @@ class TariffsPage(QWidget):
             return str(error)
         return "Нет ответа от сервера или произошла ошибка API. Проверьте соединение и повторите запрос."
 
+    def _connect_work_account(self):
+        if self.work_account is None:
+            return
+        if not self.work_account.has_credentials:
+            self.auth_hint.setText(
+                "Откройте «Админка» в боковой панели и войдите в аккаунт."
+            )
+            self.api_status.set_status("Нужен вход в админку", "warning")
+            return
+        if self.billing_login._busy:
+            return
+        if self.billing_login.login_verified:
+            self.billing_login._drop_session()
+        self.auth_hint.setText("Проверяю доступ рабочей учётной записи к CRM…")
+        self.api_status.set_status("Проверка CRM…", "neutral")
+        self.auth_btn.setText("Подключение…")
+        self.billing_login.login_with_work_account(self.work_account.credentials)
+
+    def _on_work_login_failed(self, message: str):
+        if self.work_account is None:
+            return
+        self.api_status.set_status("Нет доступа к CRM", "warning")
+        self.auth_btn.setText("Повторить CRM")
+        self.auth_hint.setText(
+            "Админка отклонила учётные данные или сервер недоступен. "
+            "Повторите подключение или проверьте свои права."
+        )
+
     def _open_login(self):
-        # Reuse the existing login panel and DPAPI-stored credentials.
+        if self.work_account is not None:
+            self._connect_work_account()
+            return
+        # Legacy standalone panel for offline UI tests only.
         if self.billing_login.login_verified:
             self.billing_login._logout()
         self.billing_dialog.open()

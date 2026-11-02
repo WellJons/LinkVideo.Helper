@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSettings, QSize, Qt, Signal, QTimer
@@ -50,10 +52,18 @@ class MainWindow(QMainWindow):
         self.registry = ServerRegistry(self.settings)
         self.search = FastSearchService(service)
         self.archive = ArchiveService(self.settings)
+        from linkvideo_vpn_helper.services.work_account_auth import WorkAccountAuth
+        self.work_account = WorkAccountAuth(credentials, self.settings, self)
+        self.work_account.b2oChanged.connect(self.work_account.on_b2o_result)
+        self.work_account.loginRequested.connect(self._open_admin_login)
         self.updater = UpdateService()
         self._page_cache: dict[str, QWidget] = {}
         self._current_key = ""
         self._collapsed = False
+        self._account_panel_open = False
+        self._admin_panel_open = False
+        self._work_b2o_ok: bool | None = None
+        self._work_crm_ok: bool | None = None
         self._first_show = True
         self._window_fade = None
         self.updateReady.connect(self._on_update_ready)
@@ -71,10 +81,13 @@ class MainWindow(QMainWindow):
         self._apply_theme()
         self._build()
         self._go("create")
-        # Build the remaining pages only after the main window is visible.
-        # This removes the one-frame native/unstyled widget flash on first opening a tab.
-        self._preload_queue = ["search", "vpn_servers", "archive", "diagnostics", "settings", "tariffs", "new_agent"]
-        QTimer.singleShot(350, self._preload_next_page)
+        # Build pages on first use. Creating seven hidden tool pages during
+        # startup triggers unnecessary native widgets and occasional transient
+        # process/window activity on operator workstations.
+        self._preload_queue = []
+        # Verify the B2O service with the same employee credentials without
+        # opening another login dialog or blocking the main window.
+        QTimer.singleShot(150, self.work_account.ensure_b2o)
         # Автоматически проверяем обновления после запуска, но не показываем
         # пользователю сообщения об успешной проверке/сетевой ошибке.
         QTimer.singleShot(2200, lambda: self._check_updates(startup=True))
@@ -138,19 +151,86 @@ class MainWindow(QMainWindow):
         self.user = QLabel(self.credentials.username)
         self.user.setToolTip(self.credentials.username)
         self.user.setObjectName("Value")
-        role = QLabel("MikroTik")
+        role = QLabel("MikroTik · подключён")
         role.setObjectName("TinyMuted")
         user_text.addWidget(self.user)
         user_text.addWidget(role)
-        self.logout = QPushButton("↪")
+        self.logout = QPushButton("⌄")
+        self.logout.setObjectName("WorkAccountToggle")
         self.logout.setProperty("role", "icon")
-        self.logout.setToolTip("Выйти из учётной записи")
-        self.logout.clicked.connect(self._logout)
+        self.logout.setToolTip("Рабочая учётная запись и вход в сервисы")
+        self.logout.clicked.connect(self._toggle_work_account_panel)
         ul.addWidget(avatar)
         ul.addLayout(user_text, 1)
         ul.addWidget(self.logout)
         sl.addWidget(user_card)
+        # Two distinct accounts: MikroTik and administrator. Their usernames
+        # and passwords never flow into each other's authentication endpoints.
+        self.work_account_panel = Card(subtle=True)
+        self.work_account_panel.setObjectName("WorkAccountPanel")
+        router_layout = QVBoxLayout(self.work_account_panel)
+        router_layout.setContentsMargins(10, 10, 10, 10)
+        self.work_signout = QPushButton("Сменить аккаунт MikroTik")
+        self.work_signout.setObjectName("WorkAccountSignOut")
+        self.work_signout.setProperty("role", "soft")
+        self.work_signout.clicked.connect(self._logout)
+        router_layout.addWidget(self.work_signout)
+        self.work_account_panel.hide()
+        sl.addWidget(self.work_account_panel)
+
+        self.admin_card = Card(subtle=True)
+        self.admin_card.setObjectName("SidebarAdminCard")
+        al = QHBoxLayout(self.admin_card)
+        al.setContentsMargins(11, 9, 9, 9)
+        al.setSpacing(8)
+        admin_avatar = QLabel("A")
+        admin_avatar.setObjectName("Avatar")
+        admin_avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        admin_avatar.setFixedSize(32, 32)
+        admin_text = QVBoxLayout()
+        admin_text.setSpacing(0)
+        self.admin_name = QLabel("Админка")
+        self.admin_name.setObjectName("Value")
+        self.admin_status = QLabel("Не подключена")
+        self.admin_status.setObjectName("TinyMuted")
+        self.admin_status.setWordWrap(True)
+        admin_text.addWidget(self.admin_name)
+        admin_text.addWidget(self.admin_status)
+        self.admin_toggle = QPushButton("⌄")
+        self.admin_toggle.setObjectName("AdminAccountToggle")
+        self.admin_toggle.setProperty("role", "icon")
+        self.admin_toggle.setToolTip("Вход и управление учётной записью админки")
+        self.admin_toggle.clicked.connect(self._toggle_admin_panel)
+        al.addWidget(admin_avatar)
+        al.addLayout(admin_text, 1)
+        al.addWidget(self.admin_toggle)
+        sl.addWidget(self.admin_card)
+
+        self.admin_account_panel = Card(subtle=True)
+        self.admin_account_panel.setObjectName("AdminAccountPanel")
+        admin_actions = QVBoxLayout(self.admin_account_panel)
+        admin_actions.setContentsMargins(10, 10, 10, 10)
+        admin_actions.setSpacing(7)
+        self.admin_login_btn = QPushButton("Войти в админку")
+        self.admin_login_btn.setObjectName("AdminAccountLogin")
+        self.admin_login_btn.setProperty("role", "primary")
+        self.admin_login_btn.clicked.connect(self._open_admin_login)
+        admin_actions.addWidget(self.admin_login_btn)
+        self.admin_retry_btn = QPushButton("Проверить подключение")
+        self.admin_retry_btn.setObjectName("AdminAccountRetry")
+        self.admin_retry_btn.setProperty("role", "soft")
+        self.admin_retry_btn.clicked.connect(self._reconnect_work_billing)
+        admin_actions.addWidget(self.admin_retry_btn)
+        self.admin_forget_btn = QPushButton("Забыть данные админки")
+        self.admin_forget_btn.setObjectName("AdminAccountForget")
+        self.admin_forget_btn.setProperty("role", "soft")
+        self.admin_forget_btn.clicked.connect(self._forget_admin)
+        admin_actions.addWidget(self.admin_forget_btn)
+        self.admin_account_panel.hide()
+        sl.addWidget(self.admin_account_panel)
         sl.addSpacing(10)
+        self.work_account.b2oChanged.connect(self._on_work_b2o_status)
+        self._refresh_work_billing_status()
 
         self.work_label = QLabel("РАБОТА")
         self.work_label.setObjectName("NavSection")
@@ -206,22 +286,27 @@ class MainWindow(QMainWindow):
             page = CreateClientPage(self.service, self.search, self.credentials, self.registry, self)
         elif key == "search":
             from linkvideo_vpn_helper.ui.pages.search_manage_page import SearchManagePage
-            page = SearchManagePage(self.service, self.search, self.credentials, self.registry, self)
+            page = SearchManagePage(
+                self.service, self.search, self.credentials, self.registry, self,
+                work_account=self.work_account,
+            )
         elif key == "vpn_servers":
             from linkvideo_vpn_helper.ui.pages.vpn_servers_page import VPNServersPage
             page = VPNServersPage(self.service, self.credentials, self.registry, self)
         elif key == "archive":
             from linkvideo_vpn_helper.ui.pages.archive_download_page import ArchiveDownloadPage
-            page = ArchiveDownloadPage(self.archive, self.settings, self)
+            page = ArchiveDownloadPage(self.archive, self.settings, self, work_account=self.work_account)
         elif key == "diagnostics":
             from linkvideo_vpn_helper.ui.pages.archive_diagnostics_page import ArchiveDiagnosticsPage
-            page = ArchiveDiagnosticsPage(self.archive, self.settings, self)
+            page = ArchiveDiagnosticsPage(self.archive, self.settings, self, work_account=self.work_account)
         elif key == "inactive":
             from linkvideo_vpn_helper.ui.pages.inactive_clients_page import InactiveClientsPage
             page = InactiveClientsPage(self.service, self.credentials, self.registry, self)
         elif key == "tariffs":
             from linkvideo_vpn_helper.ui.pages.tariffs_page import TariffsPage
-            page = TariffsPage(self, settings=self.settings)
+            page = TariffsPage(self, settings=self.settings, work_account=self.work_account)
+            page.billing_login.sessionChanged.connect(self._on_work_crm_status)
+            page.billing_login.loginFailed.connect(lambda _message: self._on_work_crm_status(False))
         elif key == "new_agent":
             from linkvideo_vpn_helper.ui.pages.new_agent_page import NewAgentPage
             page = NewAgentPage(self.settings, self.credentials, self)
@@ -238,9 +323,30 @@ class MainWindow(QMainWindow):
     def _ensure_page(self, key: str) -> QWidget:
         page = self._page_cache.get(key)
         if page is None:
-            page = self._factory(key)
-            self._page_cache[key] = page
-            self.stack.addPage(key, page)
+            # Timeline for diagnosing transient Windows CMD windows on first
+            # opening of a tab. Log only the fixed navigation key, not data.
+            logger = logging.getLogger("linkvideo.helper")
+            started = time.monotonic()
+            logger.info("PAGE | First open (%s) | begin", key)
+            from linkvideo_vpn_helper.ui.first_page_window_guard import (
+                FirstPageWindowGuard,
+            )
+            guard = FirstPageWindowGuard()
+            app = QApplication.instance()
+            if app is not None:
+                app.installEventFilter(guard)
+            try:
+                page = self._factory(key)
+                self._page_cache[key] = page
+                self.stack.addPage(key, page)
+            finally:
+                if app is not None:
+                    app.removeEventFilter(guard)
+                guard.release()
+            logger.info(
+                "PAGE | First open (%s) | built in %.0f ms",
+                key, (time.monotonic() - started) * 1000,
+            )
         return page
 
     def _preload_next_page(self):
@@ -369,6 +475,9 @@ class MainWindow(QMainWindow):
         self.logo.setVisible(not collapsed)
         self.logo_sub.setVisible(not collapsed)
         self.user_card.setVisible(not collapsed)
+        self.work_account_panel.setVisible(not collapsed and self._account_panel_open)
+        self.admin_card.setVisible(not collapsed)
+        self.admin_account_panel.setVisible(not collapsed and self._admin_panel_open)
         self.work_label.setVisible(not collapsed)
         self.version.setVisible(not collapsed)
         self.brand_mark.setVisible(True)
@@ -456,6 +565,123 @@ class MainWindow(QMainWindow):
             self.toast.showMessage("Не удалось запустить установщик", str(exc), 5500)
             self._position_toast()
 
+    def _toggle_work_account_panel(self):
+        self._account_panel_open = not self._account_panel_open
+        self.work_account_panel.setVisible(self._account_panel_open and not self._collapsed)
+        self.logout.setText("⌃" if self._account_panel_open else "⌄")
+
+    def _toggle_admin_panel(self):
+        self._admin_panel_open = not self._admin_panel_open
+        self.admin_account_panel.setVisible(
+            self._admin_panel_open and not self._collapsed
+        )
+        self.admin_toggle.setText("⌃" if self._admin_panel_open else "⌄")
+
+    def _refresh_work_billing_status(self):
+        account = self.work_account
+        b2o, crm = self._work_b2o_ok, self._work_crm_ok
+        self.admin_name.setText(account.username or "Админка")
+        if not account.has_credentials:
+            status = "Не подключена"
+        elif b2o is False and crm is False:
+            status = "Нет доступа"
+        elif b2o is False or crm is False:
+            status = "Часть функций недоступна"
+        elif b2o is True and crm is True:
+            status = "Подключена"
+        elif b2o is True:
+            status = "Камеры подключены"
+        elif crm is True:
+            status = "Клиенты подключены"
+        else:
+            status = "Проверка доступа…"
+        self.admin_status.setText(status)
+        self.admin_status.setToolTip(
+            "Камеры: " + ("подключены" if b2o is True else
+                           "нет доступа" if b2o is False else "не проверены") +
+            "\\nКлиенты и тарифы: " + ("подключены" if crm is True else
+                                       "нет доступа" if crm is False else "не проверены")
+        )
+        page = self._page_cache.get("tariffs")
+        busy = account.b2o_busy or bool(page and page.billing_login._busy)
+        self.admin_login_btn.setText(
+            "Сменить аккаунт" if account.has_credentials else "Войти в админку"
+        )
+        self.admin_login_btn.setEnabled(not busy)
+        self.admin_retry_btn.setEnabled(account.has_credentials and not busy)
+        self.admin_forget_btn.setEnabled(account.has_credentials and not busy)
+
+    def _open_admin_login(self):
+        if self.work_account.b2o_busy:
+            return
+        from linkvideo_vpn_helper.ui.admin_login_dialog import AdminLoginDialog
+        dialog = AdminLoginDialog(self.work_account.username, parent=self)
+        if not dialog.exec():
+            return
+        username, password, remember = dialog.credentials()
+        page = self._page_cache.get("tariffs")
+        if page is not None and page.billing_login._busy:
+            return
+        if page is not None:
+            page.billing_login._logout()
+        try:
+            self.work_account.set_admin_credentials(
+                username, password, remember=remember
+            )
+        except (ValueError, RuntimeError):
+            self.admin_status.setText("Не удалось изменить учётную запись")
+            return
+        self._work_b2o_ok = None
+        self._work_crm_ok = None
+        self._refresh_work_billing_status()
+        self.work_account.ensure_b2o(force=True)
+        if page is not None:
+            page._connect_work_account()
+        self._refresh_work_billing_status()
+
+    def _forget_admin(self):
+        if self.work_account.b2o_busy:
+            return
+        page = self._page_cache.get("tariffs")
+        if page is not None and page.billing_login._busy:
+            return
+        if page is not None:
+            page.billing_login._logout()
+        self.work_account.clear(forget=True)
+        self._work_b2o_ok = None
+        self._work_crm_ok = None
+        self._refresh_work_billing_status()
+
+    def _on_work_b2o_status(self, ok: bool, error: str):
+        self._work_b2o_ok = bool(ok)
+        self._refresh_work_billing_status()
+
+    def _on_work_crm_status(self, ok: bool):
+        self._work_crm_ok = bool(ok)
+        if ok:
+            self.work_account.confirm_credentials()
+        self._refresh_work_billing_status()
+
+    def _reconnect_work_billing(self):
+        if not self.work_account.has_credentials:
+            self._open_admin_login()
+            return
+        if self.work_account.b2o_busy:
+            return
+        page = self._page_cache.get("tariffs")
+        if page is not None and page.billing_login._busy:
+            return
+        self._work_b2o_ok = None
+        self._work_crm_ok = None
+        self._refresh_work_billing_status()
+        self.work_account.ensure_b2o(force=True)
+        # Only create CRM's page on explicit retry. The existing gateway owns
+        # the resulting CRM token, so it is not silently discarded.
+        page = self._ensure_page("tariffs")
+        if page.billing_login.login_verified or not page.billing_login._busy:
+            page._connect_work_account()
+        self._refresh_work_billing_status()
+
     def _logout(self):
         dialog = ConfirmDialog(
             "Выйти из LinkVideo.Helper",
@@ -466,17 +692,21 @@ class MainWindow(QMainWindow):
         )
         if not dialog.exec():
             return
-        for key in ("username", "password"):
-            self.settings.remove(key)
-        self.settings.setValue("remember", False)
+        from linkvideo_vpn_helper.services.work_login_storage import clear_work_login
+        self.work_account.clear()
+        clear_work_login(self.settings, QSettings("LinkVideo", "VPNHelper"))
+        # If the next launch is interrupted, the old account still cannot be
+        # re-imported; the explicit switch-account flag also disables auto-login.
+        arguments = ([sys.executable, "--signed-out"] if getattr(sys, "frozen", False)
+                     else [sys.executable, "-m", "linkvideo_vpn_helper.app", "--signed-out"])
         try:
-            if getattr(sys, "frozen", False):
-                subprocess.Popen([sys.executable], creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
-            else:
-                subprocess.Popen(
-                    [sys.executable, "-m", "linkvideo_vpn_helper.app"],
-                    cwd=str(Path(__file__).resolve().parents[2]),
-                )
-        except Exception:
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+            subprocess.Popen(
+                arguments,
+                cwd=None if getattr(sys, "frozen", False) else str(Path(__file__).resolve().parents[2]),
+                creationflags=flags,
+            )
+        except OSError:
+            # Credentials are already cleared; restart failure must not undo logout.
             pass
         QApplication.quit()

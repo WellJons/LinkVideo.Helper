@@ -9,7 +9,7 @@ from PySide6.QtCore import QSettings, QEasingCurve, QPointF, QPropertyAnimation,
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
     QBoxLayout, QDialog, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
+    QListWidgetItem, QPushButton, QScrollArea, QSizePolicy, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from linkvideo_vpn_helper.services.errors import classify_exception
@@ -21,6 +21,7 @@ from linkvideo_vpn_helper.ui.components import (
     ServerPicker, StatusPill, TaskStatus, button_feedback, build_page_scaffold,
 )
 from linkvideo_vpn_helper.ui.dialogs import AddServerDialog, ConfirmDialog, PasswordDialog
+from linkvideo_vpn_helper.ui.camera_diagnostics_panel import CameraDiagnosticsPanel
 
 
 class TrafficGraph(QWidget):
@@ -238,12 +239,13 @@ class SearchManagePage(QWidget):
 
     MAX_CONTENT_WIDTH = 1280
 
-    def __init__(self, service: VPNService, search: FastSearchService, credentials: SessionCredentials, registry: ServerRegistry, parent=None):
+    def __init__(self, service: VPNService, search: FastSearchService, credentials: SessionCredentials, registry: ServerRegistry, parent=None, *, work_account=None):
         super().__init__(parent)
         self.service = service
         self.search = search
         self.credentials = credentials
         self.registry = registry
+        self.work_account = work_account
         self.current: ClientRecord | None = None
         self._deleted_current = None
         self._deleted_lookup_query = ""
@@ -463,12 +465,50 @@ class SearchManagePage(QWidget):
         workspace_l.addWidget(self.detail_panel, 12)
 
         self.workspace.setMinimumHeight(545)
+        # The sibling camera tab must not stretch VPN results into enormous
+        # blank columns. Keep both profile and action cards within the VPN
+        # workspace viewport (their own QScrollAreas handle overflow).
+        self.workspace.setMaximumHeight(820)
         self.workspace.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
         self.page_scroll.verticalScrollBar().setSingleStep(26)
         self.page_layout.addWidget(self.workspace, 1)
+        # Two task-focused workspaces: VPN operations and camera diagnostics.
+        # Moving existing widgets preserves all search/management controls and
+        # avoids adding a tab that would be accessible only after VPN lookup.
+        self.main_tabs = QTabWidget(self)
+        self.main_tabs.setObjectName("SettingsTabs")
+        self.main_tabs.setDocumentMode(True)
+        self.vpn_workspace_tab = QWidget()
+        vpn_content = QVBoxLayout(self.vpn_workspace_tab)
+        vpn_content.setContentsMargins(0, 12, 0, 0)
+        vpn_content.setSpacing(12)
+        for widget in (self.search_form, self.compact_search, self.workspace):
+            self.page_layout.removeWidget(widget)
+            vpn_content.addWidget(widget, 1 if widget is self.workspace else 0)
+        self.main_tabs.addTab(self.vpn_workspace_tab, "VPN · поиск и управление")
+        self.camera_diagnostics = CameraDiagnosticsPanel(
+            self.registry.settings, self, work_account=self.work_account
+        )
+        self.main_tabs.addTab(self.camera_diagnostics, "Информация по камере")
+        # Camera results are a full workspace, not an embedded 200px list.
+        # When many cameras are returned, scroll the existing page canvas.
+        self.main_tabs.currentChanged.connect(self._camera_tab_resized)
+        self.page_layout.addWidget(self.main_tabs, 1)
+        self._camera_tab_resized(self.main_tabs.currentIndex())
         self._panel_anim = None
+
+    def _camera_tab_resized(self, index: int):
+        # The QTabWidget contains two independent workspaces. Size it to the
+        # selected page instead of inheriting the camera result count as a
+        # permanent minimum height for the VPN search page.
+        camera = index == self.main_tabs.indexOf(self.camera_diagnostics)
+        self.main_tabs.setMinimumHeight(760 if camera else 720)
+        self.main_tabs.setMaximumHeight(850 if camera else 900)
+        if not camera:
+            self.workspace.setMaximumHeight(820)
+        self.main_tabs.updateGeometry()
 
     def _return_to_search(self):
         self._close_client_view()
@@ -1302,7 +1342,7 @@ class SearchManagePage(QWidget):
         cl = QVBoxLayout(control)
         cl.setContentsMargins(4, 2, 4, 6)
         cl.setSpacing(8)
-        ct = QLabel("Управление")
+        ct = QLabel("Действия с клиентом")
         ct.setObjectName("SectionTitle")
         cl.addWidget(ct)
 
@@ -1311,6 +1351,10 @@ class SearchManagePage(QWidget):
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(8)
 
+        quick_title = QLabel("Основное")
+        quick_title.setObjectName("CardTitle")
+        grid.addWidget(quick_title, 0, 0, 1, 2)
+
         self.copy_data_button = QPushButton("Копировать данные")
         self.copy_data_button.setProperty("role", "primary")
         self.copy_data_button.clicked.connect(self._copy)
@@ -1318,39 +1362,45 @@ class SearchManagePage(QWidget):
         refresh.clicked.connect(self._refresh)
         monitor = QPushButton("Открыть мониторинг")
         monitor.clicked.connect(self._monitor)
-        grid.addWidget(self.copy_data_button, 0, 0)
-        grid.addWidget(refresh, 0, 1)
-        grid.addWidget(monitor, 1, 0, 1, 2)
+        grid.addWidget(self.copy_data_button, 1, 0)
+        grid.addWidget(refresh, 1, 1)
+        grid.addWidget(monitor, 2, 0, 1, 2)
 
+        ports_title = QLabel("Управление NAT-портами")
+        ports_title.setObjectName("CardTitle")
+        grid.addWidget(ports_title, 3, 0, 1, 2)
         self.add_count = CounterControl(1, 1, 14)
         add = QPushButton("Добавить порты")
         add.setProperty("role", "primary")
         add.clicked.connect(self._add_ports)
-        grid.addWidget(self.add_count, 2, 0)
-        grid.addWidget(add, 2, 1)
+        grid.addWidget(self.add_count, 4, 0)
+        grid.addWidget(add, 4, 1)
 
         self.toggle_port_button = QPushButton("Выберите порт")
         self.toggle_port_button.clicked.connect(self._toggle_selected_port)
         self.remove_port_button = QPushButton("Удалить порт")
         self.remove_port_button.clicked.connect(self._remove_selected_port)
-        grid.addWidget(self.toggle_port_button, 3, 0)
-        grid.addWidget(self.remove_port_button, 3, 1)
+        grid.addWidget(self.toggle_port_button, 5, 0)
+        grid.addWidget(self.remove_port_button, 5, 1)
 
+        account_title = QLabel("Учётная запись")
+        account_title.setObjectName("CardTitle")
+        grid.addWidget(account_title, 6, 0, 1, 2)
         self.password_edit = QLineEdit()
         self.password_edit.setPlaceholderText("Новый пароль или пусто для генерации")
         self.password_edit.setMinimumWidth(0)
         change = QPushButton("Сменить пароль")
         change.clicked.connect(self._password_inline)
-        grid.addWidget(self.password_edit, 4, 0)
-        grid.addWidget(change, 4, 1)
+        grid.addWidget(self.password_edit, 7, 0)
+        grid.addWidget(change, 7, 1)
 
         account_toggle = QPushButton("Вкл./выкл. учётку")
         account_toggle.clicked.connect(self._toggle_account)
         delete = QPushButton("Удалить клиента")
         delete.setProperty("role", "danger")
         delete.clicked.connect(self._delete)
-        grid.addWidget(account_toggle, 5, 0)
-        grid.addWidget(delete, 5, 1)
+        grid.addWidget(account_toggle, 8, 0)
+        grid.addWidget(delete, 8, 1)
 
         # Two balanced columns fit into the account workspace. Three columns
         # previously pushed the last buttons past the card's right edge.

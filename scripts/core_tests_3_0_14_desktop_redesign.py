@@ -124,7 +124,8 @@ with tempfile.TemporaryDirectory() as temp:
     install_cloud_settings_ui()
     settings_page = SettingsPage(cfg, registry, service, creds)
     assert isinstance(settings_page.settings_tabs, QTabWidget)
-    assert settings_page.settings_tabs.count() == 5
+    assert settings_page.settings_tabs.count() == 6
+    assert settings_page.settings_tabs.indexOf(settings_page.telegram_tab) >= 0
     assert settings_page.appearance_card is not None
     assert settings_page.servers_card is not None
     assert settings_page.cloud_card is not None
