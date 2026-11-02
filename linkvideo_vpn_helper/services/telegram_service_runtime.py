@@ -271,6 +271,51 @@ def clear_service_b2o_credentials():
     (config_file().parent / "b2o_service.json").unlink(missing_ok=True)
 
 
+def save_service_vpn_credentials(login: str, password: str) -> None:
+    """Store the *bot worker's* MikroTik credential in local machine DPAPI.
+
+    Values are supplied interactively through UAC, never embedded in Python
+    source, GitHub, installer, logs or task arguments.
+    """
+    login = str(login or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.@-]{2,100}", login):
+        raise ValueError("Неверный логин MikroTik.")
+    if not isinstance(password, str) or not 1 <= len(password) <= 256:
+        raise ValueError("Укажите пароль MikroTik.")
+    _ensure_folders()
+    path = config_file().parent / "vpn_service.json"
+    pending = path.with_suffix(".new")
+    pending.write_text(json.dumps({
+        "username_machine": _protect_machine(login),
+        "password_machine": _protect_machine(password),
+    }, ensure_ascii=False), encoding="utf-8")
+    _restrict(pending, members_can_read=False)
+    pending.replace(path)
+    _restrict(path, members_can_read=False)
+
+
+def service_vpn_credentials():
+    """Return SessionCredentials only to the background service process."""
+    from linkvideo_vpn_helper.services.vpn_service import SessionCredentials
+    path = config_file().parent / "vpn_service.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return SessionCredentials(
+            _unprotect_machine(str(data["username_machine"])),
+            _unprotect_machine(str(data["password_machine"])),
+        )
+    except (OSError, KeyError, ValueError, TypeError) as exc:
+        raise RuntimeError("MikroTik для Telegram-бота ещё не настроен.") from exc
+
+
+def service_vpn_configured() -> bool:
+    return (config_file().parent / "vpn_service.json").is_file()
+
+
+def clear_service_vpn_credentials():
+    (config_file().parent / "vpn_service.json").unlink(missing_ok=True)
+
+
 def _save_public_link(link: str):
     url = clean_bot_link(link)
     _ensure_folders()
@@ -385,6 +430,15 @@ def administer_operation(source_path: str):
         elif operation == "b2o_clear":
             clear_service_b2o_credentials()
             response = "Автономная авторизация B2O удалена."
+        elif operation == "vpn_configure":
+            save_service_vpn_credentials(
+                str(data.get("vpn_login") or ""),
+                str(data.get("vpn_password") or ""),
+            )
+            response = "MikroTik для фонового бота сохранён защищённо."
+        elif operation == "vpn_clear":
+            clear_service_vpn_credentials()
+            response = "Авторизация MikroTik для бота удалена."
         elif operation == "add":
             user_id = int(data["telegram_id"])
             InviteStore(state_database_path()).grant(user_id)
@@ -414,6 +468,8 @@ def administer_operation(source_path: str):
         category = (
             "B2O отклонил учётные данные или недоступен."
             if operation == "b2o_configure" else
+            "Не удалось сохранить данные MikroTik."
+            if operation == "vpn_configure" else
             "Ошибка прав Windows или проверки фоновой задачи."
             if operation in ("configure", "stop", "save_link") else
             "Не удалось изменить список доступа/проверить Telegram."
