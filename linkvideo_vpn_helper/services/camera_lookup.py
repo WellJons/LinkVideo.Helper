@@ -146,3 +146,107 @@ def direct_choice(text: str, country_id: int) -> CameraChoice:
         camera_id=query, operator_id=operator,
         country=B2OService.operator_country(operator), label=query,
     )
+
+
+
+def search_all_cameras(
+    query: str, b2o: B2OService, credentials, *,
+    login_search=search_by_login, detail_reader=None, serial_resolver=None,
+) -> tuple[CameraChoice, ...]:
+    """Search exact camera IDs, exact serials and customer login automatically.
+
+    Never report a merely syntactically valid ID as a found camera. All
+    candidate IDs must be verified against the protected B2O detail API.
+    Results are deduplicated by operator+camera number; a CRM-derived name,
+    customer and tariff take precedence over a bare B2O ID.
+    """
+    from linkvideo_vpn_helper.services.camera_diagnostics import inspect_camera
+    from linkvideo_vpn_helper.services.agent_b2o_preview import b2o_camera_for_serial
+
+    query = str(query or "").strip()
+    if not query or len(query) > 100 or not _LOGIN.fullmatch(query):
+        raise CameraSearchError("Введите логин клиента, ID или серийный номер.")
+    detail_reader = detail_reader or inspect_camera
+    serial_resolver = serial_resolver or b2o_camera_for_serial
+    token = b2o.token()
+    if not token:
+        raise CameraSearchError("Войдите в учётную запись «Админка».")
+
+    results: dict[tuple[int, str], CameraChoice] = {}
+    problems: list[str] = []
+    explicit_id = looks_like_camera_identifier(query)
+    prefix = query.lower().startswith(("linkvideo_", "linkvideoby_", "linkvideokz_"))
+
+    def remember(choice: CameraChoice):
+        numeric, _ = b2o.normalize_camera_id(choice.camera_id, choice.operator_id)
+        key = (choice.operator_id, numeric)
+        if key not in results or (choice.customer_login and
+                                  not results[key].customer_login):
+            results[key] = choice
+
+    if explicit_id:
+        operators = (
+            (b2o.resolve_operator_id(query, 241),)
+            if prefix else (241, 1741, 1721)
+        )
+        for operator in operators:
+            try:
+                report = detail_reader(b2o, query, operator, with_network=False)
+                # Refuse empty error objects masquerading as a camera record.
+                row = getattr(report, "metadata", {}) or {}
+                valid = any(str(row.get(k) or "").strip() for k in (
+                    "id_camera", "camera_name", "name", "serial_number",
+                    "serial", "main_stream_name", "server_name",
+                ))
+                if not valid:
+                    continue
+                number, label = b2o.normalize_camera_id(report.camera_id, operator)
+                # For an ID match, the returned number must match exactly.
+                expected, _ = b2o.normalize_camera_id(query, operator)
+                if number != expected:
+                    continue
+                remember(CameraChoice(
+                    camera_id=number, operator_id=operator,
+                    country=b2o.operator_country(operator),
+                    label=report.name or label,
+                    status=report.status,
+                ))
+            except Exception:
+                continue
+
+    # Numeric strings can be device serial numbers, not camera IDs.
+    # The existing resolver accepts only exact serial matches, including
+    # detail checks on rows returned by the fuzzy inventory search.
+    if not prefix:
+        try:
+            found = serial_resolver(query, token, b2o)
+            if found:
+                country, number = found
+                operator = {"Россия": 241, "Беларусь": 1741,
+                            "Казахстан": 1721}.get(country)
+                if operator:
+                    report = detail_reader(b2o, number, operator, with_network=False)
+                    remember(CameraChoice(
+                        camera_id=number, operator_id=operator, country=country,
+                        label=report.name or report.camera_id,
+                        status=report.status,
+                    ))
+        except Exception:
+            # A missing/unauthorized serial endpoint does not invalidate
+            # positive results from other exact search modes.
+            pass
+
+    if not prefix:
+        try:
+            for choice in login_search(query, b2o, credentials):
+                remember(choice)
+        except CameraSearchError as exc:
+            problems.append(str(exc))
+        except Exception:
+            problems.append("Поиск клиентов недоступен.")
+
+    if results:
+        return tuple(results.values())
+    if problems:
+        raise CameraSearchError(problems[0])
+    return ()
