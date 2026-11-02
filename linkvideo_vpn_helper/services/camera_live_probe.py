@@ -13,6 +13,7 @@ import re
 import time
 import os
 import subprocess
+import threading
 from pathlib import Path
 
 from linkvideo_vpn_helper.services.camera_diagnostics import (
@@ -21,6 +22,25 @@ from linkvideo_vpn_helper.services.camera_diagnostics import (
 
 MAX_PLAYLIST = 128 * 1024
 MAX_SEGMENT = 6 * 1024 * 1024
+_RTSP_STATUS = threading.local()
+
+
+def _rtsp_error_category(raw: bytes) -> str:
+    """Return only fixed categories; FFmpeg stderr contains credentialed URLs."""
+    text = (raw or b"")[:32768].lower()
+    if b"401" in text or b"unauthorized" in text or b"403" in text:
+        return "RTSP: отказ в авторизации камеры."
+    if b"connection refused" in text or b"cannot connect" in text:
+        return "RTSP: подключение отклонено сервером."
+    if b"timed out" in text or b"timeout" in text:
+        return "RTSP: превышено время ожидания ответа."
+    if b"404" in text or b"not found" in text:
+        return "RTSP: адрес видеопотока не найден."
+    if b"invalid data" in text or b"could not find codec parameters" in text:
+        return "RTSP: видеоданные не удалось распознать."
+    if b"output file #0 does not contain any stream" in text:
+        return "RTSP: сервер не передал видеодорожку."
+    return "RTSP: за время проверки не удалось получить видеопакеты."
 
 
 @dataclass(frozen=True)
@@ -223,11 +243,14 @@ def _probe_rtsp(report: CameraDiagnostics, *, ffmpeg_path: str = "") -> RtspStat
     The URL can contain a password. Do not log the command, ffmpeg stderr
     or the URL. No extra process window is allowed on Windows.
     """
+    _RTSP_STATUS.message = ""
     url = str(report.rtsp_url or "")
     if not url.startswith("rtsp://"):
+        _RTSP_STATUS.message = "RTSP: админка не предоставила поддерживаемую ссылку."
         return None
     ffmpeg = ffmpeg_path or _cached_ffmpeg()
     if not ffmpeg:
+        _RTSP_STATUS.message = "RTSP: FFmpeg не установлен."
         return None
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     cmd = [
@@ -242,23 +265,34 @@ def _probe_rtsp(report: CameraDiagnostics, *, ffmpeg_path: str = "") -> RtspStat
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             check=False, timeout=14, creationflags=flags,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired:
+        _RTSP_STATUS.message = "RTSP: превышено время ожидания видеопакетов."
         return None
-    if result.returncode != 0 or not 50_000 <= len(result.stdout) <= 12_000_000:
+    except OSError:
+        _RTSP_STATUS.message = "RTSP: не удалось запустить FFmpeg."
+        return None
+    if result.returncode != 0:
+        _RTSP_STATUS.message = _rtsp_error_category(result.stderr)
+        return None
+    if not 50_000 <= len(result.stdout) <= 12_000_000:
+        _RTSP_STATUS.message = "RTSP: получено недостаточно видеоданных."
         return None
 
     progress = result.stderr
     times = re.findall(rb"(?:out_time_us|out_time_ms)=(\d+)", progress)
     frames = re.findall(rb"(?:^|\n)frame=(\d+)", progress)
     if not times or not frames:
+        _RTSP_STATUS.message = "RTSP: FFmpeg не вернул счётчики кадров."
         return None
     duration = int(times[-1]) / 1_000_000
     frame_count = int(frames[-1])
     if not 0.5 <= duration <= 7.0 or frame_count <= 0:
+        _RTSP_STATUS.message = "RTSP: недостаточно кадров для замера."
         return None
     bitrate = len(result.stdout) * 8.0 / duration / 1_000_000
     fps = frame_count / duration
     if not 0.02 <= bitrate <= 80 or not 0.2 <= fps <= 240:
+        _RTSP_STATUS.message = "RTSP: получены некорректные параметры потока."
         return None
 
     # ffmpeg prints stream descriptions for INPUT before OUTPUT.
@@ -313,6 +347,11 @@ def probe_live_camera(report: CameraDiagnostics, *, opener=None) -> LiveProbe:
     # Missing FFmpeg is a local prerequisite, not a camera outage.
     missing_ffmpeg = bool(report.rtsp_url and not _cached_ffmpeg())
     measured = _probe_rtsp(report) if report.rtsp_url and not missing_ffmpeg else None
+    rtsp_note = (
+        "RTSP: FFmpeg не установлен." if missing_ffmpeg else
+        getattr(_RTSP_STATUS, "message", "") if report.rtsp_url else
+        "Админка не вернула RTSP-ссылку."
+    )
     if measured is not None:
         return LiveProbe(
             f"≈{measured.bitrate_mbps:.2f} Мбит/с",
@@ -347,6 +386,7 @@ def probe_live_camera(report: CameraDiagnostics, *, opener=None) -> LiveProbe:
                 ("Замер по недавнему сегменту видео." if recent else
                  "Замер по фрагменту доступного архива за последние 90 секунд; "
                  "не обязательно текущий битрейт.") +
+                (" " + rtsp_note if rtsp_note else "") +
                 " Вычислено по байтам медиасегмента и длительности, "
                 "не по скорости TCP и не по тарифу. " +
                 ("" if timestamp else "В плейлисте нет точной даты сегмента."),
@@ -355,7 +395,8 @@ def probe_live_camera(report: CameraDiagnostics, *, opener=None) -> LiveProbe:
             "Не измерен", stamp, network,
             "Нет доступного медиасегмента: проверены только подтверждённые "
             "live-URL и подписанные недавние архивные плейлисты. "
-            "Доступность HTTPS-сервера не подтверждает передачу видео."
+            "Доступность HTTPS-сервера не подтверждает передачу видео. "
+            + rtsp_note
             + (" Локальный FFmpeg отсутствует: для прямого RTSP-замера "
                "сначала подготовьте FFmpeg через раздел скачивания архива."
                if missing_ffmpeg else ""),
