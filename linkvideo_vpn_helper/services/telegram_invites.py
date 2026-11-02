@@ -3,8 +3,8 @@ from __future__ import annotations
 """Simple invitation-only Telegram access with persistent SQLite membership.
 
 Bot usernames are public. This gate uses random one-use deep-link secrets to
-enroll a Telegram account automatically and records only salted? No:
-cryptographically random invitation hashes (SHA-256) and Telegram IDs.
+enroll a Telegram account automatically and records cryptographically
+random invitation hashes (SHA-256) and Telegram IDs.
 No B2O passwords, camera tokens or bot tokens are stored in this database.
 """
 
@@ -103,6 +103,23 @@ class InviteStore:
                 (telegram_id, now),
             )
             return True
+
+    def grant(self, telegram_id: int) -> None:
+        """Explicit manual employee enrollment by numeric Telegram user ID."""
+        if type(telegram_id) is not int or telegram_id <= 0:
+            raise ValueError("Нужен положительный Telegram ID.")
+        with self._connect() as db:
+            db.execute(
+                "INSERT OR IGNORE INTO members (telegram_id, invited_at) VALUES (?, ?)",
+                (telegram_id, int(time.time())),
+            )
+
+    def members(self) -> tuple[int, ...]:
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT telegram_id FROM members ORDER BY invited_at, telegram_id"
+            ).fetchall()
+            return tuple(int(row[0]) for row in rows)
 
     def revoke(self, telegram_id: int) -> None:
         if type(telegram_id) is not int or telegram_id <= 0:
