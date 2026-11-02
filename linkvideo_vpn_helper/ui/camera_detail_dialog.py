@@ -266,7 +266,6 @@ class CameraDetailDialog(QWidget):
             self.image.setPixmap(QPixmap())
             self.rate.setText("Измеряю…")
             self.last.setText("Проверяю…")
-            self.connection.setText("Проверяю…")
             self.resolution.setText("Проверяю…")
             self.fps.setText("Проверяю…")
             self.video_codec.setText("Проверяю…")
@@ -309,7 +308,6 @@ class CameraDetailDialog(QWidget):
                 self.image.setText("Превью недоступно")
                 self.rate.setText("Нет данных")
                 self.last.setText("Нет данных")
-                self.connection.setText("Нет данных")
                 self.diagnostic_text.setText("Диагностика невозможна без карточки камеры.")
             self.refresh_btn.setEnabled(True)
             return
