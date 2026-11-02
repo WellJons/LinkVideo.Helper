@@ -289,7 +289,8 @@ def service_main():
     # SYSTEM has an independent settings hive. No logged-in staff secrets
     # are inherited or mixed. The operator must arrange separate, permitted
     # B2O access before the camera commands can succeed unattended.
-    b2o = B2OService(QSettings("LinkVideo", "LinkVideo.Bot.Service"))
+    from linkvideo_vpn_helper.services.telegram_b2o_session import BotB2OService
+    b2o = BotB2OService()
     TelegramCameraAgent(token, frozenset(), b2o, invites=store).run_forever()
 
 
