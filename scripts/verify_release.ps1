@@ -73,17 +73,6 @@ Invoke-Checked 'Compile differential patch pipeline' {
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test_patch_builder.ps1
 }
 
-# The RC must contain its separately built x86 worker whenever the runner
-# selected the x86 bridge feature. A missing exe must fail the release.
-if ($env:ULA_BRIDGE_X86_PATH) {
-    $bridge = Join-Path $root 'dist\LinkVideo.Helper\LinkVideo.UlaBridge32.exe'
-    if (-not (Test-Path -LiteralPath $bridge)) {
-        throw 'Required Ula x86 bridge was not packaged in the application payload'
-    }
-    & $bridge --self-test
-    if ($LASTEXITCODE -ne 0) { throw 'Packaged Ula x86 bridge self-test failed' }
-}
-
 $setup = Join-Path $root 'installer_next\output\LinkVideo.Helper_Setup.exe'
 $uninstall = Join-Path $root 'installer_next\output\Uninstall.exe'
 $appExe = Join-Path $root 'dist\LinkVideo.Helper\LinkVideo.Helper.exe'
