@@ -91,9 +91,11 @@ class CameraDiagnosticsPanel(QWidget):
         body.addWidget(self.summary)
         self.list = QListWidget()
         self.list.setObjectName("CameraSearchResultList")
-        self.list.setSpacing(7)
-        self.list.setMinimumHeight(180)
-        self.list.setMaximumHeight(500)
+        self.list.setSpacing(8)
+        # Show complete rows, not a 190px viewport with the second camera
+        # half-hidden. The page scaffold provides scrolling for long lists.
+        self.list.setMinimumHeight(260)
+        self.list.setMaximumHeight(16777215)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list.itemClicked.connect(self._open_camera)
         self.list.hide()
@@ -254,6 +256,10 @@ class CameraDiagnosticsPanel(QWidget):
             item.setData(Qt.ItemDataRole.UserRole, choice)
             self.list.addItem(item)
             self.list.setItemWidget(item, self._camera_row(choice, index))
+        self.list.setFixedHeight(
+            min(1800, max(166, len(cameras) * 132 + 18))
+        )
+        self.setMinimumHeight(min(2150, 320 + len(cameras) * 132))
         self.list.show()
         # Fetch at most 24 thumbnails, max three at once, without freezing Qt.
         token = B2OService(self._settings).token()
