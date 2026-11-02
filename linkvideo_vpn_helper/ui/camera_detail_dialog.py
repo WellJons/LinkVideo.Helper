@@ -1,0 +1,305 @@
+from __future__ import annotations
+
+"""Operator camera card. Every network operation runs outside the Qt thread."""
+
+import threading
+
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QPixmap
+from PySide6.QtWidgets import (
+    QDialog, QGridLayout, QHBoxLayout, QLabel, QPushButton,
+    QScrollArea, QVBoxLayout, QWidget,
+)
+
+from linkvideo_vpn_helper.services.archive_service_core import B2OService
+from linkvideo_vpn_helper.services.b2o_camera_preview import fetch_camera_preview
+from linkvideo_vpn_helper.services.camera_diagnostics import (
+    CameraLookupError, inspect_camera,
+)
+from linkvideo_vpn_helper.services.camera_live_probe import probe_live_camera
+from linkvideo_vpn_helper.ui.components import Card, StatusPill
+from linkvideo_vpn_helper.ui.dialogs import style_helper_dialog
+
+
+class CameraDetailDialog(QDialog):
+    detailsReady = Signal(object, str)
+    previewReady = Signal(object, str)
+    telemetryReady = Signal(object)
+
+    def __init__(self, choice, settings, parent=None, *, inspector=inspect_camera,
+                 preview_loader=fetch_camera_preview, live_probe=probe_live_camera):
+        super().__init__(parent)
+        self.choice = choice
+        self.settings = settings
+        self.inspector = inspector
+        self.preview_loader = preview_loader
+        self.live_probe = live_probe
+        self._generation = 0
+        self._preview_bytes = b""
+        self.setObjectName("CameraInformationDialog")
+        self.setWindowTitle("Информация по камере · LinkVideo.Helper")
+        self.resize(1040, 735)
+        self.setMinimumSize(740, 520)
+        style_helper_dialog(self)
+        self._build()
+        self.detailsReady.connect(self._on_details)
+        self.previewReady.connect(self._on_preview)
+        self.telemetryReady.connect(self._on_telemetry)
+        QTimer.singleShot(0, self.refresh)
+
+    def _build(self):
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setSpacing(12)
+        header = QHBoxLayout()
+        name_column = QVBoxLayout()
+        self.heading = QLabel(self.choice.label)
+        self.heading.setObjectName("PageTitle")
+        self.heading.setWordWrap(True)
+        name_column.addWidget(self.heading)
+        extra = self.choice.country
+        if self.choice.customer_login:
+            extra += " · " + self.choice.customer_login
+        self.subtitle = QLabel(extra)
+        self.subtitle.setObjectName("Muted")
+        name_column.addWidget(self.subtitle)
+        header.addLayout(name_column, 1)
+        self.status = StatusPill("Загрузка", "neutral")
+        header.addWidget(self.status)
+        self.refresh_btn = QPushButton("Обновить")
+        self.refresh_btn.setProperty("role", "soft")
+        self.refresh_btn.clicked.connect(self.refresh)
+        header.addWidget(self.refresh_btn)
+        outer.addLayout(header)
+
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        inner = QWidget()
+        block = QVBoxLayout(inner)
+        block.setContentsMargins(1, 2, 1, 8)
+        block.setSpacing(12)
+
+        split = QHBoxLayout()
+        split.setSpacing(12)
+        image_card = Card(kind="hero")
+        image_layout = QVBoxLayout(image_card)
+        image_layout.setContentsMargins(15, 15, 15, 15)
+        image_title = QLabel("Последнее доступное изображение")
+        image_title.setObjectName("CardTitle")
+        image_layout.addWidget(image_title)
+        self.image = QLabel("Загружаю превью…")
+        self.image.setObjectName("CameraCardPreview")
+        self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image.setMinimumHeight(258)
+        self.image.setMinimumWidth(310)
+        self.image.setWordWrap(True)
+        self.image.setStyleSheet(
+            "QLabel#CameraCardPreview {background: palette(alternate-base); "
+            "border: 1px solid palette(mid); border-radius: 10px; padding: 10px;}"
+        )
+        image_layout.addWidget(self.image, 1)
+        caption = QLabel("Статичное изображение, не прямое воспроизведение видео")
+        caption.setObjectName("TinyMuted")
+        caption.setWordWrap(True)
+        image_layout.addWidget(caption)
+        split.addWidget(image_card, 5)
+
+        metrics = Card(kind="hero")
+        metrics_layout = QVBoxLayout(metrics)
+        metrics_layout.setContentsMargins(16, 16, 16, 16)
+        metrics_layout.setSpacing(12)
+        top = QLabel("Состояние потока")
+        top.setObjectName("CardTitle")
+        metrics_layout.addWidget(top)
+        self.rate = self._metric(metrics_layout, "Текущий битрейт", "Измеряю…")
+        self.last = self._metric(metrics_layout, "Последний поток", "Проверяю…")
+        self.connection = self._metric(metrics_layout, "Сетевая доступность", "Проверяю…")
+        metrics_layout.addStretch(1)
+        split.addWidget(metrics, 4)
+        block.addLayout(split)
+
+        details = Card()
+        detail_layout = QVBoxLayout(details)
+        title = QLabel("Данные камеры")
+        title.setObjectName("CardTitle")
+        detail_layout.addWidget(title)
+        self.info = QLabel("Получаю данные из админки…")
+        self.info.setObjectName("Muted")
+        self.info.setWordWrap(True)
+        self.info.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        detail_layout.addWidget(self.info)
+        block.addWidget(details)
+
+        diagnostic = Card(subtle=True)
+        d = QVBoxLayout(diagnostic)
+        title = QLabel("Диагностика")
+        title.setObjectName("CardTitle")
+        d.addWidget(title)
+        self.diagnostic_text = QLabel(
+            "Проверяю доступность и наличие свежего видео в фоновом режиме…"
+        )
+        self.diagnostic_text.setObjectName("Muted")
+        self.diagnostic_text.setWordWrap(True)
+        self.diagnostic_text.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        d.addWidget(self.diagnostic_text)
+        block.addWidget(diagnostic)
+        block.addStretch(1)
+        scroll.setWidget(inner)
+        outer.addWidget(scroll, 1)
+
+        row = QHBoxLayout()
+        note = QLabel("Обновление выполняется без блокировки интерфейса")
+        note.setObjectName("TinyMuted")
+        row.addWidget(note, 1)
+        close = QPushButton("Закрыть")
+        close.clicked.connect(self.close)
+        row.addWidget(close)
+        outer.addLayout(row)
+
+    @staticmethod
+    def _metric(layout, title, value):
+        caption = QLabel(title)
+        caption.setObjectName("TinyMuted")
+        layout.addWidget(caption)
+        field = QLabel(value)
+        field.setObjectName("Value")
+        field.setWordWrap(True)
+        layout.addWidget(field)
+        return field
+
+    def refresh(self):
+        if not self.refresh_btn.isEnabled():
+            return
+        self._generation += 1
+        generation = self._generation
+        self.refresh_btn.setEnabled(False)
+        self.status.set_status("Проверяю", "warning")
+        self.info.setText("Получаю данные камеры…")
+        self.image.setText("Загружаю превью…")
+        self.image.setPixmap(QPixmap())
+        self.rate.setText("Измеряю…")
+        self.last.setText("Проверяю…")
+        self.connection.setText("Проверяю…")
+        self.diagnostic_text.setText("Запросы выполняются в фоне…")
+
+        def worker():
+            try:
+                report = self.inspector(
+                    B2OService(self.settings), self.choice.camera_id,
+                    self.choice.operator_id, with_network=False,
+                    with_preview=False,
+                )
+                self.detailsReady.emit((generation, report), "")
+            except CameraLookupError as exc:
+                self.detailsReady.emit((generation, None), str(exc))
+            except Exception:
+                self.detailsReady.emit(
+                    (generation, None),
+                    "Не удалось получить карточку камеры. Проверьте права и ID.",
+                )
+        threading.Thread(target=worker, name="camera-card-metadata",
+                         daemon=True).start()
+
+    def _on_details(self, packet, error):
+        generation, report = packet
+        if generation != self._generation:
+            return
+        if error or report is None:
+            self.status.set_status("Ошибка", "danger")
+            self.info.setText(error)
+            self.image.setText("Превью недоступно")
+            self.rate.setText("Нет данных")
+            self.last.setText("Нет данных")
+            self.connection.setText("Нет данных")
+            self.diagnostic_text.setText("Диагностика невозможна без карточки камеры.")
+            self.refresh_btn.setEnabled(True)
+            return
+        self.status.set_status("Данные получены", "success")
+        self.heading.setText(report.name or report.camera_id)
+        lines = [
+            ("ID", report.camera_id),
+            ("Страна", report.operator),
+            ("Логин клиента", self.choice.customer_login),
+            ("Название", report.name),
+            ("Статус B2O", report.status),
+            ("Серийный номер", report.serial),
+            ("Модель", report.model),
+            ("Сервер", report.server),
+            ("IP камеры", report.ip),
+            ("RTSP порт", str(report.rtsp_port) if report.ip else ""),
+            ("Глубина архива", report.archive_depth),
+            ("Тариф", self.choice.tariff),
+        ]
+        self.info.setText("\n".join(
+            f"{label}: {value}" for label, value in lines if value
+        ))
+        self.refresh_btn.setEnabled(True)
+
+        def preview_worker():
+            try:
+                b2o = B2OService(self.settings)
+                number, _ = b2o.normalize_camera_id(
+                    report.camera_id, self.choice.operator_id
+                )
+                blob = self.preview_loader(report.operator, number, b2o.token())
+                self.previewReady.emit((generation, blob), "")
+            except Exception:
+                self.previewReady.emit(
+                    (generation, None), "Не удалось получить последнее изображение."
+                )
+
+        def telemetry_worker():
+            try:
+                data = self.live_probe(report)
+                self.telemetryReady.emit((generation, data))
+            except Exception:
+                self.telemetryReady.emit((generation, None))
+
+        threading.Thread(target=preview_worker, name="camera-card-preview",
+                         daemon=True).start()
+        threading.Thread(target=telemetry_worker, name="camera-card-telemetry",
+                         daemon=True).start()
+
+    def _on_preview(self, packet, error):
+        generation, blob = packet
+        if generation != self._generation:
+            return
+        if not blob:
+            self.image.setText(error or "Последнее изображение недоступно")
+            return
+        pixmap = QPixmap()
+        if not pixmap.loadFromData(blob):
+            self.image.setText("Сервер не вернул изображение.")
+            return
+        self._preview_bytes = blob
+        bounds = self.image.size()
+        self.image.setPixmap(
+            pixmap.scaled(
+                max(250, bounds.width() - 14),
+                max(190, bounds.height() - 14),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+
+    def _on_telemetry(self, packet):
+        generation, data = packet
+        if generation != self._generation:
+            return
+        if data is None:
+            self.rate.setText("Не измерен")
+            self.last.setText("Нет подтверждённой даты")
+            self.connection.setText("Недоступно")
+            self.diagnostic_text.setText("Не удалось выполнить сетевую диагностику.")
+            return
+        self.rate.setText(data.bitrate_mbps)
+        self.last.setText(data.last_stream)
+        self.connection.setText(
+            "Проверка завершена" if "ICMP" in data.connectivity or "TCP" in data.connectivity
+            else "Нет адреса"
+        )
+        self.diagnostic_text.setText(data.connectivity + "\n\n" + data.detail)
