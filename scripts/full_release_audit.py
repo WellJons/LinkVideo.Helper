@@ -80,6 +80,9 @@ _ALLOWED_PASS_SITES = {
     ("linkvideo_vpn_helper/ui/components_compat.py", "popup_destroyed", "Exception"): 1,
     # Orphan Qt widgets may be destroyed while the first-page guard releases.
     ("linkvideo_vpn_helper/ui/first_page_window_guard.py", "release", "RuntimeError"): 1,
+    # Qt can delete an in-page camera card while its background probe emits.
+    # The signal guard discards only that late UI callback, not probe errors.
+    ("linkvideo_vpn_helper/ui/camera_detail_dialog.py", "_safe_emit", "RuntimeError"): 1,
     ("linkvideo_vpn_helper/ui/main_window.py", "_go", "Exception"): 3,
     # Only OS launch failures are intentionally ignored after credentials were cleared.
     ("linkvideo_vpn_helper/ui/main_window.py", "_logout", "OSError"): 1,
