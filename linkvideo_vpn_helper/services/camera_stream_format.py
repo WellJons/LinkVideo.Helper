@@ -82,7 +82,7 @@ def evaluate_transcode(camera: dict, rules: object) -> tuple[str, str]:
                    "cameras": {"167024": {...}}}
     Camera > tariff > default. No policy means no red/green verdict.
     """
-    summary, note = transcode_summary(camera)
+    summary, _note = transcode_summary(camera)
     if not isinstance(rules, dict):
         return summary, "Правила проверки транскода не настроены."
     groups = (("cameras", str(camera.get("id_camera") or "")),
