@@ -2,14 +2,14 @@ from __future__ import annotations
 
 """Inspect the camera's administrator-provided stream without persisting secrets."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 import re
 
 
 @dataclass(frozen=True)
 class CameraStream:
-    url: str
+    url: str = field(repr=False, compare=False)
     host: str
     port: int
 
