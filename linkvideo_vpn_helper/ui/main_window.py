@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSettings, QSize, Qt, Signal, QTimer
@@ -321,9 +323,18 @@ class MainWindow(QMainWindow):
     def _ensure_page(self, key: str) -> QWidget:
         page = self._page_cache.get(key)
         if page is None:
+            # Timeline for diagnosing transient Windows CMD windows on first
+            # opening of a tab. Log only the fixed navigation key, not data.
+            logger = logging.getLogger("linkvideo.helper")
+            started = time.monotonic()
+            logger.info("PAGE | First open (%s) | begin", key)
             page = self._factory(key)
             self._page_cache[key] = page
             self.stack.addPage(key, page)
+            logger.info(
+                "PAGE | First open (%s) | built in %.0f ms",
+                key, (time.monotonic() - started) * 1000,
+            )
         return page
 
     def _preload_next_page(self):
