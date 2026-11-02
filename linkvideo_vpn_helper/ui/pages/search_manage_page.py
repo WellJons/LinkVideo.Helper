@@ -474,7 +474,7 @@ class SearchManagePage(QWidget):
         # Moving existing widgets preserves all search/management controls and
         # avoids adding a tab that would be accessible only after VPN lookup.
         self.main_tabs = QTabWidget(self)
-        self.main_tabs.setObjectName("SearchManageWorkspaceTabs")
+        self.main_tabs.setObjectName("SettingsTabs")
         self.main_tabs.setDocumentMode(True)
         self.vpn_workspace_tab = QWidget()
         vpn_content = QVBoxLayout(self.vpn_workspace_tab)
