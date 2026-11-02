@@ -40,16 +40,30 @@ def parse_camera_stream(payload: dict) -> CameraStream | None:
         return None
 
 
-def fetch_camera_stream(b2o, camera_id: str, operator_id: int):
+def fetch_camera_stream_with_status(b2o, camera_id: str, operator_id: int):
+    """Fixed-endpoint lookup with sanitized diagnostics; never return raw errors."""
     number, _ = b2o.normalize_camera_id(camera_id, operator_id)
     token = b2o.token()
     if not token:
-        return None
+        return None, "Необходимо подключить учётную запись «Админка»."
     url = (
         "https://api.b2o.goodline.info/ords/mobile/vc2/operators/"
         f"{int(operator_id)}/cameras/{number}/camera-streams-urls"
     )
     try:
-        return parse_camera_stream(b2o.request_json(url, token, timeout=8))
-    except Exception:
-        return None
+        response = b2o.request_json(url, token, timeout=8)
+    except Exception as exc:
+        error = str(exc).lower()
+        if "авторизац" in error or "401" in error or "403" in error:
+            return None, "Не удалось авторизоваться в B2O для получения RTSP."
+        if "404" in error:
+            return None, "Админка не нашла RTSP-адрес камеры."
+        return None, "Админка не ответила на запрос RTSP-ссылки."
+    result = parse_camera_stream(response)
+    if result is None:
+        return None, "Админка не предоставила поддерживаемую основную RTSP-ссылку."
+    return result, ""
+
+
+def fetch_camera_stream(b2o, camera_id: str, operator_id: int):
+    return fetch_camera_stream_with_status(b2o, camera_id, operator_id)[0]
