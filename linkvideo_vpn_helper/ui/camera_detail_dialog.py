@@ -20,8 +20,8 @@ from linkvideo_vpn_helper.services.camera_diagnostics import (
 from linkvideo_vpn_helper.services.camera_live_probe import probe_live_camera, _cached_ffmpeg
 from linkvideo_vpn_helper.services.b2o_rtsp_probe import fetch_camera_stream_with_status
 from linkvideo_vpn_helper.services.camera_stream_format import (
-    readable_video_codec, readable_audio_codec, transcode_summary,
-    camera_address,
+    readable_video_codec, readable_audio_codec, evaluate_transcode,
+    load_transcode_rules, camera_address,
 )
 from linkvideo_vpn_helper.ui.components import Card, StatusPill
 
@@ -327,7 +327,9 @@ class CameraDetailDialog(QWidget):
                 ("linkvideo_", "linkvideoby_", "linkvideokz_")
             ) else report.camera_id)
         )
-        transcode, transcode_check = transcode_summary(report.metadata)
+        transcode, transcode_check = evaluate_transcode(
+            report.metadata, load_transcode_rules(self.settings)
+        )
         lines = [
             ("ID", report.camera_id),
             ("Страна", report.operator),
