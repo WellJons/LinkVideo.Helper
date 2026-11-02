@@ -70,3 +70,69 @@ def camera_address(camera: dict) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()[:250]
     return "Адрес в карточке B2O не указан"
+
+
+
+def evaluate_transcode(camera: dict, rules: object) -> tuple[str, str]:
+    """Compare B2O configuration only against an explicit operator policy.
+
+    Rules format: {"default": {"video_codec": "H.264"},
+                   "tariffs": {"742": {"video_codec": "H.265",
+                                        "transcoding_server": 12}},
+                   "cameras": {"167024": {...}}}
+    Camera > tariff > default. No policy means no red/green verdict.
+    """
+    summary, note = transcode_summary(camera)
+    if not isinstance(rules, dict):
+        return summary, "Правила проверки транскода не настроены."
+    groups = (("cameras", str(camera.get("id_camera") or "")),
+              ("tariffs", str(camera.get("id_tariff") or "")))
+    rule = None
+    for group, key in groups:
+        section = rules.get(group)
+        if key and isinstance(section, dict) and isinstance(section.get(key), dict):
+            rule = section[key]
+            break
+    if rule is None:
+        rule = rules.get("default")
+    if not isinstance(rule, dict) or not rule:
+        return summary, "Правила проверки транскода не настроены."
+    problems = []
+    for item, parser, label in (
+        ("video_codec", readable_video_codec, "Видеокодек"),
+        ("audio_codec", readable_audio_codec, "Аудиокодек"),
+    ):
+        expected = rule.get(item)
+        if expected:
+            current = parser(camera.get(
+                "nimble_main_video_codec" if item == "video_codec"
+                else "nimble_main_audio_codec"
+            ))
+            if current == "Не указан":
+                problems.append(f"{label}: фактическое значение неизвестно")
+            elif current != parser(expected):
+                problems.append(f"{label}: B2O {current}, требуется {parser(expected)}")
+    if "transcoding_server" in rule:
+        wanted = str(rule["transcoding_server"] or "")
+        current = str(camera.get("id_transcoding_server") or "")
+        if wanted != current:
+            problems.append(
+                f"Сервер транскода: B2O {current or 'нет'}, "
+                f"ожидается {wanted or 'не задан'}"
+            )
+    if problems:
+        return "Несоответствие", "; ".join(problems)
+    return summary, "Параметры B2O соответствуют заданным правилам."
+
+
+def load_transcode_rules(settings) -> dict:
+    """Read a bounded local policy; never fetch remote executable rules."""
+    import json
+    value = str(settings.value("camera/transcode_rules_json", "", str) or "")
+    if not value or len(value) > 20000:
+        return {}
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else {}
+    except (ValueError, TypeError):
+        return {}
