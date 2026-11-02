@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 from linkvideo_vpn_helper.services.telegram_invites import InviteStore, state_database_path
 from linkvideo_vpn_helper.services.telegram_service_runtime import (
     admin_action, clean_bot_link, configured, is_task_installed, public_bot_link,
+    service_b2o_configured,
 )
 from linkvideo_vpn_helper.ui.components import Card, StatusPill
 
@@ -92,6 +93,48 @@ class TelegramSettingsWidget(QWidget):
         layout.addLayout(buttons)
         root.addWidget(settings)
 
+        b2o_card = Card()
+        b2o = QVBoxLayout(b2o_card)
+        b2o.setContentsMargins(18, 16, 18, 16)
+        b2o.setSpacing(9)
+        b2o_heading = QLabel("B2O · авторизация автономного бота")
+        b2o_heading.setObjectName("SectionTitle")
+        b2o.addWidget(b2o_heading)
+        b2o_hint = QLabel(
+            "Выбери учётную запись B2O, которую бот будет использовать, "
+            "когда Helper закрыт. Например, evstegneev.na. "
+            "Пароль вводится только на этом компьютере, проверяется B2O "
+            "и защищается Windows DPAPI. Учётки сотрудников Helper не меняются."
+        )
+        b2o_hint.setWordWrap(True)
+        b2o_hint.setObjectName("Muted")
+        b2o.addWidget(b2o_hint)
+        self.b2o_login = QLineEdit()
+        self.b2o_login.setObjectName("TelegramBotB2OLogin")
+        self.b2o_login.setPlaceholderText("Логин B2O для автономной работы")
+        b2o.addWidget(self.b2o_login)
+        self.b2o_password = QLineEdit()
+        self.b2o_password.setObjectName("TelegramBotB2OPassword")
+        self.b2o_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.b2o_password.setPlaceholderText("Пароль B2O (не сохраняется в GUI)")
+        b2o.addWidget(self.b2o_password)
+        row_b2o = QHBoxLayout()
+        self.b2o_save = QPushButton("Проверить и сохранить B2O")
+        self.b2o_save.setObjectName("TelegramBotSaveB2O")
+        self.b2o_save.setProperty("role", "primary")
+        self.b2o_save.clicked.connect(self._configure_b2o)
+        row_b2o.addWidget(self.b2o_save)
+        self.b2o_remove = QPushButton("Отключить B2O для бота")
+        self.b2o_remove.clicked.connect(lambda: self._start("b2o_clear", {}))
+        row_b2o.addWidget(self.b2o_remove)
+        row_b2o.addStretch(1)
+        b2o.addLayout(row_b2o)
+        self.b2o_indicator = QLabel()
+        self.b2o_indicator.setObjectName("Muted")
+        b2o.addWidget(self.b2o_indicator)
+        self._buttons.extend((self.b2o_save, self.b2o_remove))
+        root.addWidget(b2o_card)
+
         employees = Card()
         l = QVBoxLayout(employees)
         l.setContentsMargins(18, 16, 18, 16)
@@ -147,8 +190,8 @@ class TelegramSettingsWidget(QWidget):
         note = QLabel(
             "Настройка требует однократного подтверждения администратора Windows. "
             "Токен не хранится в профилях сотрудников. "
-            "Для поиска камер в автономном режиме необходим отдельный доступ "
-            "службы к B2O — пользовательская сессия Helper не копируется."
+            "Используй поле B2O выше: служба использует только эти "
+            "проверенные локальные данные, не чужую сессию Helper."
         )
         note.setObjectName("TinyMuted")
         note.setWordWrap(True)
@@ -173,6 +216,18 @@ class TelegramSettingsWidget(QWidget):
             self.feedback.setText(str(exc))
             return
         self._start("configure", {"link": link, "token": token})
+
+    def _configure_b2o(self):
+        login = self.b2o_login.text().strip()
+        password = self.b2o_password.text()
+        if not login or not password:
+            self.feedback.setText("Укажи логин и пароль B2O для бота.")
+            return
+        # Clear the password field before starting the background UAC action.
+        self.b2o_password.clear()
+        self._start("b2o_configure", {
+            "b2o_login": login, "b2o_password": password,
+        })
 
     def _employee_action(self, operation: str):
         text = self.employee_id.text().strip()
@@ -218,9 +273,16 @@ class TelegramSettingsWidget(QWidget):
                 self.generated_link.setText(message)
             elif operation in ("add", "remove"):
                 self.employee_id.clear()
+            elif operation == "b2o_configure":
+                self.b2o_password.clear()
         self._refresh_state()
 
     def _refresh_state(self):
+        self.b2o_indicator.setText(
+            "Авторизация B2O для фонового бота сохранена на компьютере."
+            if service_b2o_configured()
+            else "B2O пока не настроен — поиск камер в боте недоступен."
+        )
         if configured() and is_task_installed():
             self.status.set_status("Автозапуск настроен", "success")
         elif configured():
