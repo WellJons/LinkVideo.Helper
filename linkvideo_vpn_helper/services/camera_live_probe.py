@@ -14,6 +14,7 @@ import time
 import os
 import subprocess
 from pathlib import Path
+from functools import lru_cache
 
 from linkvideo_vpn_helper.services.camera_diagnostics import (
     CameraDiagnostics, _ping_windows, _test_tcp,
@@ -184,6 +185,7 @@ def _recent_archive_sample(report: CameraDiagnostics, opener):
 
 
 
+@lru_cache(maxsize=1)
 def _cached_ffmpeg() -> str:
     """Existing FFmpeg only: opening a camera must not download executables."""
     from linkvideo_vpn_helper.services.archive_service_core import ArchiveService
@@ -272,6 +274,11 @@ def probe_live_camera(report: CameraDiagnostics, *, opener=None) -> LiveProbe:
             mbps, timestamp, recent = sample
             if timestamp:
                 stamp = _display_timestamp(timestamp)
+            else:
+                # The signed DVR range bounds the archive sample to the
+                # queried recent window, but cannot supply an exact last-frame
+                # timestamp without EXT-X-PROGRAM-DATE-TIME.
+                stamp = "Видео найдено в архиве за последние 90 с (точное время неизвестно)"
             return LiveProbe(
                 f"≈{mbps:.2f} Мбит/с" +
                 ("" if recent else " (архив)"),
@@ -280,7 +287,8 @@ def probe_live_camera(report: CameraDiagnostics, *, opener=None) -> LiveProbe:
                  "Замер по фрагменту доступного архива за последние 90 секунд; "
                  "не обязательно текущий битрейт.") +
                 " Вычислено по байтам медиасегмента и длительности, "
-                "не по скорости TCP и не по тарифу.",
+                "не по скорости TCP и не по тарифу. " +
+                ("" if timestamp else "В плейлисте нет точной даты сегмента."),
             )
         return LiveProbe(
             "Не измерен", stamp, network,
