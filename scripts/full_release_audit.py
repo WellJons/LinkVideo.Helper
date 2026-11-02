@@ -78,6 +78,8 @@ _ALLOWED_PASS_SITES = {
     ("linkvideo_vpn_helper/ui/components_compat.py", "_close_popup", "RuntimeError"): 1,
     ("linkvideo_vpn_helper/ui/components_compat.py", "clear_effect", "Exception"): 1,
     ("linkvideo_vpn_helper/ui/components_compat.py", "popup_destroyed", "Exception"): 1,
+    # Orphan Qt widgets may be destroyed while the first-page guard releases.
+    ("linkvideo_vpn_helper/ui/first_page_window_guard.py", "release", "RuntimeError"): 1,
     ("linkvideo_vpn_helper/ui/main_window.py", "_go", "Exception"): 3,
     # Only OS launch failures are intentionally ignored after credentials were cleared.
     ("linkvideo_vpn_helper/ui/main_window.py", "_logout", "OSError"): 1,
