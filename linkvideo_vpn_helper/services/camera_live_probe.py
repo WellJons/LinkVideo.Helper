@@ -6,7 +6,7 @@ Never guess media paths from server names. Avoid confusing HTTP download speed,
 RTSP TCP availability or configured bitrate with actual encoded media bitrate.
 """
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urljoin, urlsplit
 from urllib.request import Request, HTTPRedirectHandler, build_opener
 import re
@@ -62,12 +62,17 @@ def _playlist_url(report: CameraDiagnostics) -> str:
 def parse_recent_segment(playlist: str, base: str) -> tuple[str, float, str] | None:
     """Last plain TS/fMP4 segment and declared media seconds, not download speed."""
     length = None
-    last_time = ""
+    program_time = None
     items = []
     for raw_line in playlist.splitlines()[:800]:
         line = raw_line.strip()
         if line.startswith("#EXT-X-PROGRAM-DATE-TIME:"):
-            last_time = line.split(":", 1)[1].strip()[:64]
+            try:
+                program_time = datetime.fromisoformat(
+                    line.split(":", 1)[1].strip().replace("Z", "+00:00")
+                )
+            except ValueError:
+                program_time = None
         elif line.startswith("#EXTINF:"):
             try:
                 length = float(line.split(":", 1)[1].split(",", 1)[0])
@@ -75,9 +80,15 @@ def parse_recent_segment(playlist: str, base: str) -> tuple[str, float, str] | N
                 length = None
         elif line and not line.startswith("#") and length is not None:
             full = urljoin(base, line)
-            if any(_allowed_media(full, ext) for ext in (".ts", ".m4s", ".mp4")):
-                if 0.1 <= length <= 10.0:
-                    items.append((full, length, last_time))
+            if 0.1 <= length <= 10.0:
+                if any(_allowed_media(full, ext) for ext in (".ts", ".m4s", ".mp4")):
+                    end_time = (
+                        (program_time + timedelta(seconds=length)).isoformat()
+                        if program_time is not None else ""
+                    )
+                    items.append((full, length, end_time))
+                if program_time is not None:
+                    program_time += timedelta(seconds=length)
             length = None
     return items[-1] if items else None
 
