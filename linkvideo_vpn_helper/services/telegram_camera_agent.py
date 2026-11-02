@@ -25,7 +25,8 @@ from linkvideo_vpn_helper.services.camera_diagnostics import inspect_camera
 from linkvideo_vpn_helper.services.camera_live_probe import probe_live_camera
 from linkvideo_vpn_helper.services.camera_lookup import CameraChoice
 from linkvideo_vpn_helper.services.camera_stream_format import (
-    readable_audio_codec, readable_video_codec, transcode_summary,
+    readable_audio_codec, readable_video_codec, evaluate_transcode,
+    load_transcode_rules,
 )
 from dataclasses import replace
 
@@ -175,7 +176,9 @@ class TelegramCameraAgent:
             self.b2o, choice.camera_id, choice.operator_id,
             with_preview=False, with_network=False,
         )
-        transcode, note = transcode_summary(report.metadata)
+        transcode, note = evaluate_transcode(
+            report.metadata, load_transcode_rules(self.b2o.settings)
+        )
         stream, stream_error = fetch_camera_stream_with_status(
             self.b2o, choice.camera_id, choice.operator_id
         )
