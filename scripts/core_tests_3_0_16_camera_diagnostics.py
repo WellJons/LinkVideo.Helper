@@ -86,10 +86,21 @@ with tempfile.TemporaryDirectory() as td:
         "12345", "linkvideo_12345", new_host, "stream", "synthetic", 7, {}, [new_host]
     )
     archive._probe_hls_host = lambda *_: (None, [])
+    archive._probe_host_fast = lambda *args, **kwargs: []
     archive.b2o.reserve_transfers = lambda *args, **kwargs: []
     archive._deep_search_missing = lambda *args, **kwargs: ([], [], 0)
     now = datetime(2026, 11, 2, 10, 0)
     archive.discover("12345", 241, now, now + timedelta(minutes=1))
     assert new_host in archive._history_hosts("linkvideo_12345")
     assert new_host in archive._global_history_hosts(241)
+
+    # When HLS is empty, a confirmed DVR timeline interval must be accepted.
+    from linkvideo_vpn_helper.services.archive_service_core import ArchiveSlice
+    first = archive._local_to_epoch(now, 7)
+    archive._probe_host_fast = lambda *args, **kwargs: [
+        ArchiveSlice(new_host, "app", "stream", first, first + 60, "synthetic", "timeline")
+    ]
+    confirmed = archive.discover("12345", 241, now, now + timedelta(minutes=1))
+    assert confirmed.slices and confirmed.slices[0].host == new_host
+    assert confirmed.has_downloadable_archive
 print("CORE TESTS 3.0.16 B2O CAMERA DIAGNOSTICS AND DVR INVENTORY OK")
