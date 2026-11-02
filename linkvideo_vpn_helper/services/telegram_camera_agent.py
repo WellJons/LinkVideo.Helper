@@ -276,6 +276,23 @@ class TelegramCameraAgent:
                     self.offset = max(self.offset, int(update.get("update_id") or 0) + 1)
 
 
+def service_main():
+    """Long-lived bot worker, invoked without a QApplication and with SYSTEM identity.
+
+    Keep the Telegram command channel available even if the bot cannot read
+    camera data yet. A desktop operator's B2O token must never be copied.
+    """
+    from linkvideo_vpn_helper.services.telegram_service_runtime import service_token
+
+    token = service_token()
+    store = InviteStore(state_database_path())
+    # SYSTEM has an independent settings hive. No logged-in staff secrets
+    # are inherited or mixed. The operator must arrange separate, permitted
+    # B2O access before the camera commands can succeed unattended.
+    b2o = B2OService(QSettings("LinkVideo", "LinkVideo.Bot.Service"))
+    TelegramCameraAgent(token, frozenset(), b2o, invites=store).run_forever()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="LinkVideo Telegram bot, independent from the desktop GUI."
