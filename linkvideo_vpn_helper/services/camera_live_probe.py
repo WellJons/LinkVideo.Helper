@@ -172,7 +172,7 @@ def _recent_archive_sample(report: CameraDiagnostics, opener):
                     if dt.tzinfo:
                         age = time.time() - dt.timestamp()
                 except ValueError:
-                    pass
+                    age = None
             recent = age is not None and -10 <= age <= 40
             return bitrate, timestamp, recent
         except Exception:
