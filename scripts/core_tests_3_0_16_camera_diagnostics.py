@@ -61,7 +61,6 @@ with tempfile.TemporaryDirectory() as td:
     assert panel.camera_id.placeholderText()
     panel._on_result(0, report, "")
     assert "TCP не проверялся" in panel.summary.text()
-    assert "не подключена" in panel.findChildren(type(panel.summary))[-1].text() or True
 
     b2o = B2OService(settings)
     b2o.token = lambda: "fake-token"
@@ -77,4 +76,20 @@ with tempfile.TemporaryDirectory() as td:
     assert "b2o-vcore88.video.goodline.info" in archive._deep_candidate_hosts(
         "b2o-vcore01.video.goodline.info", 241, "linkvideo_12345"
     )
+
+    # Discovering a camera on a newly provisioned server records its primary
+    # DVR even when the requested interval has no media. No real network I/O.
+    from datetime import datetime, timedelta
+    from linkvideo_vpn_helper.services.archive_service_core import ArchiveCamera
+    new_host = "b2o-vcore99.video.goodline.info"
+    archive.b2o.camera = lambda *_: ArchiveCamera(
+        "12345", "linkvideo_12345", new_host, "stream", "synthetic", 7, {}, [new_host]
+    )
+    archive._probe_hls_host = lambda *_: (None, [])
+    archive.b2o.reserve_transfers = lambda *args, **kwargs: []
+    archive._deep_search_missing = lambda *args, **kwargs: ([], [], 0)
+    now = datetime(2026, 11, 2, 10, 0)
+    archive.discover("12345", 241, now, now + timedelta(minutes=1))
+    assert new_host in archive._history_hosts("linkvideo_12345")
+    assert new_host in archive._global_history_hosts(241)
 print("CORE TESTS 3.0.16 B2O CAMERA DIAGNOSTICS AND DVR INVENTORY OK")
