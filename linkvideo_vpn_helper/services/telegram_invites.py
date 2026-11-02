@@ -121,7 +121,7 @@ class InviteStore:
         path = Path(filename)
         if not path.is_file():
             return ()
-        uri = "file:" + quote(str(path.resolve()).replace("\\\\", "/"), safe="/:") + "?mode=ro"
+        uri = "file:" + quote(path.resolve().as_posix(), safe="/:") + "?mode=ro"
         with sqlite3.connect(uri, uri=True, timeout=2) as db:
             rows = db.execute(
                 "SELECT telegram_id FROM members ORDER BY invited_at, telegram_id"
