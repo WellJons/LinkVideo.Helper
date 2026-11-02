@@ -126,7 +126,11 @@ with tempfile.TemporaryDirectory() as td:
             if request.full_url.endswith("segment.ts"):
                 return FakeResponse(b"x" * 500000)
             raise AssertionError("Unexpected media request")
-    health = probe_live_camera(signed, opener=FakeOpen())
+    with patch("linkvideo_vpn_helper.services.camera_live_probe._ping_windows",
+               return_value="ICMP: ответ получен."), patch(
+        "linkvideo_vpn_helper.services.camera_live_probe._test_tcp",
+        return_value="TCP:443 — открыт с этого компьютера."):
+        health = probe_live_camera(signed, opener=FakeOpen())
     assert "2.00" in health.bitrate_mbps
     assert "архив" in health.bitrate_mbps
     unsigned = CameraDiagnostics(
