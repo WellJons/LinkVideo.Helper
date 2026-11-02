@@ -420,7 +420,6 @@ class SearchManagePage(QWidget):
         self.detail_panel = Card()
         self.detail_panel.setObjectName("ClientWorkspaceCard")
         self.detail_panel.setMinimumWidth(445)
-        self.detail_panel.setMaximumHeight(620)
         detail_outer = QVBoxLayout(self.detail_panel)
         detail_outer.setContentsMargins(14, 14, 14, 14)
         detail_outer.setSpacing(10)
@@ -466,8 +465,12 @@ class SearchManagePage(QWidget):
         workspace_l.addWidget(self.detail_panel, 12)
 
         self.workspace.setMinimumHeight(545)
+        # The sibling camera tab must not stretch VPN results into enormous
+        # blank columns. Keep both profile and action cards within the VPN
+        # workspace viewport (their own QScrollAreas handle overflow).
+        self.workspace.setMaximumHeight(820)
         self.workspace.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
         self.page_scroll.verticalScrollBar().setSingleStep(26)
         self.page_layout.addWidget(self.workspace, 1)
@@ -493,15 +496,19 @@ class SearchManagePage(QWidget):
         # When many cameras are returned, scroll the existing page canvas.
         self.main_tabs.currentChanged.connect(self._camera_tab_resized)
         self.page_layout.addWidget(self.main_tabs, 1)
+        self._camera_tab_resized(self.main_tabs.currentIndex())
         self._panel_anim = None
 
     def _camera_tab_resized(self, index: int):
-        if index == self.main_tabs.indexOf(self.camera_diagnostics):
-            self.main_tabs.setMinimumHeight(
-                max(725, self.camera_diagnostics.minimumHeight() + 48)
-            )
-        else:
-            self.main_tabs.setMinimumHeight(565)
+        # The QTabWidget contains two independent workspaces. Size it to the
+        # selected page instead of inheriting the camera result count as a
+        # permanent minimum height for the VPN search page.
+        camera = index == self.main_tabs.indexOf(self.camera_diagnostics)
+        self.main_tabs.setMinimumHeight(760 if camera else 720)
+        self.main_tabs.setMaximumHeight(850 if camera else 900)
+        if not camera:
+            self.workspace.setMaximumHeight(820)
+        self.main_tabs.updateGeometry()
 
     def _return_to_search(self):
         self._close_client_view()
