@@ -53,6 +53,7 @@ class MainWindow(QMainWindow):
         from linkvideo_vpn_helper.services.work_account_auth import WorkAccountAuth
         self.work_account = WorkAccountAuth(credentials, self.settings, self)
         self.work_account.b2oChanged.connect(self.work_account.on_b2o_result)
+        self.work_account.loginRequested.connect(self._open_admin_login)
         self.updater = UpdateService()
         self._page_cache: dict[str, QWidget] = {}
         self._current_key = ""
