@@ -239,12 +239,13 @@ class SearchManagePage(QWidget):
 
     MAX_CONTENT_WIDTH = 1280
 
-    def __init__(self, service: VPNService, search: FastSearchService, credentials: SessionCredentials, registry: ServerRegistry, parent=None):
+    def __init__(self, service: VPNService, search: FastSearchService, credentials: SessionCredentials, registry: ServerRegistry, parent=None, *, work_account=None):
         super().__init__(parent)
         self.service = service
         self.search = search
         self.credentials = credentials
         self.registry = registry
+        self.work_account = work_account
         self.current: ClientRecord | None = None
         self._deleted_current = None
         self._deleted_lookup_query = ""
@@ -484,8 +485,10 @@ class SearchManagePage(QWidget):
             self.page_layout.removeWidget(widget)
             vpn_content.addWidget(widget, 1 if widget is self.workspace else 0)
         self.main_tabs.addTab(self.vpn_workspace_tab, "VPN · поиск и управление")
-        self.camera_diagnostics = CameraDiagnosticsPanel(self.registry.settings, self)
-        self.main_tabs.addTab(self.camera_diagnostics, "Камеры · проверка и превью")
+        self.camera_diagnostics = CameraDiagnosticsPanel(
+            self.registry.settings, self, work_account=self.work_account
+        )
+        self.main_tabs.addTab(self.camera_diagnostics, "Информация по камере")
         self.page_layout.addWidget(self.main_tabs, 1)
         self._panel_anim = None
 
