@@ -180,7 +180,15 @@ def _save_link_and_token(link: str, token: str):
     _restrict(tmp, members_can_read=False)
     tmp.replace(config_file())
     _restrict(config_file(), members_can_read=False)
-    public_file().write_text(json.dumps({"bot_link": url}, ensure_ascii=False), "utf-8")
+    _save_public_link(url)
+
+
+def _save_public_link(link: str):
+    url = clean_bot_link(link)
+    _ensure_folders()
+    public_file().write_text(
+        json.dumps({"bot_link": url}, ensure_ascii=False), "utf-8"
+    )
     _restrict(public_file(), members_can_read=True)
 
 
@@ -234,7 +242,10 @@ def administer_operation(source_path: str):
     try:
         data = json.loads(path.read_text("utf-8"))
         operation = str(data.get("operation") or "")
-        if operation == "configure":
+        if operation == "save_link":
+            _save_public_link(str(data.get("link") or ""))
+            response = "Ссылка на Telegram-бота сохранена."
+        elif operation == "configure":
             _save_link_and_token(str(data.get("link") or ""),
                                  str(data.get("token") or ""))
             install_startup_task()
