@@ -10,6 +10,7 @@ from datetime import datetime
 from urllib.parse import urljoin, urlsplit
 from urllib.request import Request, HTTPRedirectHandler, build_opener
 import re
+import time
 
 from linkvideo_vpn_helper.services.camera_diagnostics import (
     CameraDiagnostics, _ping_windows, _test_tcp,
@@ -103,6 +104,71 @@ def _display_timestamp(value: str) -> str:
         return value[:50] + " (формат сервера)"
 
 
+
+def _recent_archive_playlists(report: CameraDiagnostics) -> tuple[str, ...]:
+    """Restricted signed, recent DVR URLs from the existing archive player."""
+    from linkvideo_vpn_helper.services.archive_service_core import ArchiveService, ArchiveSlice
+    raw = report.metadata
+    signature = str(raw.get("signature") or raw.get("wmsAuthSign") or "")
+    stream = str(raw.get("main_stream_name") or raw.get("nimble_id")
+                 or raw.get("stream_name") or "").strip()
+    host = str(report.server or "").strip().lower()
+    if (not host.endswith(".video.goodline.info") or host == "video.goodline.info"
+            or not signature or len(signature) > 1024
+            or any(ord(c) < 33 or ord(c) > 126 for c in signature)
+            or not stream):
+        return ()
+    start = int(time.time()) - 90
+    urls = []
+    for app, item in ArchiveService._stream_candidates(stream, raw)[:2]:
+        if not (re.fullmatch(r"[A-Za-z0-9_-]{1,128}", app)
+                and re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", item)):
+            continue
+        url = ArchiveService.playlist_url(
+            ArchiveSlice(host, app, item, start, start + 90, signature, "info")
+        )
+        if _allowed_media(url, ".m3u8"):
+            urls.append(url)
+    return tuple(urls)
+
+
+def _recent_archive_sample(report: CameraDiagnostics, opener):
+    """Measure media bits per playback second; no guessing a live stream URL."""
+    for playlist_url in _recent_archive_playlists(report):
+        try:
+            playlist = _fetch_bytes(opener, playlist_url, MAX_PLAYLIST).decode("utf-8", "replace")
+            nested = next((
+                urljoin(playlist_url, line.strip())
+                for line in playlist.splitlines()
+                if line.strip() and not line.strip().startswith("#")
+                and ".m3u8" in line.split("?", 1)[0].lower()
+            ), "")
+            if nested and _allowed_media(nested, ".m3u8"):
+                playlist_url = nested
+                playlist = _fetch_bytes(opener, nested, MAX_PLAYLIST).decode("utf-8", "replace")
+            segment = parse_recent_segment(playlist, playlist_url)
+            if not segment:
+                continue
+            media_url, duration, timestamp = segment
+            media = _fetch_bytes(opener, media_url, MAX_SEGMENT)
+            if not media:
+                continue
+            bitrate = len(media) * 8 / duration / 1_000_000
+            age = None
+            if timestamp:
+                try:
+                    dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                    if dt.tzinfo:
+                        age = time.time() - dt.timestamp()
+                except ValueError:
+                    pass
+            recent = age is not None and -10 <= age <= 40
+            return bitrate, timestamp, recent
+        except Exception:
+            continue
+    return None
+
+
 def probe_live_camera(report: CameraDiagnostics, *, opener=None) -> LiveProbe:
     """Probe the workstation network in the worker thread, never in Qt."""
     if report.ip:
@@ -120,10 +186,27 @@ def probe_live_camera(report: CameraDiagnostics, *, opener=None) -> LiveProbe:
     stamp = _display_timestamp(report.last_stream)
     playlist = _playlist_url(report)
     if not playlist:
+        opener = opener or build_opener(_NoRedirect())
+        sample = _recent_archive_sample(report, opener)
+        if sample is not None:
+            mbps, timestamp, recent = sample
+            if timestamp:
+                stamp = _display_timestamp(timestamp)
+            return LiveProbe(
+                f"≈{mbps:.2f} Мбит/с" +
+                ("" if recent else " (архив)"),
+                stamp, network,
+                ("Замер по недавнему сегменту видео." if recent else
+                 "Замер по фрагменту доступного архива за последние 90 секунд; "
+                 "не обязательно текущий битрейт.") +
+                " Вычислено по байтам медиасегмента и длительности, "
+                "не по скорости TCP и не по тарифу.",
+            )
         return LiveProbe(
-            "Недоступен", stamp, network,
-            "B2O не предоставил проверенную ссылку на текущий HLS-поток; "
-            "скорость TCP или тариф не выдаются за битрейт камеры.",
+            "Не измерен", stamp, network,
+            "Нет доступного медиасегмента: проверены только подтверждённые "
+            "live-URL и подписанные недавние архивные плейлисты. "
+            "Доступность HTTPS-сервера не подтверждает передачу видео.",
         )
 
     opener = opener or build_opener(_NoRedirect())
