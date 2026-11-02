@@ -332,6 +332,7 @@ class CameraDiagnosticsPanel(QWidget):
         self.view_stack.addWidget(card)
         self.view_stack.setCurrentWidget(card)
         if previous is not None:
+            previous.deactivate()
             self.view_stack.removeWidget(previous)
             previous.deleteLater()
 
@@ -341,5 +342,6 @@ class CameraDiagnosticsPanel(QWidget):
         if self._active_card is not None:
             card = self._active_card
             self._active_card = None
+            card.deactivate()
             self.view_stack.removeWidget(card)
             card.deleteLater()
