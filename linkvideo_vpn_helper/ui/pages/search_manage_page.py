@@ -489,8 +489,19 @@ class SearchManagePage(QWidget):
             self.registry.settings, self, work_account=self.work_account
         )
         self.main_tabs.addTab(self.camera_diagnostics, "Информация по камере")
+        # Camera results are a full workspace, not an embedded 200px list.
+        # When many cameras are returned, scroll the existing page canvas.
+        self.main_tabs.currentChanged.connect(self._camera_tab_resized)
         self.page_layout.addWidget(self.main_tabs, 1)
         self._panel_anim = None
+
+    def _camera_tab_resized(self, index: int):
+        if index == self.main_tabs.indexOf(self.camera_diagnostics):
+            self.main_tabs.setMinimumHeight(
+                max(725, self.camera_diagnostics.minimumHeight() + 48)
+            )
+        else:
+            self.main_tabs.setMinimumHeight(565)
 
     def _return_to_search(self):
         self._close_client_view()
