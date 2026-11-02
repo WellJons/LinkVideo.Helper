@@ -19,6 +19,10 @@ from linkvideo_vpn_helper.services.camera_diagnostics import (
 )
 from linkvideo_vpn_helper.services.camera_live_probe import probe_live_camera, _cached_ffmpeg
 from linkvideo_vpn_helper.services.b2o_rtsp_probe import fetch_camera_stream_with_status
+from linkvideo_vpn_helper.services.camera_stream_format import (
+    readable_video_codec, readable_audio_codec, transcode_summary,
+    camera_address,
+)
 from linkvideo_vpn_helper.ui.components import Card, StatusPill
 
 
@@ -89,7 +93,7 @@ class CameraDetailDialog(QWidget):
         self.subtitle.setObjectName("Muted")
         name_column.addWidget(self.subtitle)
         header.addLayout(name_column, 1)
-        self.status = StatusPill("Загрузка", "neutral")
+        self.status = StatusPill("Проверка статуса", "neutral")
         header.addWidget(self.status)
         self.refresh_btn = QPushButton("Обновить")
         self.refresh_btn.setProperty("role", "soft")
@@ -146,7 +150,6 @@ class CameraDetailDialog(QWidget):
         self.resolution = self._metric(metric_grid, "Разрешение", "Проверяю…")
         self.video_codec = self._metric(metric_grid, "Видеокодек", "Проверяю…")
         self.audio_codec = self._metric(metric_grid, "Аудиокодек", "Проверяю…")
-        self.connection = self._metric(metric_grid, "RTSP", "Проверяю…")
         metrics_layout.addLayout(metric_grid)
         self.last = self._metric(metric_grid, "Последние данные видео", "Проверяю…")
         metrics_layout.addStretch(1)
@@ -311,30 +314,37 @@ class CameraDetailDialog(QWidget):
             self.refresh_btn.setEnabled(True)
             return
         self._last_report = report
-        if str(report.status or "").casefold() in ("error", "offline", "failed"):
-            self.status.set_status("B2O: " + report.status, "warning")
+        camera_status = str(report.status or "").strip().lower()
+        if camera_status in ("online", "active"):
+            self.status.set_status("Камера онлайн · B2O", "success")
+        elif camera_status in ("offline", "error", "failed"):
+            self.status.set_status("Камера не в сети · B2O", "danger")
         else:
-            self.status.set_status("Карточка загружена", "success")
+            self.status.set_status("Статус камеры неизвестен", "warning")
         title = str(self.choice.label or "").strip()
         self.heading.setText(
             report.name or (title if title and not title.lower().startswith(
                 ("linkvideo_", "linkvideoby_", "linkvideokz_")
             ) else report.camera_id)
         )
+        transcode, transcode_check = transcode_summary(report.metadata)
         lines = [
             ("ID", report.camera_id),
             ("Страна", report.operator),
             ("Логин клиента", self.choice.customer_login),
             ("Название", report.name),
+            ("Адрес установки", camera_address(report.metadata)),
             ("Статус B2O", report.status),
+            ("Транскод B2O", transcode),
+            ("Проверка транскода", transcode_check),
             ("Серийный номер", report.serial),
             ("Модель", report.model),
             ("Сервер", report.server),
             ("IP камеры", report.ip),
             ("RTSP порт", str(report.rtsp_port) if report.rtsp_port else ""),
             ("Разрешение B2O", str(report.metadata.get("nimble_main_resolution") or "")),
-            ("Видеокодек B2O", str(report.metadata.get("nimble_main_video_codec") or "")),
-            ("Аудиокодек B2O", str(report.metadata.get("nimble_main_audio_codec") or "")),
+            ("Видеокодек B2O", readable_video_codec(report.metadata.get("nimble_main_video_codec"))),
+            ("Аудиокодек B2O", readable_audio_codec(report.metadata.get("nimble_main_audio_codec"))),
             ("Битрейт B2O (справочно)", (
                 f'{float(report.metadata["nimble_main_bandwidth"]) / 1_000_000:.2f} Мбит/с'
                 if str(report.metadata.get("nimble_main_bandwidth") or "").isdigit()
@@ -462,7 +472,6 @@ class CameraDetailDialog(QWidget):
             else:
                 self.rate.setText("Не измерен")
                 self.last.setText("Нет подтверждённой даты")
-                self.connection.setText("Недоступно")
                 self.resolution.setText("Нет данных")
                 self.fps.setText("Не измерен")
                 self.video_codec.setText("Нет данных")
@@ -479,24 +488,15 @@ class CameraDetailDialog(QWidget):
         )
         self.fps.setText(data.fps or "Не измерен")
         self.video_codec.setText(
-            data.video_codec or
-            (str(raw["nimble_main_video_codec"]) + " · B2O"
+            (readable_video_codec(data.video_codec) if data.video_codec else
+             readable_video_codec(raw["nimble_main_video_codec"]) + " · B2O"
              if raw.get("nimble_main_video_codec") else "Нет данных")
         )
         self.audio_codec.setText(
-            data.audio_codec or
-            (str(raw["nimble_main_audio_codec"]) + " · B2O"
+            (readable_audio_codec(data.audio_codec) if data.audio_codec else
+             readable_audio_codec(raw["nimble_main_audio_codec"]) + " · B2O"
              if raw.get("nimble_main_audio_codec") else "Нет данных")
         )
         self.rate.setText(data.bitrate_mbps)
         self.last.setText(data.last_stream)
-        self.connection.setText(
-            "RTSP-поток получен"
-            if data.source == "RTSP"
-            else ("RTSP порт доступен" if "TCP:" in data.connectivity and
-                  "— открыт" in data.connectivity
-                  else ("Медиасервер: HTTPS доступен"
-                        if "TCP:443 — открыт" in data.connectivity
-                        else "Нет подтверждения RTSP-потока"))
-        )
         self.diagnostic_text.setText(data.connectivity + "\n\n" + data.detail)
