@@ -264,7 +264,7 @@ def inspect_camera(
             ip = ""
     if not ip:
         ping_text = "ICMP: IP камеры не указан, проверка не выполнялась."
-        tcp_text = "TCP: нет IP камеры для проверки."
+        tcp_text = "TCP: IP камеры не указан, проверка не выполнялась."
     elif not port:
         ping_text = "ICMP: проверка не запрошена." if not with_network else _ping_windows(ip)
         tcp_text = "TCP: порт камеры не указан в админке."
