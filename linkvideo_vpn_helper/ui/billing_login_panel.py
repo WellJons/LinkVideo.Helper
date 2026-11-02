@@ -210,10 +210,10 @@ class BillingLoginPanel(Card):
         self._begin_login(request, central=False)
 
     def login_with_work_account(self, credentials) -> bool:
-        """Use the verified MikroTik employee login without a second form.
+        """Validate the separate administrator account without a second UI form.
 
-        CRM still independently validates this login at its own fixed endpoint.
-        No password is inserted into a widget or stored by CRM credentials.
+        The RouterOS password is never sent to CRM. The administrator login
+        is shared with B2O, while their session tokens remain independent.
         """
         if self._busy or self._token:
             return False
@@ -266,11 +266,11 @@ class BillingLoginPanel(Card):
         self.logout_btn.setEnabled(True)
         self.sessionChanged.emit(True)
         if self._central_login:
-            # The single signed-in work account owns the secret; never add a
-            # second DPAPI or QSettings password copy for CRM.
-            self.store.clear()
+            # Administrator credentials are managed by the account panel,
+            # not by the legacy per-service form. Never erase saved DPAPI data
+            # on a successful CRM login.
             self.status.set_status("Биллинг подключён", "success")
-            self.message.setText("CRM подтверждён через рабочую учётную запись.")
+            self.message.setText("Доступ подтверждён учётной записью админки.")
             self.connected_account.setText(self._active_username)
             self.login_form.hide()
             self.connected_row.show()
