@@ -11,6 +11,9 @@ from urllib.parse import urljoin, urlsplit
 from urllib.request import Request, HTTPRedirectHandler, build_opener
 import re
 import time
+import os
+import subprocess
+from pathlib import Path
 
 from linkvideo_vpn_helper.services.camera_diagnostics import (
     CameraDiagnostics, _ping_windows, _test_tcp,
@@ -180,11 +183,67 @@ def _recent_archive_sample(report: CameraDiagnostics, opener):
     return None
 
 
+
+def _cached_ffmpeg() -> str:
+    """Existing FFmpeg only: opening a camera must not download executables."""
+    from linkvideo_vpn_helper.services.archive_service_core import ArchiveService
+    for candidate in ArchiveService._ffmpeg_candidates():
+        path = Path(candidate)
+        if path.is_file() and ArchiveService._ffmpeg_usable(path):
+            return str(path)
+    return ""
+
+
+def _probe_rtsp(report: CameraDiagnostics, *, ffmpeg_path: str = ""):
+    """Sample three seconds of actual RTSP media off the UI thread.
+
+    ffmpeg -progress reports media time independently of network download speed.
+    MPEG-TS output contains minor mux overhead, so report an approximation.
+    Never log subprocess arguments or stderr; RTSP URLs may have passwords.
+    """
+    url = str(report.rtsp_url or "")
+    if not url.startswith(("rtsp://", "rtsps://")):
+        return None
+    ffmpeg = ffmpeg_path or _cached_ffmpeg()
+    if not ffmpeg:
+        return None
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    cmd = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin",
+        "-rtsp_transport", "tcp", "-rw_timeout", "4000000",
+        "-i", url, "-t", "3", "-map", "0:v:0",
+        "-an", "-c:v", "copy", "-f", "mpegts",
+        "-progress", "pipe:2", "pipe:1",
+    ]
+    try:
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            check=False, timeout=14, creationflags=flags,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode or not 50_000 <= len(result.stdout) <= 12_000_000:
+        return None
+    times = re.findall(rb"(?:out_time_us|out_time_ms)=(\d+)", result.stderr)
+    if not times:
+        return None
+    duration = int(times[-1]) / 1_000_000
+    if duration < 0.5 or duration > 6:
+        return None
+    bitrate = len(result.stdout) * 8.0 / duration / 1_000_000
+    if not 0.02 <= bitrate <= 80.0:
+        return None
+    return bitrate, datetime.now().astimezone().isoformat()
+
+
 def probe_live_camera(report: CameraDiagnostics, *, opener=None) -> LiveProbe:
     """Probe the workstation network in the worker thread, never in Qt."""
     if report.ip:
-        network = (_ping_windows(report.ip) + "\n" +
-                   _test_tcp(report.ip, report.rtsp_port))
+        network = _ping_windows(report.ip)
+        if report.rtsp_port:
+            network += "\n" + _test_tcp(report.ip, report.rtsp_port)
+        else:
+            network += "\nTCP: порт не указан в админке — не проверялся."
     elif report.server and report.server.endswith(".video.goodline.info"):
         network = (
             "IP камеры отсутствует. Проверка медиа-сервера:\n" +
@@ -195,6 +254,16 @@ def probe_live_camera(report: CameraDiagnostics, *, opener=None) -> LiveProbe:
         network = "Нет адреса камеры или проверенного медиа-сервера для ICMP/TCP."
 
     stamp = _display_timestamp(report.last_stream)
+    # Prefer actual administrator RTSP over a historical DVR sample.
+    measured = _probe_rtsp(report) if report.rtsp_url else None
+    if measured is not None:
+        mbps, seen_at = measured
+        return LiveProbe(
+            f"≈{mbps:.2f} Мбит/с", _display_timestamp(seen_at), network,
+            "Прямой трёхсекундный RTSP-замер через FFmpeg: получены "
+            "видеопакеты. Примерный битрейт учитывает транспортный "
+            "контейнер MPEG-TS, а не скорость скачивания или тариф.",
+        )
     playlist = _playlist_url(report)
     if not playlist:
         opener = opener or build_opener(_NoRedirect())
