@@ -175,7 +175,8 @@ class TelegramSettingsWidget(QWidget):
 
     def _employee_action(self, operation: str):
         text = self.employee_id.text().strip()
-        if not text.isascii() or not text.isdecimal() or int(text or "0") <= 0:
+        if (not text.isascii() or not text.isdecimal() or len(text) > 20
+                or int(text or "0") <= 0):
             self.feedback.setText("Введите числовой Telegram ID сотрудника.")
             return
         self._start(operation, {"telegram_id": int(text)})
