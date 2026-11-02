@@ -69,6 +69,10 @@ class TelegramSettingsWidget(QWidget):
         layout.addWidget(self.token_input)
 
         buttons = QHBoxLayout()
+        self.link_button = QPushButton("Сохранить ссылку")
+        self.link_button.setObjectName("TelegramSaveBotLink")
+        self.link_button.clicked.connect(self._save_link)
+        buttons.addWidget(self.link_button)
         self.save_button = QPushButton("Сохранить и включить бота")
         self.save_button.setObjectName("TelegramBotSetup")
         self.save_button.setProperty("role", "primary")
@@ -82,7 +86,7 @@ class TelegramSettingsWidget(QWidget):
         self.refresh_button.clicked.connect(self._refresh_state)
         buttons.addWidget(self.refresh_button)
         buttons.addStretch(1)
-        for button in (self.save_button, self.stop_button, self.refresh_button):
+        for button in (self.link_button, self.save_button, self.stop_button, self.refresh_button):
             self._buttons.append(button)
         layout.addLayout(buttons)
         root.addWidget(settings)
@@ -150,6 +154,14 @@ class TelegramSettingsWidget(QWidget):
         root.addWidget(note)
         root.addStretch(1)
 
+    def _save_link(self):
+        try:
+            link = clean_bot_link(self.url_input.text())
+        except ValueError as exc:
+            self.feedback.setText(str(exc))
+            return
+        self._start("save_link", {"link": link})
+
     def _configure(self):
         try:
             link = clean_bot_link(self.url_input.text())
@@ -197,6 +209,8 @@ class TelegramSettingsWidget(QWidget):
         if not error:
             if operation == "configure":
                 self.token_input.clear()
+                self.url_input.setText(public_bot_link())
+            elif operation == "save_link":
                 self.url_input.setText(public_bot_link())
             elif operation == "invite":
                 self.generated_link.setText(message)
