@@ -74,7 +74,7 @@ class CameraDetailDialog(QWidget):
         self.back_button = QPushButton("← К результатам")
         self.back_button.setObjectName("CameraBackToResults")
         self.back_button.setProperty("role", "soft")
-        self.back_button.clicked.connect(self.backRequested.emit)
+        self.back_button.clicked.connect(lambda _checked=False: self.backRequested.emit())
         header.addWidget(self.back_button)
         name_column = QVBoxLayout()
         self.heading = QLabel(self.choice.label)
