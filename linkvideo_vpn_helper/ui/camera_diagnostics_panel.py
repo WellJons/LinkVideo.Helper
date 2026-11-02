@@ -190,5 +190,5 @@ class CameraDiagnosticsPanel(QWidget):
         ]
         rows = [f"{label}: {value}" for label, value in rows if value]
         rows.extend([result.ping_text, result.tcp_text])
-        self.summary.setText("\\n".join(rows))
+        self.summary.setText("\n".join(rows))
         self.network_note.show()
