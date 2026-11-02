@@ -14,6 +14,7 @@ import re
 import socket
 import subprocess
 import time
+from urllib.parse import urlsplit
 
 from linkvideo_vpn_helper.services.archive_service_core import B2OService
 
@@ -34,6 +35,9 @@ class CameraDiagnostics:
     account_id: str = ""
     archive_depth: str = ""
     model: str = ""
+    # Exact RTSP endpoint is not presented in UI; it may contain a password.
+    rtsp_url: str = field(default="", repr=False, compare=False)
+    port_source: str = ""
     # Only the modal uses raw API metadata to locate an approved live playlist.
     # Never log it: it may contain signed URLs.
     metadata: dict = field(default_factory=dict, repr=False, compare=False)
@@ -70,15 +74,82 @@ def _camera_ip(record: dict) -> str:
     return ""
 
 
-def _camera_rtsp_port(record: dict) -> int:
-    for name in ("rtsp_port", "rtspPort", "port_rtsp"):
-        try:
-            port = int(record.get(name))
+_RTSP_FIELDS = (
+    "rtsp_url", "rtspUrl", "url_rtsp", "rtsp_uri", "rtspUri",
+    "rtsp_link", "rtspLink", "camera_rtsp_url", "stream_rtsp_url",
+    "main_stream_rtsp_url", "stream_url", "streamUrl",
+)
+_PORT_FIELDS = (
+    "rtsp_port", "rtspPort", "port_rtsp", "rtsp_external_port",
+    "external_rtsp_port", "port_forward", "external_port",
+    "camera_port", "cameraPort", "port",
+)
+_NESTED_FIELDS = ("rtsp", "connection", "camera", "device", "network",
+                  "connection_settings", "stream", "main_stream")
+
+
+def _camera_rtsp_endpoint(record: dict) -> tuple[str, int, str, str]:
+    """Extract an RTSP endpoint and its actual port from B2O, never assume 554.
+
+    B2O payloads vary across camera/region versions. Prefer an RTSP URL that
+    the admin provided, then an explicit forwarded port. No generic URL is
+    treated as RTSP unless its scheme actually is rtsp/rtsps.
+    """
+    rows = [record]
+    for key in _NESTED_FIELDS:
+        value = record.get(key)
+        if isinstance(value, dict):
+            rows.append(value)
+
+    for row in rows:
+        for key in _RTSP_FIELDS + ("url", "uri"):
+            value = row.get(key)
+            if not isinstance(value, str):
+                continue
+            raw = value.strip()
+            if len(raw) > 4096 or not raw.lower().startswith(("rtsp://", "rtsps://")):
+                continue
+            try:
+                parsed = urlsplit(raw)
+                host = parsed.hostname
+                port = parsed.port or (322 if parsed.scheme == "rtsps" else 554)
+                if not host or not 1 <= port <= 65535:
+                    continue
+                address = ipaddress.ip_address(host)
+                if (address.is_unspecified or address.is_loopback
+                        or address.is_multicast or address.is_link_local):
+                    continue
+                return raw, port, str(address), key
+            except (ValueError, TypeError):
+                # Some admin responses contain DNS RTSP hosts, not IPs.
+                try:
+                    if (not parsed.hostname or
+                            not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", parsed.hostname)):
+                        continue
+                    port = parsed.port or (322 if parsed.scheme == "rtsps" else 554)
+                    if not 1 <= port <= 65535:
+                        continue
+                    return raw, port, parsed.hostname.lower(), key
+                except (ValueError, TypeError, UnboundLocalError):
+                    continue
+
+    for row in rows:
+        for key in _PORT_FIELDS:
+            raw = row.get(key)
+            if isinstance(raw, bool):
+                continue
+            try:
+                port = int(str(raw).strip())
+            except (ValueError, TypeError):
+                continue
             if 1 <= port <= 65535:
-                return port
-        except (TypeError, ValueError):
-            continue
-    return 554
+                return "", port, "", key
+    return "", 0, "", ""
+
+
+def _camera_rtsp_port(record: dict) -> int:
+    """Compatibility for callers that only need the explicit admin port."""
+    return _camera_rtsp_endpoint(record)[1]
 
 
 def _ping_windows(ip: str) -> str:
@@ -181,10 +252,22 @@ def inspect_camera(
             raise CameraLookupError(_error_message(exc)) from None
 
     ip = _camera_ip(raw)
-    port = _camera_rtsp_port(raw)
+    rtsp_url, port, rtsp_host, source = _camera_rtsp_endpoint(raw)
+    if not ip and rtsp_host:
+        try:
+            address = ipaddress.ip_address(rtsp_host)
+            if not (address.is_loopback or address.is_multicast
+                    or address.is_unspecified or address.is_link_local):
+                ip = str(address)
+        except ValueError:
+            # Hostnames are resolved by the network worker, not used as camera IP.
+            ip = ""
     if not ip:
-        ping_text = "ICMP: IP не передан админкой, проверка не выполнялась."
-        tcp_text = "TCP: IP не передан админкой, проверка не выполнялась."
+        ping_text = "ICMP: IP камеры не указан, проверка не выполнялась."
+        tcp_text = "TCP: нет IP камеры для проверки."
+    elif not port:
+        ping_text = "ICMP: проверка не запрошена." if not with_network else _ping_windows(ip)
+        tcp_text = "TCP: порт камеры не указан в админке."
     elif not with_network:
         ping_text = "ICMP: проверка не запрошена."
         tcp_text = "TCP: проверка не запрошена."
@@ -197,6 +280,7 @@ def inspect_camera(
         camera_id=label,
         server=b2o.normalize_vcore_host(_field(raw, "server_name", "server")),
         ip=ip, rtsp_port=port, ping_text=ping_text, tcp_text=tcp_text,
+        rtsp_url=rtsp_url, port_source=source,
         operator=b2o.operator_country(operator),
         name=_field(raw, "camera_name", "name", "title"),
         status=_field(raw, "camera_status", "status", "state"),
