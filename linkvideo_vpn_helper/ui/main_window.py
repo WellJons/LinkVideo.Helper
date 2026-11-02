@@ -265,6 +265,8 @@ class MainWindow(QMainWindow):
         elif key == "tariffs":
             from linkvideo_vpn_helper.ui.pages.tariffs_page import TariffsPage
             page = TariffsPage(self, settings=self.settings, work_account=self.work_account)
+            page.billing_login.sessionChanged.connect(self._on_work_crm_status)
+            page.billing_login.loginFailed.connect(lambda _message: self._on_work_crm_status(False))
         elif key == "new_agent":
             from linkvideo_vpn_helper.ui.pages.new_agent_page import NewAgentPage
             page = NewAgentPage(self.settings, self.credentials, self)
