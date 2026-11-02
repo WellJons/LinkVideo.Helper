@@ -114,12 +114,22 @@ class InviteStore:
                 (telegram_id, int(time.time())),
             )
 
-    def members(self) -> tuple[int, ...]:
-        with self._connect() as db:
+    @staticmethod
+    def list_members(filename: str | os.PathLike[str]) -> tuple[int, ...]:
+        """Read-only view for desktop users without write permission."""
+        from urllib.parse import quote
+        path = Path(filename)
+        if not path.is_file():
+            return ()
+        uri = "file:" + quote(str(path.resolve()).replace("\\\\", "/"), safe="/:") + "?mode=ro"
+        with sqlite3.connect(uri, uri=True, timeout=2) as db:
             rows = db.execute(
                 "SELECT telegram_id FROM members ORDER BY invited_at, telegram_id"
             ).fetchall()
-            return tuple(int(row[0]) for row in rows)
+        return tuple(int(row[0]) for row in rows)
+
+    def members(self) -> tuple[int, ...]:
+        return self.list_members(self.path)
 
     def revoke(self, telegram_id: int) -> None:
         if type(telegram_id) is not int or telegram_id <= 0:
