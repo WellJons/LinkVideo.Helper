@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 from linkvideo_vpn_helper.services.telegram_invites import InviteStore, state_database_path
 from linkvideo_vpn_helper.services.telegram_service_runtime import (
     admin_action, clean_bot_link, configured, is_task_installed, public_bot_link,
-    service_b2o_configured,
+    service_b2o_configured, service_vpn_configured,
 )
 from linkvideo_vpn_helper.ui.components import Card, StatusPill
 
@@ -135,6 +135,48 @@ class TelegramSettingsWidget(QWidget):
         self._buttons.extend((self.b2o_save, self.b2o_remove))
         root.addWidget(b2o_card)
 
+        vpn_card = Card()
+        vp = QVBoxLayout(vpn_card)
+        vp.setContentsMargins(18, 16, 18, 16)
+        vp.setSpacing(9)
+        vp_title = QLabel("MikroTik · создание VPN через Telegram")
+        vp_title.setObjectName("SectionTitle")
+        vp.addWidget(vp_title)
+        vp_info = QLabel(
+            "Укажи логин и пароль MikroTik с правами создания VPN. "
+            "Данные защищаются Windows DPAPI на этом компьютере, "
+            "не встраиваются в EXE и не отправляются разработчику. "
+            "Перед реальным созданием бот спросит подтверждение."
+        )
+        vp_info.setWordWrap(True)
+        vp_info.setObjectName("Muted")
+        vp.addWidget(vp_info)
+        self.vpn_login = QLineEdit()
+        self.vpn_login.setObjectName("TelegramBotVPNLogin")
+        self.vpn_login.setPlaceholderText("Логин MikroTik")
+        vp.addWidget(self.vpn_login)
+        self.vpn_password = QLineEdit()
+        self.vpn_password.setObjectName("TelegramBotVPNPassword")
+        self.vpn_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.vpn_password.setPlaceholderText("Пароль MikroTik (защищённое хранение)")
+        vp.addWidget(self.vpn_password)
+        vp_buttons = QHBoxLayout()
+        self.vpn_save = QPushButton("Сохранить MikroTik для бота")
+        self.vpn_save.setObjectName("TelegramBotSaveVPN")
+        self.vpn_save.setProperty("role", "primary")
+        self.vpn_save.clicked.connect(self._configure_vpn)
+        vp_buttons.addWidget(self.vpn_save)
+        self.vpn_remove = QPushButton("Удалить данные MikroTik")
+        self.vpn_remove.clicked.connect(lambda: self._start("vpn_clear", {}))
+        vp_buttons.addWidget(self.vpn_remove)
+        vp_buttons.addStretch(1)
+        vp.addLayout(vp_buttons)
+        self.vpn_indicator = QLabel()
+        self.vpn_indicator.setObjectName("Muted")
+        vp.addWidget(self.vpn_indicator)
+        self._buttons.extend((self.vpn_save, self.vpn_remove))
+        root.addWidget(vpn_card)
+
         employees = Card()
         l = QVBoxLayout(employees)
         l.setContentsMargins(18, 16, 18, 16)
@@ -229,6 +271,17 @@ class TelegramSettingsWidget(QWidget):
             "b2o_login": login, "b2o_password": password,
         })
 
+    def _configure_vpn(self):
+        login = self.vpn_login.text().strip()
+        password = self.vpn_password.text()
+        if not login or not password:
+            self.feedback.setText("Укажи логин и пароль MikroTik.")
+            return
+        self.vpn_password.clear()
+        self._start("vpn_configure", {
+            "vpn_login": login, "vpn_password": password,
+        })
+
     def _employee_action(self, operation: str):
         text = self.employee_id.text().strip()
         if (not text.isascii() or not text.isdecimal() or len(text) > 20
@@ -275,9 +328,16 @@ class TelegramSettingsWidget(QWidget):
                 self.employee_id.clear()
             elif operation == "b2o_configure":
                 self.b2o_password.clear()
+            elif operation == "vpn_configure":
+                self.vpn_password.clear()
         self._refresh_state()
 
     def _refresh_state(self):
+        self.vpn_indicator.setText(
+            "Авторизация MikroTik для Telegram-бота сохранена."
+            if service_vpn_configured()
+            else "MikroTik пока не настроен — создание VPN в боте недоступно."
+        )
         self.b2o_indicator.setText(
             "Авторизация B2O для фонового бота сохранена на компьютере."
             if service_b2o_configured()
