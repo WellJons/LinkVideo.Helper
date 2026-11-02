@@ -57,6 +57,7 @@ class MainWindow(QMainWindow):
         self._page_cache: dict[str, QWidget] = {}
         self._current_key = ""
         self._collapsed = False
+        self._account_panel_open = False
         self._first_show = True
         self._window_fade = None
         self.updateReady.connect(self._on_update_ready)
@@ -144,19 +145,55 @@ class MainWindow(QMainWindow):
         self.user = QLabel(self.credentials.username)
         self.user.setToolTip(self.credentials.username)
         self.user.setObjectName("Value")
-        role = QLabel("MikroTik")
+        role = QLabel("MikroTik · подключён")
         role.setObjectName("TinyMuted")
         user_text.addWidget(self.user)
         user_text.addWidget(role)
-        self.logout = QPushButton("↪")
+        self.logout = QPushButton("⌄")
+        self.logout.setObjectName("WorkAccountToggle")
         self.logout.setProperty("role", "icon")
-        self.logout.setToolTip("Выйти из учётной записи")
-        self.logout.clicked.connect(self._logout)
+        self.logout.setToolTip("Рабочая учётная запись и вход в сервисы")
+        self.logout.clicked.connect(self._toggle_work_account_panel)
         ul.addWidget(avatar)
         ul.addLayout(user_text, 1)
         ul.addWidget(self.logout)
         sl.addWidget(user_card)
+        self.work_account_panel = Card(subtle=True)
+        self.work_account_panel.setObjectName("WorkAccountPanel")
+        auth_layout = QVBoxLayout(self.work_account_panel)
+        auth_layout.setContentsMargins(11, 12, 11, 12)
+        auth_layout.setSpacing(7)
+        panel_title = QLabel("РАБОЧАЯ УЧЁТНАЯ ЗАПИСЬ")
+        panel_title.setObjectName("NavSection")
+        auth_layout.addWidget(panel_title)
+        self.work_mikrotik = QLabel("✓ MikroTik · вход подтверждён")
+        self.work_mikrotik.setObjectName("TinyMuted")
+        auth_layout.addWidget(self.work_mikrotik)
+        self.work_b2o = QLabel("◌ B2O · подключение…")
+        self.work_b2o.setObjectName("TinyMuted")
+        self.work_b2o.setWordWrap(True)
+        auth_layout.addWidget(self.work_b2o)
+        self.work_crm = QLabel("◌ CRM · при открытии тарифов")
+        self.work_crm.setObjectName("TinyMuted")
+        self.work_crm.setWordWrap(True)
+        auth_layout.addWidget(self.work_crm)
+        self.work_reconnect_b2o = QPushButton("Переподключить B2O")
+        self.work_reconnect_b2o.setObjectName("WorkAccountReconnectB2O")
+        self.work_reconnect_b2o.clicked.connect(self._reconnect_work_b2o)
+        auth_layout.addWidget(self.work_reconnect_b2o)
+        self.work_reconnect_crm = QPushButton("Подключить CRM")
+        self.work_reconnect_crm.setObjectName("WorkAccountReconnectCRM")
+        self.work_reconnect_crm.clicked.connect(self._reconnect_work_crm)
+        auth_layout.addWidget(self.work_reconnect_crm)
+        self.work_signout = QPushButton("Выйти из учётной записи")
+        self.work_signout.setObjectName("WorkAccountSignOut")
+        self.work_signout.setProperty("role", "danger")
+        self.work_signout.clicked.connect(self._logout)
+        auth_layout.addWidget(self.work_signout)
+        self.work_account_panel.hide()
+        sl.addWidget(self.work_account_panel)
         sl.addSpacing(10)
+        self.work_account.b2oChanged.connect(self._on_work_b2o_status)
 
         self.work_label = QLabel("РАБОТА")
         self.work_label.setObjectName("NavSection")
@@ -375,6 +412,7 @@ class MainWindow(QMainWindow):
         self.logo.setVisible(not collapsed)
         self.logo_sub.setVisible(not collapsed)
         self.user_card.setVisible(not collapsed)
+        self.work_account_panel.setVisible(not collapsed and self._account_panel_open)
         self.work_label.setVisible(not collapsed)
         self.version.setVisible(not collapsed)
         self.brand_mark.setVisible(True)
@@ -462,6 +500,34 @@ class MainWindow(QMainWindow):
             self.toast.showMessage("Не удалось запустить установщик", str(exc), 5500)
             self._position_toast()
 
+    def _toggle_work_account_panel(self):
+        self._account_panel_open = not self._account_panel_open
+        self.work_account_panel.setVisible(self._account_panel_open and not self._collapsed)
+        self.logout.setText("⌃" if self._account_panel_open else "⌄")
+
+    def _on_work_b2o_status(self, ok: bool, error: str):
+        self.work_b2o.setText(
+            "✓ B2O · подключён" if ok else "× B2O · нет доступа или соединения"
+        )
+        self.work_reconnect_b2o.setEnabled(True)
+
+    def _reconnect_work_b2o(self):
+        self.work_reconnect_b2o.setEnabled(False)
+        self.work_b2o.setText("◌ B2O · проверка учётной записи…")
+        if not self.work_account.ensure_b2o(force=True):
+            if self.work_account.b2o_busy:
+                return
+        self.work_reconnect_b2o.setEnabled(True)
+
+    def _reconnect_work_crm(self):
+        page = self._ensure_page("tariffs")
+        self._go("tariffs")
+        self.work_crm.setText("◌ CRM · проверка учётной записи…")
+        page._connect_work_account()
+
+    def _on_work_crm_status(self, ok: bool):
+        self.work_crm.setText("✓ CRM · подключён" if ok else "× CRM · нет доступа")
+
     def _logout(self):
         dialog = ConfirmDialog(
             "Выйти из LinkVideo.Helper",
@@ -472,18 +538,21 @@ class MainWindow(QMainWindow):
         )
         if not dialog.exec():
             return
+        from linkvideo_vpn_helper.services.work_login_storage import clear_work_login
         self.work_account.clear()
-        for key in ("username", "password"):
-            self.settings.remove(key)
-        self.settings.setValue("remember", False)
+        clear_work_login(self.settings, QSettings("LinkVideo", "VPNHelper"))
+        # If the next launch is interrupted, the old account still cannot be
+        # re-imported; the explicit switch-account flag also disables auto-login.
+        arguments = ([sys.executable, "--signed-out"] if getattr(sys, "frozen", False)
+                     else [sys.executable, "-m", "linkvideo_vpn_helper.app", "--signed-out"])
         try:
-            if getattr(sys, "frozen", False):
-                subprocess.Popen([sys.executable], creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
-            else:
-                subprocess.Popen(
-                    [sys.executable, "-m", "linkvideo_vpn_helper.app"],
-                    cwd=str(Path(__file__).resolve().parents[2]),
-                )
-        except Exception:
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+            subprocess.Popen(
+                arguments,
+                cwd=None if getattr(sys, "frozen", False) else str(Path(__file__).resolve().parents[2]),
+                creationflags=flags,
+            )
+        except OSError:
+            # Credentials are already cleared; restart failure must not undo logout.
             pass
         QApplication.quit()
