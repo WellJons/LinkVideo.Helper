@@ -8,7 +8,7 @@ from dataclasses import replace
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QDialog, QGridLayout, QHBoxLayout, QLabel, QPushButton,
+    QGridLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QVBoxLayout, QWidget,
 )
 
@@ -20,13 +20,14 @@ from linkvideo_vpn_helper.services.camera_diagnostics import (
 from linkvideo_vpn_helper.services.camera_live_probe import probe_live_camera, _cached_ffmpeg
 from linkvideo_vpn_helper.services.b2o_rtsp_probe import fetch_camera_stream
 from linkvideo_vpn_helper.ui.components import Card, StatusPill
-from linkvideo_vpn_helper.ui.dialogs import style_helper_dialog
 
 
 _FFMPEG_SETUP_LOCK = threading.Lock()
 
 
-class CameraDetailDialog(QDialog):
+class CameraDetailDialog(QWidget):
+    """Embedded camera details in the search workspace (legacy public name)."""
+    backRequested = Signal()
     detailsReady = Signal(object, str)
     previewReady = Signal(object, str)
     telemetryReady = Signal(object)
@@ -44,11 +45,9 @@ class CameraDetailDialog(QDialog):
         self._preview_bytes = b""
         self._last_report = None
         self._last_telemetry = None
-        self.setObjectName("CameraInformationDialog")
+        self.setObjectName("CameraInformationPage")
         self.setWindowTitle("Информация по камере · LinkVideo.Helper")
-        self.resize(1040, 735)
-        self.setMinimumSize(740, 520)
-        style_helper_dialog(self)
+        self.setMinimumSize(0, 0)
         self._build()
         self.detailsReady.connect(self._on_details)
         self.previewReady.connect(self._on_preview)
@@ -66,9 +65,17 @@ class CameraDetailDialog(QDialog):
 
     def _build(self):
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setContentsMargins(0, 2, 0, 0)
         outer.setSpacing(12)
-        header = QHBoxLayout()
+        header_bar = Card(subtle=True)
+        header = QHBoxLayout(header_bar)
+        header.setContentsMargins(14, 12, 14, 12)
+        header.setSpacing(12)
+        self.back_button = QPushButton("← К результатам")
+        self.back_button.setObjectName("CameraBackToResults")
+        self.back_button.setProperty("role", "soft")
+        self.back_button.clicked.connect(self.backRequested.emit)
+        header.addWidget(self.back_button)
         name_column = QVBoxLayout()
         self.heading = QLabel(self.choice.label)
         self.heading.setObjectName("PageTitle")
@@ -87,7 +94,7 @@ class CameraDetailDialog(QDialog):
         self.refresh_btn.setProperty("role", "soft")
         self.refresh_btn.clicked.connect(self.refresh)
         header.addWidget(self.refresh_btn)
-        outer.addLayout(header)
+        outer.addWidget(header_bar)
 
         scroll = QScrollArea(self)
         self.detail_scroll = scroll
@@ -104,7 +111,7 @@ class CameraDetailDialog(QDialog):
         image_card = Card(kind="hero")
         image_layout = QVBoxLayout(image_card)
         image_layout.setContentsMargins(15, 15, 15, 15)
-        image_title = QLabel("Последнее доступное изображение")
+        image_title = QLabel("Превью камеры")
         image_title.setObjectName("CardTitle")
         image_layout.addWidget(image_title)
         self.image = QLabel("Загружаю превью…")
@@ -118,7 +125,7 @@ class CameraDetailDialog(QDialog):
             "border: 1px solid palette(mid); border-radius: 10px; padding: 10px;}"
         )
         image_layout.addWidget(self.image, 1)
-        caption = QLabel("Статичное изображение, не прямое воспроизведение видео")
+        caption = QLabel("Последний кадр из B2O · не прямой видеопоток")
         caption.setObjectName("TinyMuted")
         caption.setWordWrap(True)
         image_layout.addWidget(caption)
@@ -126,18 +133,21 @@ class CameraDetailDialog(QDialog):
 
         metrics = Card(kind="hero")
         metrics_layout = QVBoxLayout(metrics)
-        metrics_layout.setContentsMargins(16, 16, 16, 16)
-        metrics_layout.setSpacing(8)
-        top = QLabel("Состояние потока")
+        metrics_layout.setContentsMargins(14, 14, 14, 14)
+        metrics_layout.setSpacing(10)
+        top = QLabel("Диагностика потока")
         top.setObjectName("CardTitle")
         metrics_layout.addWidget(top)
-        self.rate = self._metric(metrics_layout, "Битрейт видео", "Измеряю…")
-        self.last = self._metric(metrics_layout, "Последние данные видео", "Проверяю…")
-        self.connection = self._metric(metrics_layout, "Сетевая доступность", "Проверяю…")
-        self.resolution = self._metric(metrics_layout, "Разрешение", "Проверяю…")
-        self.fps = self._metric(metrics_layout, "FPS (замер)", "Проверяю…")
-        self.video_codec = self._metric(metrics_layout, "Кодек видео", "Проверяю…")
-        self.audio_codec = self._metric(metrics_layout, "Кодек аудио", "Проверяю…")
+        metric_grid = QGridLayout()
+        metric_grid.setSpacing(8)
+        self.rate = self._metric(metric_grid, "Битрейт", "Измеряю…")
+        self.fps = self._metric(metric_grid, "FPS", "Проверяю…")
+        self.resolution = self._metric(metric_grid, "Разрешение", "Проверяю…")
+        self.video_codec = self._metric(metric_grid, "Видеокодек", "Проверяю…")
+        self.audio_codec = self._metric(metric_grid, "Аудиокодек", "Проверяю…")
+        self.connection = self._metric(metric_grid, "RTSP", "Проверяю…")
+        metrics_layout.addLayout(metric_grid)
+        self.last = self._metric(metric_grid, "Последние данные видео", "Проверяю…")
         metrics_layout.addStretch(1)
         split.addWidget(metrics, 4)
         block.addLayout(split)
@@ -152,6 +162,10 @@ class CameraDetailDialog(QDialog):
         self.info.setWordWrap(True)
         self.info.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         detail_layout.addWidget(self.info)
+        self.facts = QGridLayout()
+        self.facts.setHorizontalSpacing(18)
+        self.facts.setVerticalSpacing(10)
+        detail_layout.addLayout(self.facts)
         block.addWidget(details)
 
         diagnostic = Card(subtle=True)
@@ -173,25 +187,50 @@ class CameraDetailDialog(QDialog):
         scroll.setWidget(inner)
         outer.addWidget(scroll, 1)
 
-        row = QHBoxLayout()
-        note = QLabel("Обновление выполняется без блокировки интерфейса")
+        note = QLabel("Данные собираются в фоне · RTSP и архив проверяются отдельно")
         note.setObjectName("TinyMuted")
-        row.addWidget(note, 1)
-        close = QPushButton("Закрыть")
-        close.clicked.connect(self.close)
-        row.addWidget(close)
-        outer.addLayout(row)
+        outer.addWidget(note)
 
     @staticmethod
     def _metric(layout, title, value):
+        tile = Card(subtle=True)
+        frame = QVBoxLayout(tile)
+        frame.setContentsMargins(10, 8, 10, 8)
+        frame.setSpacing(4)
         caption = QLabel(title)
         caption.setObjectName("TinyMuted")
-        layout.addWidget(caption)
+        frame.addWidget(caption)
         field = QLabel(value)
         field.setObjectName("Value")
         field.setWordWrap(True)
-        layout.addWidget(field)
+        frame.addWidget(field)
+        index = layout.count()
+        layout.addWidget(tile, index // 2, index % 2)
         return field
+
+    def _set_facts(self, rows):
+        while self.facts.count():
+            item = self.facts.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        entries = [(label, value) for label, value in rows if value]
+        for index, (label, value) in enumerate(entries):
+            tile = QWidget(self)
+            box = QVBoxLayout(tile)
+            box.setContentsMargins(0, 2, 0, 2)
+            box.setSpacing(3)
+            label_widget = QLabel(label)
+            label_widget.setObjectName("TinyMuted")
+            box.addWidget(label_widget)
+            value_widget = QLabel(str(value))
+            value_widget.setObjectName("Value")
+            value_widget.setWordWrap(True)
+            value_widget.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            box.addWidget(value_widget)
+            self.facts.addWidget(tile, index // 3, index % 3)
 
     def refresh(self):
         if not self.refresh_btn.isEnabled():
@@ -247,6 +286,7 @@ class CameraDetailDialog(QDialog):
             else:
                 self.status.set_status("Ошибка", "danger")
                 self.info.setText(error)
+                self.info.show()
                 self.image.setText("Превью недоступно")
                 self.rate.setText("Нет данных")
                 self.last.setText("Нет данных")
@@ -290,6 +330,8 @@ class CameraDetailDialog(QDialog):
         self.info.setText("\n".join(
             f"{label}: {value}" for label, value in lines if value
         ))
+        self.info.hide()
+        self._set_facts(lines)
         self.refresh_btn.setEnabled(True)
 
         def preview_worker():
