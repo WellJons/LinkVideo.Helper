@@ -95,6 +95,10 @@ class ArchiveDiagnosticsPage(QWidget):
         self.auth_user.setObjectName("Muted")
         self.auth_btn = QPushButton("Авторизация B2O")
         self.auth_btn.clicked.connect(self._auth)
+        if self.work_account is not None:
+            # The only visible authentication controls are under the
+            # MikroTik user card. Archive pages show status, not login forms.
+            self.auth_btn.hide()
         auth_row.addWidget(self.auth_pill)
         auth_row.addWidget(self.auth_user)
         auth_row.addStretch(1)
