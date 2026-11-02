@@ -58,6 +58,8 @@ class MainWindow(QMainWindow):
         self._current_key = ""
         self._collapsed = False
         self._account_panel_open = False
+        self._work_b2o_ok: bool | None = None
+        self._work_crm_ok: bool | None = None
         self._first_show = True
         self._window_fade = None
         self.updateReady.connect(self._on_update_ready)
@@ -169,22 +171,16 @@ class MainWindow(QMainWindow):
         self.work_mikrotik = QLabel("✓ MikroTik · вход подтверждён")
         self.work_mikrotik.setObjectName("TinyMuted")
         auth_layout.addWidget(self.work_mikrotik)
-        self.work_b2o = QLabel("◌ B2O · подключение…")
-        self.work_b2o.setObjectName("TinyMuted")
-        self.work_b2o.setWordWrap(True)
-        auth_layout.addWidget(self.work_b2o)
-        self.work_crm = QLabel("◌ CRM · при открытии тарифов")
-        self.work_crm.setObjectName("TinyMuted")
-        self.work_crm.setWordWrap(True)
-        auth_layout.addWidget(self.work_crm)
-        self.work_reconnect_b2o = QPushButton("Переподключить B2O")
-        self.work_reconnect_b2o.setObjectName("WorkAccountReconnectB2O")
-        self.work_reconnect_b2o.clicked.connect(self._reconnect_work_b2o)
-        auth_layout.addWidget(self.work_reconnect_b2o)
-        self.work_reconnect_crm = QPushButton("Подключить CRM")
-        self.work_reconnect_crm.setObjectName("WorkAccountReconnectCRM")
-        self.work_reconnect_crm.clicked.connect(self._reconnect_work_crm)
-        auth_layout.addWidget(self.work_reconnect_crm)
+        # B2O and CRM use one employee login. Only their server-side sessions
+        # are separate; the user must not see two login/reconnect controls.
+        self.work_billing = QLabel("◌ Биллинг · подключение…")
+        self.work_billing.setObjectName("TinyMuted")
+        self.work_billing.setWordWrap(True)
+        auth_layout.addWidget(self.work_billing)
+        self.work_reconnect_billing = QPushButton("Проверить подключение биллинга")
+        self.work_reconnect_billing.setObjectName("WorkAccountReconnectBilling")
+        self.work_reconnect_billing.clicked.connect(self._reconnect_work_billing)
+        auth_layout.addWidget(self.work_reconnect_billing)
         self.work_signout = QPushButton("Выйти из учётной записи")
         self.work_signout.setObjectName("WorkAccountSignOut")
         self.work_signout.setProperty("role", "danger")
@@ -507,28 +503,64 @@ class MainWindow(QMainWindow):
         self.work_account_panel.setVisible(self._account_panel_open and not self._collapsed)
         self.logout.setText("⌃" if self._account_panel_open else "⌄")
 
-    def _on_work_b2o_status(self, ok: bool, error: str):
-        self.work_b2o.setText(
-            "✓ B2O · подключён" if ok else "× B2O · нет доступа или соединения"
+    def _refresh_work_billing_status(self):
+        # Present one billing connection to the operator. Distinct API
+        # outcomes stay available as a tooltip for diagnostics.
+        b2o, crm = self._work_b2o_ok, self._work_crm_ok
+        if b2o is True and crm is True:
+            message = "✓ Биллинг · подключён"
+        elif b2o is False and crm is False:
+            message = "× Биллинг · нет доступа"
+        elif b2o is False or crm is False:
+            message = "× Биллинг · часть функций недоступна"
+        elif b2o is True or crm is True:
+            message = "◌ Биллинг · частично подключён"
+        else:
+            message = "◌ Биллинг · подключение…"
+        self.work_billing.setText(message)
+
+        def description(value, label):
+            state = "подключён" if value is True else (
+                "нет доступа" if value is False else "не проверен"
+            )
+            return f"{label}: {state}"
+
+        self.work_billing.setToolTip(
+            description(b2o, "Камеры (B2O)") + "\\n" +
+            description(crm, "Клиенты и тарифы (CRM)")
         )
-        self.work_reconnect_b2o.setEnabled(True)
+        page = self._page_cache.get("tariffs")
+        crm_busy = bool(page and page.billing_login._busy)
+        self.work_reconnect_billing.setEnabled(
+            not self.work_account.b2o_busy and not crm_busy
+        )
 
-    def _reconnect_work_b2o(self):
-        self.work_reconnect_b2o.setEnabled(False)
-        self.work_b2o.setText("◌ B2O · проверка учётной записи…")
-        if not self.work_account.ensure_b2o(force=True):
-            if self.work_account.b2o_busy:
-                return
-        self.work_reconnect_b2o.setEnabled(True)
-
-    def _reconnect_work_crm(self):
-        page = self._ensure_page("tariffs")
-        self._go("tariffs")
-        self.work_crm.setText("◌ CRM · проверка учётной записи…")
-        page._connect_work_account()
+    def _on_work_b2o_status(self, ok: bool, error: str):
+        self._work_b2o_ok = bool(ok)
+        self._refresh_work_billing_status()
 
     def _on_work_crm_status(self, ok: bool):
-        self.work_crm.setText("✓ CRM · подключён" if ok else "× CRM · нет доступа")
+        self._work_crm_ok = bool(ok)
+        self._refresh_work_billing_status()
+
+    def _reconnect_work_billing(self):
+        # One explicit action retries the two endpoints with the existing
+        # verified work credentials; no extra password dialog or navigation.
+        if self.work_account.b2o_busy:
+            return
+        page = self._page_cache.get("tariffs")
+        if page is not None and page.billing_login._busy:
+            return
+        self._work_b2o_ok = None
+        self._work_crm_ok = None
+        try:
+            page = self._ensure_page("tariffs")
+            page._connect_work_account()
+            self.work_account.ensure_b2o(force=True)
+        except Exception:
+            # Keep error messages free of server replies and secrets.
+            self._work_crm_ok = False
+        self._refresh_work_billing_status()
 
     def _logout(self):
         dialog = ConfirmDialog(
