@@ -71,6 +71,19 @@ def _migrate_settings(settings: QSettings):
 
 
 def main() -> int:
+    # A scheduled bot task starts the same bundled EXE without opening the
+    # desktop GUI, showing a login dialog or inheriting a staff session.
+    if "--telegram-worker" in sys.argv:
+        from linkvideo_vpn_helper.services.telegram_camera_agent import service_main
+        service_main()
+        return 0
+    if "--telegram-admin-op" in sys.argv:
+        from linkvideo_vpn_helper.services.telegram_service_runtime import administer_operation
+        index = sys.argv.index("--telegram-admin-op")
+        if len(sys.argv) != index + 2:
+            return 2
+        administer_operation(sys.argv[index + 1])
+        return 0
     # Install the Windows subprocess guard before any QApplication/setting
     # initializers or automatic login can launch auxiliary programs.
     from linkvideo_vpn_helper.ui.background_ux_integration import (
