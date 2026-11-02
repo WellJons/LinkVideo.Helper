@@ -13,7 +13,7 @@ from linkvideo_vpn_helper.services.billing_gateway import BillingClient, Billing
 from linkvideo_vpn_helper.services.camera_lookup import (
     CameraChoice, search_by_login, search_all_cameras,
 )
-from linkvideo_vpn_helper.services.camera_live_probe import parse_recent_segment
+from linkvideo_vpn_helper.services.camera_live_probe import parse_recent_segment, probe_live_camera
 from linkvideo_vpn_helper.ui.camera_detail_dialog import CameraDetailDialog
 from linkvideo_vpn_helper.ui.camera_diagnostics_panel import CameraDiagnosticsPanel
 from linkvideo_vpn_helper.ui.first_page_window_guard import FirstPageWindowGuard
@@ -91,6 +91,50 @@ with tempfile.TemporaryDirectory() as td:
     assert first.findChild(QPushButton, "CameraSearchOpen") is not None
     assert panel._thumb_labels[0].size().width() == 160
     panel.close()
+
+
+    # Signed recent DVR is the only bitrate fallback when B2O has no explicit
+    # live playlist. The current tariff and a TCP handshake cannot measure it.
+    from linkvideo_vpn_helper.services.camera_diagnostics import CameraDiagnostics
+    from linkvideo_vpn_helper.services.camera_live_probe import (
+        _recent_archive_playlists,
+    )
+    signed = CameraDiagnostics(
+        "linkvideo_12345", "b2o-vcore38.video.goodline.info", "",
+        554, "", "", metadata={
+            "signature": "fixture-signature",
+            "main_stream_name": "linkvideo_12345",
+        },
+    )
+    candidates = _recent_archive_playlists(signed)
+    assert candidates and "playlist_dvr_range-" in candidates[0]
+    assert "wmsAuthSign=fixture-signature" in candidates[0]
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+        def __enter__(self):
+            return self
+        def __exit__(self, *unused):
+            return False
+        def read(self, max_bytes):
+            return self.payload[:max_bytes]
+    class FakeOpen:
+        def open(self, request, timeout=5):
+            if request.full_url.split("?", 1)[0].endswith(".m3u8"):
+                return FakeResponse(b"#EXTM3U\\n#EXTINF:2.0,\\nsegment.ts\\n")
+            if request.full_url.endswith("segment.ts"):
+                return FakeResponse(b"x" * 500000)
+            raise AssertionError("Unexpected media request")
+    health = probe_live_camera(signed, opener=FakeOpen())
+    assert "2.00" in health.bitrate_mbps
+    assert "архив" in health.bitrate_mbps
+    unsigned = CameraDiagnostics(
+        "linkvideo_12345", "b2o-vcore38.video.goodline.info", "",
+        554, "", "", metadata={"main_stream_name": "linkvideo_12345"},
+    )
+    assert _recent_archive_playlists(unsigned) == ()
+    assert probe_live_camera(unsigned, opener=FakeOpen()).bitrate_mbps == "Не измерен"
 
     playlist = "#EXTM3U\n#EXTINF:2.0,\nsegment.ts\n"
     base = "https://b2o-vcore77.video.goodline.info/live/test.m3u8"
