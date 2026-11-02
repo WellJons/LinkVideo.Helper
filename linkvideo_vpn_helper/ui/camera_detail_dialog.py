@@ -36,6 +36,8 @@ class CameraDetailDialog(QDialog):
         self.live_probe = live_probe
         self._generation = 0
         self._preview_bytes = b""
+        self._last_report = None
+        self._last_telemetry = None
         self.setObjectName("CameraInformationDialog")
         self.setWindowTitle("Информация по камере · LinkVideo.Helper")
         self.resize(1040, 735)
@@ -122,8 +124,8 @@ class CameraDetailDialog(QDialog):
         top = QLabel("Состояние потока")
         top.setObjectName("CardTitle")
         metrics_layout.addWidget(top)
-        self.rate = self._metric(metrics_layout, "Текущий битрейт", "Измеряю…")
-        self.last = self._metric(metrics_layout, "Последний поток", "Проверяю…")
+        self.rate = self._metric(metrics_layout, "Битрейт видео", "Измеряю…")
+        self.last = self._metric(metrics_layout, "Последние данные видео", "Проверяю…")
         self.connection = self._metric(metrics_layout, "Сетевая доступность", "Проверяю…")
         metrics_layout.addStretch(1)
         split.addWidget(metrics, 4)
@@ -186,14 +188,17 @@ class CameraDetailDialog(QDialog):
         self._generation += 1
         generation = self._generation
         self.refresh_btn.setEnabled(False)
-        self.status.set_status("Проверяю", "warning")
-        self.info.setText("Получаю данные камеры…")
-        self.image.setText("Загружаю превью…")
-        self.image.setPixmap(QPixmap())
-        self.rate.setText("Измеряю…")
-        self.last.setText("Проверяю…")
-        self.connection.setText("Проверяю…")
-        self.diagnostic_text.setText("Запросы выполняются в фоне…")
+        self.status.set_status("Обновление", "warning")
+        # Preserve the last successful reading during refresh. Otherwise an
+        # intermittent API/RTSP failure makes the whole card appear empty.
+        if self._last_report is None:
+            self.info.setText("Получаю данные камеры…")
+            self.image.setText("Загружаю превью…")
+            self.image.setPixmap(QPixmap())
+            self.rate.setText("Измеряю…")
+            self.last.setText("Проверяю…")
+            self.connection.setText("Проверяю…")
+            self.diagnostic_text.setText("Запросы выполняются в фоне…")
 
         def worker():
             try:
@@ -218,16 +223,27 @@ class CameraDetailDialog(QDialog):
         if generation != self._generation:
             return
         if error or report is None:
-            self.status.set_status("Ошибка", "danger")
-            self.info.setText(error)
-            self.image.setText("Превью недоступно")
-            self.rate.setText("Нет данных")
-            self.last.setText("Нет данных")
-            self.connection.setText("Нет данных")
-            self.diagnostic_text.setText("Диагностика невозможна без карточки камеры.")
+            if self._last_report is not None:
+                self.status.set_status("Обновление не удалось", "warning")
+                self.diagnostic_text.setText(
+                    "Повторный запрос админки не удался. Показаны данные "
+                    "предыдущей успешной проверки; они могут быть устаревшими."
+                )
+            else:
+                self.status.set_status("Ошибка", "danger")
+                self.info.setText(error)
+                self.image.setText("Превью недоступно")
+                self.rate.setText("Нет данных")
+                self.last.setText("Нет данных")
+                self.connection.setText("Нет данных")
+                self.diagnostic_text.setText("Диагностика невозможна без карточки камеры.")
             self.refresh_btn.setEnabled(True)
             return
-        self.status.set_status("Карточка загружена", "success")
+        self._last_report = report
+        if str(report.status or "").casefold() in ("error", "offline", "failed"):
+            self.status.set_status("B2O: " + report.status, "warning")
+        else:
+            self.status.set_status("Карточка загружена", "success")
         title = str(self.choice.label or "").strip()
         self.heading.setText(
             report.name or (title if title and not title.lower().startswith(
@@ -305,11 +321,18 @@ class CameraDetailDialog(QDialog):
         if generation != self._generation:
             return
         if data is None:
-            self.rate.setText("Не измерен")
-            self.last.setText("Нет подтверждённой даты")
-            self.connection.setText("Недоступно")
-            self.diagnostic_text.setText("Не удалось выполнить сетевую диагностику.")
+            if self._last_telemetry is not None:
+                self.diagnostic_text.setText(
+                    "Повторная сетевая проверка не удалась. Показан прежний "
+                    "замер, он не отражает текущее состояние видеопотока."
+                )
+            else:
+                self.rate.setText("Не измерен")
+                self.last.setText("Нет подтверждённой даты")
+                self.connection.setText("Недоступно")
+                self.diagnostic_text.setText("Не удалось выполнить сетевую диагностику.")
             return
+        self._last_telemetry = data
         self.rate.setText(data.bitrate_mbps)
         self.last.setText(data.last_stream)
         self.connection.setText(
