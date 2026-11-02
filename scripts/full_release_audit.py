@@ -83,6 +83,9 @@ _ALLOWED_PASS_SITES = {
     # Qt can delete an in-page camera card while its background probe emits.
     # The signal guard discards only that late UI callback, not probe errors.
     ("linkvideo_vpn_helper/ui/camera_detail_dialog.py", "_safe_emit", "RuntimeError"): 1,
+    # Privileged Telegram setup returns only a fixed sanitized error code;
+    # never send raw exceptions because they can expose secret file paths.
+    ("linkvideo_vpn_helper/services/telegram_service_runtime.py", "administer_operation", "Exception"): 1,
     ("linkvideo_vpn_helper/ui/main_window.py", "_go", "Exception"): 3,
     # Only OS launch failures are intentionally ignored after credentials were cleared.
     ("linkvideo_vpn_helper/ui/main_window.py", "_logout", "OSError"): 1,
