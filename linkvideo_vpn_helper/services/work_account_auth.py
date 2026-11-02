@@ -18,6 +18,7 @@ from linkvideo_vpn_helper.services.billing_credential_store import BillingCreden
 
 class WorkAccountAuth(QObject):
     b2oChanged = Signal(bool, str)
+    loginRequested = Signal()
 
     def __init__(self, credentials, settings, parent=None, *, b2o_factory=B2OService,
                  credential_store=None):
