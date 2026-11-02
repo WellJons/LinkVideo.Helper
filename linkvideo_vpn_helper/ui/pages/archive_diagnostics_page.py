@@ -54,10 +54,11 @@ class ArchiveDiagnosticsPage(QWidget):
     MAX_EXTRA_CAMERAS = 4
     DEFAULT_SERVER_COMPARE = 10
 
-    def __init__(self, service: ArchiveService, settings, parent=None):
+    def __init__(self, service: ArchiveService, settings, parent=None, *, work_account=None):
         super().__init__(parent)
         self.service = service
         self.settings = settings
+        self.work_account = work_account
         self.engine = ArchiveDiagnosisEngine()
         self.result: dict | None = None
         self._cancel_event = None
@@ -65,6 +66,8 @@ class ArchiveDiagnosticsPage(QWidget):
         self.resultReady.connect(self._on_result)
         self.statusReady.connect(self._status)
         self.authReady.connect(self._on_auth)
+        if self.work_account is not None:
+            self.work_account.b2oChanged.connect(self._on_work_account_b2o)
         self._build()
 
     def _build(self):
@@ -322,13 +325,21 @@ class ArchiveDiagnosticsPage(QWidget):
         if token:
             self.auth_pill.set_status("B2O подключён", "success")
             self.auth_user.setText(login)
-            self.auth_btn.setText("Сменить вход")
+            self.auth_btn.setText("Переподключить B2O" if self.work_account else "Сменить вход")
         else:
             self.auth_pill.set_status("Нужен вход B2O", "warning")
-            self.auth_user.setText("")
-            self.auth_btn.setText("Авторизация B2O")
+            self.auth_user.setText(self.work_account.username if self.work_account else "")
+            self.auth_btn.setText("Повторить B2O" if self.work_account else "Авторизация B2O")
 
     def _auth(self):
+        if self.work_account is not None:
+            self.auth_btn.setEnabled(False)
+            self.task.show()
+            self.task.busy("Авторизация B2O", "Подключаю рабочую учётную запись…")
+            if self.work_account.b2o_busy:
+                return
+            self.work_account.ensure_b2o(force=True)
+            return
         dialog = B2OLoginDialog(self.service.b2o.login_name(), self)
         if not dialog.exec():
             return
@@ -345,6 +356,9 @@ class ArchiveDiagnosticsPage(QWidget):
                 self.authReady.emit(exc)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _on_work_account_b2o(self, ok, message):
+        self._on_auth(None if ok else RuntimeError(message))
 
     def _on_auth(self, error):
         self.auth_btn.setEnabled(True)
