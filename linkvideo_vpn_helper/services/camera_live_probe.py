@@ -30,6 +30,21 @@ class LiveProbe:
     last_stream: str
     connectivity: str
     detail: str
+    video_codec: str = ""
+    audio_codec: str = ""
+    resolution: str = ""
+    fps: str = ""
+    source: str = ""
+
+
+@dataclass(frozen=True)
+class RtspStats:
+    bitrate_mbps: float
+    video_codec: str
+    audio_codec: str
+    resolution: str
+    fps: float
+    sampled_at: str
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -196,24 +211,23 @@ def _cached_ffmpeg() -> str:
     return ""
 
 
-def _probe_rtsp(report: CameraDiagnostics, *, ffmpeg_path: str = ""):
-    """Sample three seconds of actual RTSP media off the UI thread.
+def _probe_rtsp(report: CameraDiagnostics, *, ffmpeg_path: str = "") -> RtspStats | None:
+    """Measure 4 seconds of RTSP media with the already installed FFmpeg.
 
-    ffmpeg -progress reports media time independently of network download speed.
-    MPEG-TS output contains minor mux overhead, so report an approximation.
-    Never log subprocess arguments or stderr; RTSP URLs may have passwords.
+    The URL can contain a password. Do not log the command, ffmpeg stderr
+    or the URL. No extra process window is allowed on Windows.
     """
     url = str(report.rtsp_url or "")
-    if not url.startswith(("rtsp://", "rtsps://")):
+    if not url.startswith("rtsp://"):
         return None
     ffmpeg = ffmpeg_path or _cached_ffmpeg()
     if not ffmpeg:
         return None
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     cmd = [
-        ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin",
+        ffmpeg, "-hide_banner", "-loglevel", "info", "-nostdin", "-nostats",
         "-rtsp_transport", "tcp", "-rw_timeout", "4000000",
-        "-i", url, "-t", "3", "-map", "0:v:0",
+        "-i", url, "-t", "4", "-map", "0:v:0",
         "-an", "-c:v", "copy", "-f", "mpegts",
         "-progress", "pipe:2", "pipe:1",
     ]
@@ -224,23 +238,56 @@ def _probe_rtsp(report: CameraDiagnostics, *, ffmpeg_path: str = ""):
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
-    if result.returncode or not 50_000 <= len(result.stdout) <= 12_000_000:
+    if result.returncode != 0 or not 50_000 <= len(result.stdout) <= 12_000_000:
         return None
-    times = re.findall(rb"(?:out_time_us|out_time_ms)=(\d+)", result.stderr)
-    if not times:
+
+    progress = result.stderr
+    times = re.findall(rb"(?:out_time_us|out_time_ms)=(\d+)", progress)
+    frames = re.findall(rb"(?:^|\n)frame=(\d+)", progress)
+    if not times or not frames:
         return None
     duration = int(times[-1]) / 1_000_000
-    if duration < 0.5 or duration > 6:
+    frame_count = int(frames[-1])
+    if not 0.5 <= duration <= 7.0 or frame_count <= 0:
         return None
     bitrate = len(result.stdout) * 8.0 / duration / 1_000_000
-    if not 0.02 <= bitrate <= 80.0:
+    fps = frame_count / duration
+    if not 0.02 <= bitrate <= 80 or not 0.2 <= fps <= 240:
         return None
-    return bitrate, datetime.now().astimezone().isoformat()
+
+    # ffmpeg prints stream descriptions for INPUT before OUTPUT.
+    # Do not expose the raw stderr, which may contain the credentialed URL.
+    lines = result.stderr.decode("utf-8", "replace").splitlines()
+    input_lines = []
+    for line in lines:
+        if "Output #0" in line:
+            break
+        if "Stream #0:" in line:
+            input_lines.append(line)
+    video_line = next((line for line in input_lines if "Video:" in line), "")
+    audio_line = next((line for line in input_lines if "Audio:" in line), "")
+    video = re.search(r"\bVideo:\s*([a-zA-Z0-9_.-]+)", video_line)
+    audio = re.search(r"\bAudio:\s*([a-zA-Z0-9_.-]+)", audio_line)
+    dimensions = re.search(r"(?<!\d)(\d{2,5}x\d{2,5})(?!\d)", video_line)
+    return RtspStats(
+        bitrate_mbps=bitrate,
+        video_codec=video.group(1).upper() if video else "",
+        audio_codec=audio.group(1).upper() if audio else "нет данных",
+        resolution=dimensions.group(1) if dimensions else "",
+        fps=fps,
+        sampled_at=datetime.now().astimezone().isoformat(),
+    )
 
 
 def probe_live_camera(report: CameraDiagnostics, *, opener=None) -> LiveProbe:
     """Probe the workstation network in the worker thread, never in Qt."""
-    if report.ip:
+    if report.rtsp_host:
+        network = _ping_windows(report.rtsp_host)
+        if report.rtsp_port:
+            network += "\n" + _test_tcp(report.rtsp_host, report.rtsp_port)
+        else:
+            network += "\nTCP: порт отсутствует."
+    elif report.ip:
         network = _ping_windows(report.ip)
         if report.rtsp_port:
             network += "\n" + _test_tcp(report.ip, report.rtsp_port)
@@ -259,12 +306,18 @@ def probe_live_camera(report: CameraDiagnostics, *, opener=None) -> LiveProbe:
     # Prefer actual administrator RTSP over a historical DVR sample.
     measured = _probe_rtsp(report) if report.rtsp_url else None
     if measured is not None:
-        mbps, seen_at = measured
         return LiveProbe(
-            f"≈{mbps:.2f} Мбит/с", _display_timestamp(seen_at), network,
-            "Прямой трёхсекундный RTSP-замер через FFmpeg: получены "
-            "видеопакеты. Примерный битрейт учитывает транспортный "
-            "контейнер MPEG-TS, а не скорость скачивания или тариф.",
+            f"≈{measured.bitrate_mbps:.2f} Мбит/с",
+            "Поток получен: " + _display_timestamp(measured.sampled_at),
+            network,
+            "Прямой RTSP-замер за 4 секунды. Битрейт приблизительный "
+            "(небольшие накладные расходы MPEG-TS), без подстановки "
+            "тарифа или показаний сервера.",
+            video_codec=measured.video_codec,
+            audio_codec=measured.audio_codec,
+            resolution=measured.resolution,
+            fps=f"{measured.fps:.1f}",
+            source="RTSP",
         )
     playlist = _playlist_url(report)
     if not playlist:
