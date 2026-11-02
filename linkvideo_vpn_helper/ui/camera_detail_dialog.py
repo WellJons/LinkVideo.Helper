@@ -3,6 +3,7 @@ from __future__ import annotations
 """Operator camera card. Every network operation runs outside the Qt thread."""
 
 import threading
+from dataclasses import replace
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QPixmap
@@ -17,6 +18,7 @@ from linkvideo_vpn_helper.services.camera_diagnostics import (
     CameraLookupError, inspect_camera,
 )
 from linkvideo_vpn_helper.services.camera_live_probe import probe_live_camera
+from linkvideo_vpn_helper.services.b2o_rtsp_probe import fetch_camera_stream
 from linkvideo_vpn_helper.ui.components import Card, StatusPill
 from linkvideo_vpn_helper.ui.dialogs import style_helper_dialog
 
@@ -127,6 +129,10 @@ class CameraDetailDialog(QDialog):
         self.rate = self._metric(metrics_layout, "Битрейт видео", "Измеряю…")
         self.last = self._metric(metrics_layout, "Последние данные видео", "Проверяю…")
         self.connection = self._metric(metrics_layout, "Сетевая доступность", "Проверяю…")
+        self.resolution = self._metric(metrics_layout, "Разрешение", "Проверяю…")
+        self.fps = self._metric(metrics_layout, "FPS (замер)", "Проверяю…")
+        self.video_codec = self._metric(metrics_layout, "Кодек видео", "Проверяю…")
+        self.audio_codec = self._metric(metrics_layout, "Кодек аудио", "Проверяю…")
         metrics_layout.addStretch(1)
         split.addWidget(metrics, 4)
         block.addLayout(split)
@@ -198,6 +204,10 @@ class CameraDetailDialog(QDialog):
             self.rate.setText("Измеряю…")
             self.last.setText("Проверяю…")
             self.connection.setText("Проверяю…")
+            self.resolution.setText("Проверяю…")
+            self.fps.setText("Проверяю…")
+            self.video_codec.setText("Проверяю…")
+            self.audio_codec.setText("Проверяю…")
             self.diagnostic_text.setText("Запросы выполняются в фоне…")
 
         def worker():
@@ -260,7 +270,15 @@ class CameraDetailDialog(QDialog):
             ("Модель", report.model),
             ("Сервер", report.server),
             ("IP камеры", report.ip),
-            ("RTSP порт", str(report.rtsp_port) if report.ip else ""),
+            ("RTSP порт", str(report.rtsp_port) if report.rtsp_port else ""),
+            ("Разрешение B2O", str(report.metadata.get("nimble_main_resolution") or "")),
+            ("Видеокодек B2O", str(report.metadata.get("nimble_main_video_codec") or "")),
+            ("Аудиокодек B2O", str(report.metadata.get("nimble_main_audio_codec") or "")),
+            ("Битрейт B2O (справочно)", (
+                f'{float(report.metadata["nimble_main_bandwidth"]) / 1_000_000:.2f} Мбит/с'
+                if str(report.metadata.get("nimble_main_bandwidth") or "").isdigit()
+                else ""
+            )),
             ("Глубина архива", report.archive_depth),
             ("Тариф", self.choice.tariff),
         ]
@@ -284,7 +302,18 @@ class CameraDetailDialog(QDialog):
 
         def telemetry_worker():
             try:
-                data = self.live_probe(report)
+                b2o = B2OService(self.settings)
+                stream = fetch_camera_stream(
+                    b2o, report.camera_id, self.choice.operator_id
+                )
+                sample = report
+                if stream is not None:
+                    sample = replace(
+                        report, rtsp_url=stream.url,
+                        rtsp_host=stream.host, rtsp_port=stream.port,
+                        port_source="camera-streams-urls",
+                    )
+                data = self.live_probe(sample)
                 self.telemetryReady.emit((generation, data))
             except Exception:
                 self.telemetryReady.emit((generation, None))
@@ -330,15 +359,26 @@ class CameraDetailDialog(QDialog):
                 self.rate.setText("Не измерен")
                 self.last.setText("Нет подтверждённой даты")
                 self.connection.setText("Недоступно")
+                self.resolution.setText("Нет данных")
+                self.fps.setText("Не измерен")
+                self.video_codec.setText("Нет данных")
+                self.audio_codec.setText("Нет данных")
                 self.diagnostic_text.setText("Не удалось выполнить сетевую диагностику.")
             return
         self._last_telemetry = data
+        self.resolution.setText(data.resolution or "Не определено")
+        self.fps.setText(data.fps or "Не измерен")
+        self.video_codec.setText(data.video_codec or "Не определён")
+        self.audio_codec.setText(data.audio_codec or "Не определён")
         self.rate.setText(data.bitrate_mbps)
         self.last.setText(data.last_stream)
         self.connection.setText(
-            "Медиасервер: HTTPS доступен"
-            if "TCP:443 — открыт" in data.connectivity
-            else ("Сервер не отвечает" if "TCP:443" in data.connectivity
-                  else "Нет данных о доступности самой камеры")
+            "RTSP-поток получен"
+            if data.source == "RTSP"
+            else ("RTSP порт доступен" if "TCP:" in data.connectivity and
+                  "— открыт" in data.connectivity
+                  else ("Медиасервер: HTTPS доступен"
+                        if "TCP:443 — открыт" in data.connectivity
+                        else "Нет подтверждения RTSP-потока"))
         )
         self.diagnostic_text.setText(data.connectivity + "\n\n" + data.detail)
