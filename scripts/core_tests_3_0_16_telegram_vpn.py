@@ -125,4 +125,80 @@ with tempfile.TemporaryDirectory() as temp:
     assert not agent.vpn_pending.get(999999)
     os.environ.pop("LINKVIDEO_TELEGRAM_STATE_DB", None)
 
+
+# Region-specific automatic server selection: never allow a Russian host
+# when Kazakhstan or Belarus was explicitly chosen in Telegram.
+from linkvideo_vpn_helper.services.server_registry import VPNServer
+
+class RegionalRegistry:
+    def all(self, include_disabled=False):
+        return [
+            VPNServer("vpn01.linkvideo.ru", "Россия"),
+            VPNServer("vpn02.linkvideo.ru", "Россия"),
+            VPNServer("kz-vpn01.linkvideo.ru", "Казахстан"),
+            VPNServer("rb-vpn01.linkvideo.ru", "Беларусь"),
+        ]
+
+class RegionalService:
+    def __init__(self):
+        self.lookups = []
+        self.created = []
+    def pick_best_server_parallel(self, hosts, creds):
+        self.lookups.append(tuple(hosts))
+        return hosts[0]
+    def suggest_next_login(self, server, creds, login):
+        return login
+    def create_clients_batch(self, server, creds, login, ports, accounts):
+        self.created.append((server, login))
+        return [SimpleNamespace(copy_text=lambda: "Создано: " + server)]
+
+regional_service = RegionalService()
+regional = TelegramVPNOperations(
+    service=regional_service, registry=RegionalRegistry(),
+    credentials_provider=lambda: creds,
+)
+for region, allowed_hosts in [
+    ("Россия", ("vpn01.linkvideo.ru", "vpn02.linkvideo.ru")),
+    ("Казахстан", ("kz-vpn01.linkvideo.ru",)),
+    ("Беларусь", ("rb-vpn01.linkvideo.ru",)),
+]:
+    result = regional.prepare("89200000001", region, 3)
+    assert result.country == region
+    assert result.server in allowed_hosts
+    assert regional_service.lookups[-1] == allowed_hosts
+    assert not regional_service.created
+
+for code, country in (("ru", "Россия"), ("kz", "Казахстан"),
+                      ("by", "Беларусь")):
+    agent = TelegramMenuAgent(
+        "123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        frozenset({12345678}), SimpleNamespace(), invites=None,
+    )
+    agent.vpn_operations = regional
+    sent = []
+    agent._request = lambda method, payload, photo=None: (
+        sent.append((method, payload)) or {"ok": True}
+    )
+    agent._begin_vpn(12345678)
+    agent._handle_callback({
+        "id": "regional-test",
+        "data": "vpn_country:" + code,
+        "from": {"id": 12345678},
+        "message": {"chat": {"id": 12345678, "type": "private"}},
+    })
+    assert agent.vpn_country[12345678] == country
+    agent._prepare_vpn(12345678, "89200000001")
+    proposal = agent.vpn_pending[12345678]
+    assert proposal.country == country
+    assert ("Страна: " + country) in sent[-1][1]["text"]
+    assert proposal.server in sent[-1][1]["text"]
+    # Test stops before creating anything on MikroTik.
+    assert not regional_service.created
+
+try:
+    regional.prepare("89200000001", "Украина", 3)
+    raise AssertionError("Unlisted country was accepted")
+except ValueError:
+    pass
+
 print("CORE TESTS 3.0.16 TELEGRAM VPN CONFIRM + IDEMPOTENCY OK")
