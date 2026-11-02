@@ -7,6 +7,7 @@ a confirmed, one-use Telegram action from an invited private-chat account.
 No MikroTik credentials are embedded in application resources.
 """
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 import re
 import secrets
@@ -37,17 +38,26 @@ class VPNProposal:
     issued_at: float
 
 
+@contextmanager
 def _audit_db():
     path = state_database_path().parent / "vpn_operations.sqlite3"
     path.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(path, timeout=8)
-    db.execute(
-        "CREATE TABLE IF NOT EXISTS vpn_requests ("
-        "id TEXT PRIMARY KEY, actor INTEGER NOT NULL, "
-        "login TEXT NOT NULL, server TEXT NOT NULL,"
-        "state TEXT NOT NULL, created_at INTEGER NOT NULL)"
-    )
-    return db
+    try:
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS vpn_requests ("
+            "id TEXT PRIMARY KEY, actor INTEGER NOT NULL, "
+            "login TEXT NOT NULL, server TEXT NOT NULL,"
+            "state TEXT NOT NULL, created_at INTEGER NOT NULL)"
+        )
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        # sqlite3.Connection.__exit__ never closes the handle on Windows.
+        db.close()
 
 
 class TelegramVPNOperations:
