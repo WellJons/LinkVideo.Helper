@@ -101,6 +101,31 @@ with tempfile.TemporaryDirectory() as temporary:
         assert not settings.contains("billing/crm/password_dpapi")
         page.close()
 
+    # Both archive pages must silently use the same work account and must
+    # never open their own B2O password dialog in the main Helper workflow.
+    from linkvideo_vpn_helper.services.archive_service import ArchiveService
+    from linkvideo_vpn_helper.ui.pages.archive_download_page import ArchiveDownloadPage
+    from linkvideo_vpn_helper.ui.pages.archive_diagnostics_page import ArchiveDiagnosticsPage
+    archive_service = ArchiveService(settings)
+    download_page = ArchiveDownloadPage(
+        archive_service, settings, work_account=account,
+    )
+    diagnostics_page = ArchiveDiagnosticsPage(
+        archive_service, settings, work_account=account,
+    )
+    with patch("linkvideo_vpn_helper.ui.pages.archive_download_page.B2OLoginDialog",
+               side_effect=AssertionError("Duplicate B2O dialog opened")):
+        download_page._authorize()
+    pump_until(lambda: download_page.btn_auth.isEnabled())
+    assert download_page.auth_pill.text() == "B2O подключён"
+    with patch("linkvideo_vpn_helper.ui.pages.archive_diagnostics_page.B2OLoginDialog",
+               side_effect=AssertionError("Duplicate B2O dialog opened")):
+        diagnostics_page._auth()
+    pump_until(lambda: diagnostics_page.auth_btn.isEnabled())
+    assert diagnostics_page.auth_pill.text() == "B2O подключён"
+    download_page.close()
+    diagnostics_page.close()
+
     class RejectB2O(FakeB2O):
         def login(self, *args):
             raise RuntimeError("private secret: not-a-real-secret")
