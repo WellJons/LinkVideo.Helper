@@ -64,14 +64,10 @@ def _migrate_settings(settings: QSettings):
             legacy_theme = str(legacy.value("ui/theme", "", str) or "").lower()
             settings.setValue("ui/theme_v2", "dark" if "dark" in legacy_theme else "linkvideo_2026")
 
-    if not str(settings.value("username", "", str) or "").strip():
-        legacy = QSettings("LinkVideo", "VPNHelper")
-        old_user = str(legacy.value("username", "", str) or "").strip()
-        old_password = str(legacy.value("password", "", str) or "")
-        if old_user and old_password:
-            settings.setValue("username", old_user)
-            settings.setValue("password", old_password)
-            settings.setValue("remember", bool(legacy.value("remember", True, bool)))
+    # Migrate the old RouterOS login only once. A logout must never re-import
+    # the former VPNHelper password and automatically sign the user in again.
+    from linkvideo_vpn_helper.services.work_login_storage import migrate_legacy_work_login
+    migrate_legacy_work_login(settings, QSettings("LinkVideo", "VPNHelper"))
 
 
 def main() -> int:
@@ -90,6 +86,10 @@ def main() -> int:
 
     settings = QSettings("LinkVideo", "LinkVideo.Helper")
     _migrate_settings(settings)
+    # A process explicitly opened by "switch account" MUST show a fresh login.
+    if "--signed-out" in sys.argv:
+        from linkvideo_vpn_helper.services.work_login_storage import force_fresh_login
+        force_fresh_login(settings)
 
     from linkvideo_vpn_helper.services.app_logging import event, install_runtime_logging, shutdown_runtime_logging
     install_runtime_logging()
