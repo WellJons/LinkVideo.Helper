@@ -58,6 +58,7 @@ class MainWindow(QMainWindow):
         self._current_key = ""
         self._collapsed = False
         self._account_panel_open = False
+        self._admin_panel_open = False
         self._work_b2o_ok: bool | None = None
         self._work_crm_ok: bool | None = None
         self._first_show = True
@@ -160,36 +161,73 @@ class MainWindow(QMainWindow):
         ul.addLayout(user_text, 1)
         ul.addWidget(self.logout)
         sl.addWidget(user_card)
+        # Two distinct accounts: MikroTik and administrator. Their usernames
+        # and passwords never flow into each other's authentication endpoints.
         self.work_account_panel = Card(subtle=True)
         self.work_account_panel.setObjectName("WorkAccountPanel")
-        auth_layout = QVBoxLayout(self.work_account_panel)
-        auth_layout.setContentsMargins(11, 12, 11, 12)
-        auth_layout.setSpacing(7)
-        panel_title = QLabel("РАБОЧАЯ УЧЁТНАЯ ЗАПИСЬ")
-        panel_title.setObjectName("NavSection")
-        auth_layout.addWidget(panel_title)
-        self.work_mikrotik = QLabel("✓ MikroTik · вход подтверждён")
-        self.work_mikrotik.setObjectName("TinyMuted")
-        auth_layout.addWidget(self.work_mikrotik)
-        # B2O and CRM use one employee login. Only their server-side sessions
-        # are separate; the user must not see two login/reconnect controls.
-        self.work_billing = QLabel("◌ Биллинг · подключение…")
-        self.work_billing.setObjectName("TinyMuted")
-        self.work_billing.setWordWrap(True)
-        auth_layout.addWidget(self.work_billing)
-        self.work_reconnect_billing = QPushButton("Проверить подключение биллинга")
-        self.work_reconnect_billing.setObjectName("WorkAccountReconnectBilling")
-        self.work_reconnect_billing.clicked.connect(self._reconnect_work_billing)
-        auth_layout.addWidget(self.work_reconnect_billing)
-        self.work_signout = QPushButton("Выйти из учётной записи")
+        router_layout = QVBoxLayout(self.work_account_panel)
+        router_layout.setContentsMargins(10, 10, 10, 10)
+        self.work_signout = QPushButton("Сменить аккаунт MikroTik")
         self.work_signout.setObjectName("WorkAccountSignOut")
-        self.work_signout.setProperty("role", "danger")
+        self.work_signout.setProperty("role", "soft")
         self.work_signout.clicked.connect(self._logout)
-        auth_layout.addWidget(self.work_signout)
+        router_layout.addWidget(self.work_signout)
         self.work_account_panel.hide()
         sl.addWidget(self.work_account_panel)
+
+        self.admin_card = Card(subtle=True)
+        self.admin_card.setObjectName("SidebarAdminCard")
+        al = QHBoxLayout(self.admin_card)
+        al.setContentsMargins(11, 9, 9, 9)
+        al.setSpacing(8)
+        admin_avatar = QLabel("A")
+        admin_avatar.setObjectName("Avatar")
+        admin_avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        admin_avatar.setFixedSize(32, 32)
+        admin_text = QVBoxLayout()
+        admin_text.setSpacing(0)
+        self.admin_name = QLabel("Админка")
+        self.admin_name.setObjectName("Value")
+        self.admin_status = QLabel("Не подключена")
+        self.admin_status.setObjectName("TinyMuted")
+        self.admin_status.setWordWrap(True)
+        admin_text.addWidget(self.admin_name)
+        admin_text.addWidget(self.admin_status)
+        self.admin_toggle = QPushButton("⌄")
+        self.admin_toggle.setObjectName("AdminAccountToggle")
+        self.admin_toggle.setProperty("role", "icon")
+        self.admin_toggle.setToolTip("Вход и управление учётной записью админки")
+        self.admin_toggle.clicked.connect(self._toggle_admin_panel)
+        al.addWidget(admin_avatar)
+        al.addLayout(admin_text, 1)
+        al.addWidget(self.admin_toggle)
+        sl.addWidget(self.admin_card)
+
+        self.admin_account_panel = Card(subtle=True)
+        self.admin_account_panel.setObjectName("AdminAccountPanel")
+        admin_actions = QVBoxLayout(self.admin_account_panel)
+        admin_actions.setContentsMargins(10, 10, 10, 10)
+        admin_actions.setSpacing(7)
+        self.admin_login_btn = QPushButton("Войти в админку")
+        self.admin_login_btn.setObjectName("AdminAccountLogin")
+        self.admin_login_btn.setProperty("role", "primary")
+        self.admin_login_btn.clicked.connect(self._open_admin_login)
+        admin_actions.addWidget(self.admin_login_btn)
+        self.admin_retry_btn = QPushButton("Проверить подключение")
+        self.admin_retry_btn.setObjectName("AdminAccountRetry")
+        self.admin_retry_btn.setProperty("role", "soft")
+        self.admin_retry_btn.clicked.connect(self._reconnect_work_billing)
+        admin_actions.addWidget(self.admin_retry_btn)
+        self.admin_forget_btn = QPushButton("Забыть данные админки")
+        self.admin_forget_btn.setObjectName("AdminAccountForget")
+        self.admin_forget_btn.setProperty("role", "soft")
+        self.admin_forget_btn.clicked.connect(self._forget_admin)
+        admin_actions.addWidget(self.admin_forget_btn)
+        self.admin_account_panel.hide()
+        sl.addWidget(self.admin_account_panel)
         sl.addSpacing(10)
         self.work_account.b2oChanged.connect(self._on_work_b2o_status)
+        self._refresh_work_billing_status()
 
         self.work_label = QLabel("РАБОТА")
         self.work_label.setObjectName("NavSection")
@@ -411,6 +449,8 @@ class MainWindow(QMainWindow):
         self.logo_sub.setVisible(not collapsed)
         self.user_card.setVisible(not collapsed)
         self.work_account_panel.setVisible(not collapsed and self._account_panel_open)
+        self.admin_card.setVisible(not collapsed)
+        self.admin_account_panel.setVisible(not collapsed and self._admin_panel_open)
         self.work_label.setVisible(not collapsed)
         self.version.setVisible(not collapsed)
         self.brand_mark.setVisible(True)
@@ -503,37 +543,87 @@ class MainWindow(QMainWindow):
         self.work_account_panel.setVisible(self._account_panel_open and not self._collapsed)
         self.logout.setText("⌃" if self._account_panel_open else "⌄")
 
+    def _toggle_admin_panel(self):
+        self._admin_panel_open = not self._admin_panel_open
+        self.admin_account_panel.setVisible(
+            self._admin_panel_open and not self._collapsed
+        )
+        self.admin_toggle.setText("⌃" if self._admin_panel_open else "⌄")
+
     def _refresh_work_billing_status(self):
-        # Present one billing connection to the operator. Distinct API
-        # outcomes stay available as a tooltip for diagnostics.
+        account = self.work_account
         b2o, crm = self._work_b2o_ok, self._work_crm_ok
-        if b2o is True and crm is True:
-            message = "✓ Биллинг · подключён"
+        self.admin_name.setText(account.username or "Админка")
+        if not account.has_credentials:
+            status = "Не подключена"
         elif b2o is False and crm is False:
-            message = "× Биллинг · нет доступа"
+            status = "Нет доступа"
         elif b2o is False or crm is False:
-            message = "× Биллинг · часть функций недоступна"
-        elif b2o is True or crm is True:
-            message = "◌ Биллинг · частично подключён"
+            status = "Часть функций недоступна"
+        elif b2o is True and crm is True:
+            status = "Подключена"
+        elif b2o is True:
+            status = "Камеры подключены"
+        elif crm is True:
+            status = "Клиенты подключены"
         else:
-            message = "◌ Биллинг · подключение…"
-        self.work_billing.setText(message)
-
-        def description(value, label):
-            state = "подключён" if value is True else (
-                "нет доступа" if value is False else "не проверен"
-            )
-            return f"{label}: {state}"
-
-        self.work_billing.setToolTip(
-            description(b2o, "Камеры (B2O)") + "\\n" +
-            description(crm, "Клиенты и тарифы (CRM)")
+            status = "Проверка доступа…"
+        self.admin_status.setText(status)
+        self.admin_status.setToolTip(
+            "Камеры: " + ("подключены" if b2o is True else
+                           "нет доступа" if b2o is False else "не проверены") +
+            "\\nКлиенты и тарифы: " + ("подключены" if crm is True else
+                                       "нет доступа" if crm is False else "не проверены")
         )
         page = self._page_cache.get("tariffs")
-        crm_busy = bool(page and page.billing_login._busy)
-        self.work_reconnect_billing.setEnabled(
-            not self.work_account.b2o_busy and not crm_busy
+        busy = account.b2o_busy or bool(page and page.billing_login._busy)
+        self.admin_login_btn.setText(
+            "Сменить аккаунт" if account.has_credentials else "Войти в админку"
         )
+        self.admin_login_btn.setEnabled(not busy)
+        self.admin_retry_btn.setEnabled(account.has_credentials and not busy)
+        self.admin_forget_btn.setEnabled(account.has_credentials and not busy)
+
+    def _open_admin_login(self):
+        if self.work_account.b2o_busy:
+            return
+        from linkvideo_vpn_helper.ui.admin_login_dialog import AdminLoginDialog
+        dialog = AdminLoginDialog(self.work_account.username, parent=self)
+        if not dialog.exec():
+            return
+        username, password, remember = dialog.credentials()
+        page = self._page_cache.get("tariffs")
+        if page is not None and page.billing_login._busy:
+            return
+        if page is not None:
+            page.billing_login._logout()
+        try:
+            self.work_account.set_admin_credentials(
+                username, password, remember=remember
+            )
+        except (ValueError, RuntimeError):
+            self.admin_status.setText("Не удалось изменить учётную запись")
+            return
+        self._work_b2o_ok = None
+        self._work_crm_ok = None
+        self._refresh_work_billing_status()
+        self.work_account.ensure_b2o(force=True)
+        if page is not None:
+            page._connect_work_account()
+        self._refresh_work_billing_status()
+
+    def _forget_admin(self):
+        if self.work_account.b2o_busy:
+            return
+        page = self._page_cache.get("tariffs")
+        if page is not None and page.billing_login._busy:
+            return
+        if page is not None:
+            page.billing_login._logout()
+        self.work_account.clear(forget=True)
+        self._work_b2o_ok = None
+        self._work_crm_ok = None
+        self._refresh_work_billing_status()
 
     def _on_work_b2o_status(self, ok: bool, error: str):
         self._work_b2o_ok = bool(ok)
@@ -541,11 +631,14 @@ class MainWindow(QMainWindow):
 
     def _on_work_crm_status(self, ok: bool):
         self._work_crm_ok = bool(ok)
+        if ok:
+            self.work_account.confirm_credentials()
         self._refresh_work_billing_status()
 
     def _reconnect_work_billing(self):
-        # One explicit action retries the two endpoints with the existing
-        # verified work credentials; no extra password dialog or navigation.
+        if not self.work_account.has_credentials:
+            self._open_admin_login()
+            return
         if self.work_account.b2o_busy:
             return
         page = self._page_cache.get("tariffs")
@@ -553,13 +646,13 @@ class MainWindow(QMainWindow):
             return
         self._work_b2o_ok = None
         self._work_crm_ok = None
-        try:
-            page = self._ensure_page("tariffs")
+        self._refresh_work_billing_status()
+        self.work_account.ensure_b2o(force=True)
+        # Only create CRM's page on explicit retry. The existing gateway owns
+        # the resulting CRM token, so it is not silently discarded.
+        page = self._ensure_page("tariffs")
+        if page.billing_login.login_verified or not page.billing_login._busy:
             page._connect_work_account()
-            self.work_account.ensure_b2o(force=True)
-        except Exception:
-            # Keep error messages free of server replies and secrets.
-            self._work_crm_ok = False
         self._refresh_work_billing_status()
 
     def _logout(self):
