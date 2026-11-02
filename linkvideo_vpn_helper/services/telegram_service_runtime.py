@@ -99,7 +99,10 @@ def _protect_machine(value: str) -> str:
         protected = ctypes.string_at(target.pbData, target.cbData)
         return base64.b64encode(protected).decode("ascii")
     finally:
-        ctypes.windll.kernel32.LocalFree(target.pbData)
+        free = ctypes.windll.kernel32.LocalFree
+        free.argtypes = [ctypes.c_void_p]
+        free.restype = ctypes.c_void_p
+        free(ctypes.cast(target.pbData, ctypes.c_void_p))
 
 
 def _unprotect_machine(encoded: str) -> str:
@@ -177,6 +180,7 @@ def _save_link_and_token(link: str, token: str):
     tmp.replace(config_file())
     _restrict(config_file(), members_can_read=False)
     public_file().write_text(json.dumps({"bot_link": url}, ensure_ascii=False), "utf-8")
+    _restrict(public_file(), members_can_read=True)
 
 
 def _task_command():
@@ -281,8 +285,9 @@ def admin_action(payload: dict) -> str:
         answer = Path(td) / "response.json"
         request.write_text(json.dumps({**payload, "result_path": str(answer)},
                                       ensure_ascii=False), encoding="utf-8")
-        _restrict(Path(td), members_can_read=False)
-        _restrict(request, members_can_read=False)
+        # tempfile creates a per-user directory. Do not strip the owner's
+        # ACL: the non-elevated GUI must still read the status response.
+        # The UAC helper only receives the file path, never the token in argv.
         # Powershell sees only a path; bot token is never supplied as a CLI arg.
         # Start-Process returns a process exit code after the elevated helper.
         script = (
