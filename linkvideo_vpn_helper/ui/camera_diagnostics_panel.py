@@ -256,10 +256,13 @@ class CameraDiagnosticsPanel(QWidget):
             item.setData(Qt.ItemDataRole.UserRole, choice)
             self.list.addItem(item)
             self.list.setItemWidget(item, self._camera_row(choice, index))
-        self.list.setFixedHeight(
-            min(1800, max(166, len(cameras) * 132 + 18))
+        # Keep the list readable while isolating it from the VPN tab's
+        # layout. For long results use QListWidget's own vertical scroll
+        # instead of inflating the entire shared QTabWidget to 2000+ px.
+        self.list.setFixedHeight(min(510, max(166, len(cameras) * 132 + 18)))
+        self.list.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
-        self.setMinimumHeight(min(2150, 320 + len(cameras) * 132))
         self.list.show()
         # Fetch at most 24 thumbnails, max three at once, without freezing Qt.
         token = B2OService(self._settings).token()
