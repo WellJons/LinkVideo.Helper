@@ -284,7 +284,10 @@ class MainWindow(QMainWindow):
             page = CreateClientPage(self.service, self.search, self.credentials, self.registry, self)
         elif key == "search":
             from linkvideo_vpn_helper.ui.pages.search_manage_page import SearchManagePage
-            page = SearchManagePage(self.service, self.search, self.credentials, self.registry, self)
+            page = SearchManagePage(
+                self.service, self.search, self.credentials, self.registry, self,
+                work_account=self.work_account,
+            )
         elif key == "vpn_servers":
             from linkvideo_vpn_helper.ui.pages.vpn_servers_page import VPNServersPage
             page = VPNServersPage(self.service, self.credentials, self.registry, self)
