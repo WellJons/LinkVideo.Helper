@@ -84,6 +84,11 @@ class SettingsPage(QWidget):
         self.servers_layout.setContentsMargins(0, 14, 0, 0)
         self.servers_layout.setSpacing(12)
 
+        self.telegram_tab = QWidget()
+        self.telegram_layout = QVBoxLayout(self.telegram_tab)
+        self.telegram_layout.setContentsMargins(0, 14, 0, 0)
+        self.telegram_layout.setSpacing(12)
+
         self.about_tab = QWidget()
         self.about_layout = QVBoxLayout(self.about_tab)
         self.about_layout.setContentsMargins(0, 14, 0, 0)
@@ -93,6 +98,7 @@ class SettingsPage(QWidget):
         self.settings_tabs.addTab(self.cloud_tab, "Облачный сервер")
         self.settings_tabs.addTab(self.archive_tab, "Архив")
         self.settings_tabs.addTab(self.servers_tab, "VPN-серверы")
+        self.settings_tabs.addTab(self.telegram_tab, "Telegram-бот")
         self.settings_tabs.addTab(self.about_tab, "О программе")
         root.addWidget(self.settings_tabs)
 
@@ -209,6 +215,12 @@ class SettingsPage(QWidget):
         self.appearance_layout.addStretch(1)
         self.archive_layout.addWidget(archive)
         self.archive_layout.addStretch(1)
+
+        # Persistent machine task: Telegram is separate from the logged-in GUI.
+        from linkvideo_vpn_helper.ui.telegram_settings_widget import TelegramSettingsWidget
+        self.telegram_panel = TelegramSettingsWidget(self.telegram_tab)
+        self.telegram_layout.addWidget(self.telegram_panel)
+        self.telegram_layout.addStretch(1)
 
         # Список внутренних DVR/vcore намеренно не показываем сотруднику.
         # В 3.0.3 он обновляется фоново из B2O только как аварийный fallback;
