@@ -636,7 +636,7 @@ class TariffsPage(QWidget):
         title_row.addWidget(self.api_status)
         search.addLayout(title_row)
         self.auth_hint = QLabel(
-            "CRM использует текущую рабочую учётную запись Helper"
+            "Доступ осуществляется через учётную запись «Админка»"
             if self.work_account else
             "Беларусь и Казахстан · Вход в CRM через окно авторизации"
         )
@@ -2257,6 +2257,12 @@ class TariffsPage(QWidget):
     def _connect_work_account(self):
         if self.work_account is None:
             return
+        if not self.work_account.has_credentials:
+            self.auth_hint.setText(
+                "Откройте «Админка» в боковой панели и войдите в аккаунт."
+            )
+            self.api_status.set_status("Нужен вход в админку", "warning")
+            return
         if self.billing_login._busy:
             return
         if self.billing_login.login_verified:
@@ -2272,7 +2278,7 @@ class TariffsPage(QWidget):
         self.api_status.set_status("Нет доступа к CRM", "warning")
         self.auth_btn.setText("Повторить CRM")
         self.auth_hint.setText(
-            "CRM отклонил рабочую учётную запись или сервер недоступен. "
+            "Админка отклонила учётные данные или сервер недоступен. "
             "Повторите подключение или проверьте свои права."
         )
 
