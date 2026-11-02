@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from linkvideo_vpn_helper.services.camera_stream_format import (
     readable_video_codec, readable_audio_codec, transcode_summary,
-    camera_address,
+    camera_address, evaluate_transcode,
 )
 from linkvideo_vpn_helper.services.telegram_camera_agent import (
     TelegramCameraAgent, allowed_ids_from_env,
@@ -24,6 +24,14 @@ assert camera_address({"address": None}) == "Адрес в карточке B2O 
 assert camera_address({"address": "Производственная 16"}) == "Производственная 16"
 assert transcode_summary({"id_transcoding_server": None})[0] == "Не задан"
 assert "Сверка профиля" in transcode_summary({"id_transcoding_server": 74})[1]
+cam = {"id_camera": 167024, "id_tariff": 742,
+       "id_transcoding_server": 74, "nimble_main_video_codec": "avc1.4d0033"}
+pol = {"tariffs": {"742": {"video_codec": "H.265", "transcoding_server": 17}}}
+assert evaluate_transcode(cam, pol)[0] == "Несоответствие"
+assert "H.265" in evaluate_transcode(cam, pol)[1]
+assert "Правила" in evaluate_transcode(cam, {})[1]
+pol = {"tariffs": {"742": {"video_codec": "H.264", "transcoding_server": 74}}}
+assert "соответствуют" in evaluate_transcode(cam, pol)[1]
 
 assert allowed_ids_from_env("100001,200002") == frozenset({100001,200002})
 for bad in ("", " ", "0", "abc", "123,xyz"):
