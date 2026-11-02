@@ -20,7 +20,7 @@ class FakeB2O:
     normalize_camera_id = B2OService.normalize_camera_id
     resolve_operator_id = B2OService.resolve_operator_id
     operator_country = B2OService.operator_country
-    normalize_vcore_host = B2OService.normalize_vcore_host
+    normalize_vcore_host = staticmethod(B2OService.normalize_vcore_host)
     token = lambda self: "synthetic-token"
 
     def request_json(self, url, token, headers=None, timeout=15):
