@@ -17,16 +17,20 @@ from linkvideo_vpn_helper.services.b2o_camera_preview import fetch_camera_previe
 from linkvideo_vpn_helper.services.camera_diagnostics import (
     CameraLookupError, inspect_camera,
 )
-from linkvideo_vpn_helper.services.camera_live_probe import probe_live_camera
+from linkvideo_vpn_helper.services.camera_live_probe import probe_live_camera, _cached_ffmpeg
 from linkvideo_vpn_helper.services.b2o_rtsp_probe import fetch_camera_stream
 from linkvideo_vpn_helper.ui.components import Card, StatusPill
 from linkvideo_vpn_helper.ui.dialogs import style_helper_dialog
+
+
+_FFMPEG_SETUP_LOCK = threading.Lock()
 
 
 class CameraDetailDialog(QDialog):
     detailsReady = Signal(object, str)
     previewReady = Signal(object, str)
     telemetryReady = Signal(object)
+    telemetryProgress = Signal(int, str)
 
     def __init__(self, choice, settings, parent=None, *, inspector=inspect_camera,
                  preview_loader=fetch_camera_preview, live_probe=probe_live_camera):
@@ -49,6 +53,7 @@ class CameraDetailDialog(QDialog):
         self.detailsReady.connect(self._on_details)
         self.previewReady.connect(self._on_preview)
         self.telemetryReady.connect(self._on_telemetry)
+        self.telemetryProgress.connect(self._on_progress)
         QTimer.singleShot(0, self.refresh)
 
     def showEvent(self, event):
@@ -313,6 +318,29 @@ class CameraDetailDialog(QDialog):
                         rtsp_host=stream.host, rtsp_port=stream.port,
                         port_source="camera-streams-urls",
                     )
+                    # The installer does not bundle FFmpeg. Reuse the same
+                    # verified LocalAppData download as Archive, only when a
+                    # real authorized RTSP endpoint exists. Keep Qt responsive
+                    # and serialize first-use setup across multiple cameras.
+                    if not _cached_ffmpeg():
+                        self.telemetryProgress.emit(
+                            generation, "Подготавливаю FFmpeg для RTSP-замера…"
+                        )
+                        with _FFMPEG_SETUP_LOCK:
+                            if not _cached_ffmpeg():
+                                from linkvideo_vpn_helper.services.archive_service_core import ArchiveService
+                                try:
+                                    ArchiveService(self.settings).ensure_ffmpeg(
+                                        progress=lambda stage, detail:
+                                            self.telemetryProgress.emit(
+                                                generation,
+                                                f"{stage}: {detail}"[:180],
+                                            )
+                                    )
+                                except Exception:
+                                    self.telemetryProgress.emit(
+                                        generation, "FFmpeg недоступен — проверю доступный архив."
+                                    )
                 data = self.live_probe(sample)
                 self.telemetryReady.emit((generation, data))
             except Exception:
@@ -344,6 +372,10 @@ class CameraDetailDialog(QDialog):
                 Qt.TransformationMode.SmoothTransformation,
             )
         )
+
+    def _on_progress(self, generation, message):
+        if generation == self._generation:
+            self.diagnostic_text.setText(message)
 
     def _on_telemetry(self, packet):
         generation, data = packet
