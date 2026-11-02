@@ -18,7 +18,7 @@ from linkvideo_vpn_helper.services.camera_diagnostics import (
     CameraLookupError, inspect_camera,
 )
 from linkvideo_vpn_helper.services.camera_live_probe import probe_live_camera, _cached_ffmpeg
-from linkvideo_vpn_helper.services.b2o_rtsp_probe import fetch_camera_stream
+from linkvideo_vpn_helper.services.b2o_rtsp_probe import fetch_camera_stream_with_status
 from linkvideo_vpn_helper.ui.components import Card, StatusPill
 
 
@@ -350,7 +350,7 @@ class CameraDetailDialog(QWidget):
         def telemetry_worker():
             try:
                 b2o = B2OService(self.settings)
-                stream = fetch_camera_stream(
+                stream, stream_status = fetch_camera_stream_with_status(
                     b2o, report.camera_id, self.choice.operator_id
                 )
                 sample = report
@@ -384,6 +384,11 @@ class CameraDetailDialog(QWidget):
                                         generation, "FFmpeg недоступен — проверю доступный архив."
                                     )
                 data = self.live_probe(sample)
+                if stream_status:
+                    data = replace(
+                        data,
+                        detail=stream_status + "\n" + data.detail,
+                    )
                 self.telemetryReady.emit((generation, data))
             except Exception:
                 self.telemetryReady.emit((generation, None))
@@ -440,10 +445,24 @@ class CameraDetailDialog(QWidget):
                 self.diagnostic_text.setText("Не удалось выполнить сетевую диагностику.")
             return
         self._last_telemetry = data
-        self.resolution.setText(data.resolution or "Не определено")
+        raw = self._last_report.metadata if self._last_report is not None else {}
+        # B2O's Nimble values are reference metadata, NOT a live measurement.
+        self.resolution.setText(
+            data.resolution or
+            (str(raw["nimble_main_resolution"]) + " · B2O"
+             if raw.get("nimble_main_resolution") else "Нет данных")
+        )
         self.fps.setText(data.fps or "Не измерен")
-        self.video_codec.setText(data.video_codec or "Не определён")
-        self.audio_codec.setText(data.audio_codec or "Не определён")
+        self.video_codec.setText(
+            data.video_codec or
+            (str(raw["nimble_main_video_codec"]) + " · B2O"
+             if raw.get("nimble_main_video_codec") else "Нет данных")
+        )
+        self.audio_codec.setText(
+            data.audio_codec or
+            (str(raw["nimble_main_audio_codec"]) + " · B2O"
+             if raw.get("nimble_main_audio_codec") else "Нет данных")
+        )
         self.rate.setText(data.bitrate_mbps)
         self.last.setText(data.last_stream)
         self.connection.setText(
