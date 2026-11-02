@@ -154,6 +154,32 @@ def service_token() -> str:
     return token
 
 
+def probe_telegram_bot() -> str:
+    """Verify the configured token via Telegram getMe, never log the token."""
+    import urllib.request
+    token = service_token()
+    request = urllib.request.Request(
+        "https://api.telegram.org/bot" + token + "/getMe",
+        headers={"User-Agent": "LinkVideo.Helper/3.0"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=9) as response:
+            result = json.loads(response.read(65536).decode("utf-8"))
+    except Exception:
+        raise RuntimeError("Telegram API недоступен или токен не принят.") from None
+    if not isinstance(result, dict) or not result.get("ok"):
+        raise RuntimeError("Telegram отклонил сохранённый токен.")
+    user = result.get("result")
+    username = str(user.get("username") or "") if isinstance(user, dict) else ""
+    if not re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
+        raise RuntimeError("Telegram не вернул корректное имя бота.")
+    saved = public_bot_link()
+    if saved and saved.casefold() != ("https://t.me/" + username).casefold():
+        raise RuntimeError("Ссылка не совпадает с ботом сохранённого токена.")
+    return "Telegram API отвечает: @" + username
+
+
 def _ensure_folders():
     bot_state_dir().mkdir(parents=True, exist_ok=True)
     secret = config_file().parent
@@ -302,6 +328,8 @@ def administer_operation(source_path: str):
                 raise RuntimeError("Сначала сохраните ссылку бота.")
             secret = InviteStore(state_database_path()).create(hours=24, uses=1)
             response = link + "?start=" + secret
+        elif operation == "probe":
+            response = probe_telegram_bot()
         elif operation == "stop":
             uninstall_startup_task()
             response = "Задача остановлена и удалена."
