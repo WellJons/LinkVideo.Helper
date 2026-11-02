@@ -9,7 +9,7 @@ from PySide6.QtCore import QSettings, QEasingCurve, QPointF, QPropertyAnimation,
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
     QBoxLayout, QDialog, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
+    QListWidgetItem, QPushButton, QScrollArea, QSizePolicy, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from linkvideo_vpn_helper.services.errors import classify_exception
@@ -21,6 +21,7 @@ from linkvideo_vpn_helper.ui.components import (
     ServerPicker, StatusPill, TaskStatus, button_feedback, build_page_scaffold,
 )
 from linkvideo_vpn_helper.ui.dialogs import AddServerDialog, ConfirmDialog, PasswordDialog
+from linkvideo_vpn_helper.ui.camera_diagnostics_panel import CameraDiagnosticsPanel
 
 
 class TrafficGraph(QWidget):
@@ -468,6 +469,23 @@ class SearchManagePage(QWidget):
         )
         self.page_scroll.verticalScrollBar().setSingleStep(26)
         self.page_layout.addWidget(self.workspace, 1)
+        # Two task-focused workspaces: VPN operations and camera diagnostics.
+        # Moving existing widgets preserves all search/management controls and
+        # avoids adding a tab that would be accessible only after VPN lookup.
+        self.main_tabs = QTabWidget(self)
+        self.main_tabs.setObjectName("SearchManageWorkspaceTabs")
+        self.main_tabs.setDocumentMode(True)
+        self.vpn_workspace_tab = QWidget()
+        vpn_content = QVBoxLayout(self.vpn_workspace_tab)
+        vpn_content.setContentsMargins(0, 12, 0, 0)
+        vpn_content.setSpacing(12)
+        for widget in (self.search_form, self.compact_search, self.workspace):
+            self.page_layout.removeWidget(widget)
+            vpn_content.addWidget(widget, 1 if widget is self.workspace else 0)
+        self.main_tabs.addTab(self.vpn_workspace_tab, "VPN · поиск и управление")
+        self.camera_diagnostics = CameraDiagnosticsPanel(self.registry.settings, self)
+        self.main_tabs.addTab(self.camera_diagnostics, "Камеры · проверка и превью")
+        self.page_layout.addWidget(self.main_tabs, 1)
         self._panel_anim = None
 
     def _return_to_search(self):
