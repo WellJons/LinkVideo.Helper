@@ -7,7 +7,7 @@ HLS playlist, or a preview image. Requests use a fixed B2O HTTPS endpoint;
 no user-supplied URLs, arbitrary network targets or secrets are exposed.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import ipaddress
 import os
 import re
@@ -34,6 +34,10 @@ class CameraDiagnostics:
     account_id: str = ""
     archive_depth: str = ""
     model: str = ""
+    # Only the modal uses raw API metadata to locate an approved live playlist.
+    # Never log it: it may contain signed URLs.
+    metadata: dict = field(default_factory=dict, repr=False, compare=False)
+    last_stream: str = ""
 
 
 class CameraLookupError(Exception):
@@ -200,4 +204,7 @@ def inspect_camera(
         account_id=_field(raw, "id_account", "account_id"),
         archive_depth=_field(raw, "archive_depth", "archive_days"),
         model=_field(raw, "camera_model", "model", "device_model"),
+        last_stream=_field(raw, "last_stream_at", "last_video_at",
+                           "last_frame_at", "last_online_at"),
+        metadata=dict(raw),
     )
