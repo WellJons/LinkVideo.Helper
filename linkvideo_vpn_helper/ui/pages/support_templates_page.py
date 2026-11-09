@@ -5,6 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import shutil
 import uuid
+from weakref import WeakMethod
 import zipfile
 
 from PySide6.QtCore import Qt, QSize, QRect
@@ -24,11 +25,13 @@ class SupportReplyBodyEditor(QTextEdit):
     """Plain text body; Ctrl+V with a screenshot attaches a draft image."""
     def __init__(self, image_paste, parent=None):
         super().__init__(parent)
-        self._image_paste = image_paste
+        self._image_paste = WeakMethod(image_paste)
 
     def insertFromMimeData(self, source):
         if source.hasImage() and not source.hasText() and not self.isReadOnly():
-            self._image_paste()
+            handler = self._image_paste()
+            if handler is not None:
+                handler()
             return
         super().insertFromMimeData(source)
 
@@ -147,7 +150,7 @@ class SupportTemplatesPage(QWidget):
         title_row.addWidget(self.star)
         self.edit_btn = QPushButton("Редактировать")
         self.edit_btn.setProperty("role", "soft")
-        self.edit_btn.clicked.connect(lambda: self._set_editing(True))
+        self.edit_btn.clicked.connect(self._start_edit)
         title_row.addWidget(self.edit_btn)
         self.copy_btn = QPushButton("Копировать ответ")
         self.copy_btn.setProperty("role", "primary")
@@ -443,6 +446,9 @@ class SupportTemplatesPage(QWidget):
         self.view_category.setText(self.category_input.currentText())
         self.body_preview.setText(self.body_input.toPlainText().strip())
         self._sync_preview_height()
+
+    def _start_edit(self, *_):
+        self._set_editing(True)
 
     def _set_editing(self, editing: bool):
         self._editing = bool(editing)
