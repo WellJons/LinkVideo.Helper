@@ -14,7 +14,7 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QSettings
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 from linkvideo_vpn_helper.services.vpn_service import ClientRecord
 from linkvideo_vpn_helper.services.vpn_camera_port_match import (
     CameraPortLink, CameraPortReport,
@@ -84,7 +84,13 @@ with tempfile.TemporaryDirectory() as temp:
         assert f"ID камеры B2O: {identifier}" in values, values
         assert any("NAT-трафик:" in value for value in values), values
         outer = row.layout()
-        assert outer.itemAt(1).widget().text() == f"ID камеры B2O: {identifier}"
+        camera_row = outer.itemAt(1).layout()
+        assert camera_row is not None
+        assert camera_row.itemAt(0).widget().text() == f"ID камеры B2O: {identifier}"
+        copy = row.findChild(QPushButton, "B2OCopyCameraId")
+        assert copy is not None
+        copy.click()
+        assert QApplication.clipboard().text() == identifier
         assert page.port_list.height() >= 185
 
     # A stale lookup must NOT expose a camera ID for another VPN account.
