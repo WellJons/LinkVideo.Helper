@@ -157,7 +157,7 @@ def _retention_overdue(rows: list[dict[str, str]], now: datetime | None = None) 
             age = (now_ns - meta.last_ns) // DAY_NS
             if age >= 365:
                 overdue.append(login)
-        elif meta.created_ns > 0:
+        elif meta.created_ns > 0 and meta.reason in {"created", "never_active_30"}:
             age = (now_ns - meta.created_ns) // DAY_NS
             if age >= 30:
                 overdue.append(login)
