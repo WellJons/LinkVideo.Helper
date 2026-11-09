@@ -13,13 +13,11 @@ from datetime import datetime, timezone
 import json
 import logging
 from logging.handlers import RotatingFileHandler
-import os
 from pathlib import Path
 import re
 import signal
 import sys
 import time
-from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
