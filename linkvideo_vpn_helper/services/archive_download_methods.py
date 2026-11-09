@@ -175,9 +175,14 @@ def _ffmpeg_hls_attempts(cmd_factory, target: Path, *,
         _check_cancel(cancel_event)
         target.unlink(missing_ok=True)
         cmd = cmd_factory(attempt)
-        code, text = _run_ffmpeg_progress(
-            cmd, base_done=base_done, item_duration=item_duration, total=total,
-            progress=progress, cancel_event=cancel_event)
+        try:
+            code, text = _run_ffmpeg_progress(
+                cmd, base_done=base_done, item_duration=item_duration, total=total,
+                progress=progress, cancel_event=cancel_event)
+        except subprocess.TimeoutExpired:
+            # The process guard already terminated FFmpeg. A stale HLS socket
+            # should trigger the same bounded retry as HTTP 404/403.
+            code, text = 124, "Превышено время ожидания HLS-сервера"
         if code == 0 and _is_probable_mp4(target):
             return True, ""
         last_text = _safe_hls_error(text)
