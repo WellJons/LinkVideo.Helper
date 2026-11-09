@@ -13,12 +13,18 @@ from typing import Dict, List
 
 from linkvideo_vpn_helper.mikrotik.api_ssl_client import RouterOSAPIClient, RouterOSAPIError
 from linkvideo_vpn_helper.services.errors import OperationCancelled
+from linkvideo_vpn_helper.services.vpn_address_allocator import (
+    DEFAULT_START_IP as ALLOCATOR_DEFAULT_START_IP,
+    next_free_address,
+    used_remote_addresses,
+    validate_start_ip,
+)
 from linkvideo_vpn_helper.services.vpn_lifecycle import classify_state, compose_lv_comment, parse_lv_comment
 
 PORT_MIN = 10001
 PORT_MAX = 13000
 DEFAULT_LOCAL_ADDRESS = "172.31.255.254"
-DEFAULT_START_IP = "172.16.1.176"
+DEFAULT_START_IP = ALLOCATOR_DEFAULT_START_IP
 DEFAULT_SERVICE = "l2tp"
 
 # Совместимость со старым main_window.py
@@ -864,7 +870,7 @@ class VPNService:
             raise RuntimeError("Клиент не был создан")
         return records[0]
 
-    def create_clients_batch(self, server: str, creds: SessionCredentials, base_login: str, ports_per_client: int, accounts_count: int, progress_callback=None, cancel_event=None) -> List[ClientRecord]:
+    def create_clients_batch(self, server: str, creds: SessionCredentials, base_login: str, ports_per_client: int, accounts_count: int, progress_callback=None, cancel_event=None, *, start_ip: str = DEFAULT_START_IP) -> List[ClientRecord]:
         base_login = base_login.strip()
         if not base_login:
             raise ValueError("Логин не может быть пустым")
@@ -872,6 +878,7 @@ class VPNService:
             raise ValueError("Количество учеток должно быть от 1 до 20")
         if ports_per_client < 1 or ports_per_client > 14:
             raise ValueError("Количество портов должно быть от 1 до 14")
+        start_ip = validate_start_ip(start_ip)
 
         def check_cancel():
             if cancel_event is not None and cancel_event.is_set():
@@ -897,7 +904,7 @@ class VPNService:
                 login = f"{base_login}_{suffix}"
             existing_logins.add(login)
 
-            remote_address = self._find_next_ip(used_ips)
+            remote_address = self._find_next_ip(used_ips, start_ip=start_ip)
             used_ips.add(remote_address)
             ports = self._find_free_ports(used_ports, ports_per_client)
             if len(ports) < ports_per_client:
@@ -912,6 +919,22 @@ class VPNService:
         try:
             # Одна API-сессия на весь batch вместо нового TCP/login на каждую учётку.
             with RouterOSAPIClient(server, creds.username, creds.password, port=creds.port, timeout=creds.timeout) as api:
+                # One additional fresh check BEFORE the first mutation.
+                # Protects against a manually created high/low PPP address or
+                # a NAT entry appearing after the initial read.
+                fresh_used = self._collect_used_remote_addresses({
+                    "secrets": api.print("/ppp/secret"),
+                    "profiles": api.print("/ppp/profile"),
+                    "actives": api.print("/ppp/active"),
+                    "nat_rules": api.print("/ip/firewall/nat"),
+                })
+                conflicts = [remote for _login, remote, _ports, _password in planned if remote in fresh_used]
+                if conflicts:
+                    raise ValueError(
+                        "Remote Address уже занят на RouterOS: "
+                        + ", ".join(conflicts[:4])
+                        + ". Повторите создание; Helper подберёт другой свободный IP."
+                    )
                 total_planned = max(1, len(planned))
                 for create_index, (login, remote_address, ports, password) in enumerate(planned, 1):
                     check_cancel()
@@ -1380,16 +1403,10 @@ class VPNService:
         return False
 
     def _collect_used_remote_addresses(self, snapshot: Dict[str, List[dict]]) -> set[str]:
-        used = set()
-        for s in snapshot["secrets"]:
-            remote = self._normalize_ip(s.get("remote-address", ""))
-            if remote:
-                used.add(remote)
-        for p in snapshot["profiles"]:
-            remote = self._normalize_ip(p.get("remote-address", ""))
-            if remote:
-                used.add(remote)
-        return used
+        # Reserve fixed addresses from manually created secrets/profiles,
+        # active PPP sessions and NAT destinations. Never infer a cursor from
+        # the highest remote address; gaps below it remain available.
+        return used_remote_addresses(snapshot)
 
     def _collect_used_ports(self, snapshot: Dict[str, List[dict]]) -> set[int]:
         nat_rules = snapshot.get("nat_rules", [])
@@ -1580,22 +1597,17 @@ class VPNService:
         if errors:
             raise RuntimeError("не удалось полностью удалить созданные объекты: " + "; ".join(errors))
 
-    def _find_next_ip(self, used_ips: set[str]) -> str:
-        ip = DEFAULT_START_IP
-        for _ in range(5000):
-            if ip not in used_ips:
-                return ip
-            ip = self._next_ip(ip)
-        raise ValueError("Не удалось подобрать свободный IP")
+    def _find_next_ip(self, used_ips: set[str], start_ip: str = DEFAULT_START_IP) -> str:
+        return next_free_address(used_ips, start_ip)
 
     def _next_ip(self, current_ip: str) -> str:
-        parts = current_ip.split(".")
-        third = int(parts[2])
-        fourth = int(parts[3]) + 1
-        if fourth > 254:
-            fourth = 1
-            third += 1
-        return f"172.16.{third}.{fourth}"
+        # Compatibility for older callers; keep the original /16 prefix.
+        value = ipaddress.IPv4Address(validate_start_ip(current_ip))
+        network = ipaddress.IPv4Network(f"{value}/16", strict=False)
+        for number in range(int(value) + 1, int(network.broadcast_address)):
+            if number & 0xFF not in (0, 255):
+                return str(ipaddress.IPv4Address(number))
+        raise ValueError("Достигнут конец VPN-пула /16")
 
     def _find_free_ports(self, used_ports: set[int], count: int) -> List[int]:
         free = []
