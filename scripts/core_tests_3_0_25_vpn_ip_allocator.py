@@ -21,7 +21,9 @@ from linkvideo_vpn_helper.services.server_registry import ServerRegistry
 from linkvideo_vpn_helper.ui.pages.create_client_page import CreateClientPage
 
 
-assert DEFAULT_START_IP == "172.16.1.176"  # old installs keep existing default
+assert DEFAULT_START_IP == "172.16.0.1"  # start of the historical VPN source tables
+assert next_free_address({"172.16.1.130"}, DEFAULT_START_IP) == "172.16.0.1"
+assert next_free_address({"172.16.0.1", "172.16.0.2", "172.16.1.130"}, DEFAULT_START_IP) == "172.16.0.3"
 assert next_free_address({"172.16.1.130"}, "172.16.0.5") == "172.16.0.5"
 assert next_free_address({"172.168.1.130"}, "172.168.0.5") == "172.168.0.5"
 assert next_free_address({"172.16.0.5", "172.16.0.6", "172.16.1.130"}, "172.16.0.5") == "172.16.0.7"
@@ -111,6 +113,8 @@ with TemporaryDirectory() as directory:
     assert settings.value(page._ip_start_key(one)) == "172.16.0.5"
 
     other = next(host for host in registry.hosts() if host != one)
+    # The legacy default may have been implicitly persisted on another server.
+    settings.setValue(page._ip_start_key(other), "172.16.1.176")
     page.server_picker.setHost(other)
     assert page.ip_start.text() == DEFAULT_START_IP
     page.ip_start.setText("172.16.0.9")
