@@ -12,13 +12,13 @@ RouterOS Scheduler запускает LV-Activity (10 мин), LV-AutoRestore (1
 
 Фоновая задача Windows по умолчанию проверяет **только `vpn01.linkvideo.ru`** в режиме canary. Остальные серверы добавляются явным параметром `-Servers` после проверки доступа. Список из 12 серверов остаётся доступным для отдельного конфигурирования Python-агента.
 
-В Windows: `scripts/install_windows_vpn_fleet_monitor.ps1` создаёт задачу Task Scheduler `LinkVideo.VPN.FleetMonitor`, которая стартует при загрузке ПК от SYSTEM, не требует запуска GUI и перезапускается после сбоя. Исходники и Python venv должны находиться в *постоянной*, доступной для SYSTEM папке. Стандартный установщик Helper эту задачу **не регистрирует** для всех сотрудников.
+В Windows: `scripts/install_windows_vpn_fleet_monitor.ps1` создаёт задачу Task Scheduler `LinkVideo.VPN.FleetMonitor`, которая стартует при загрузке ПК от SYSTEM, не требует запуска GUI и перезапускается после сбоя. Перед регистрацией задача копирует необходимые Python-модули в защищённую от обычных пользователей папку `ProgramData`; Python должен быть установлен в **Program Files** либо в таком же защищённом каталоге `VPNFleet`. Запускать пользовательский `python.exe` из профиля Windows от SYSTEM запрещено. Стандартный установщик Helper эту задачу **не регистрирует** для всех сотрудников.
 
 ### Настройка пилота на выделенном включённом ПК
 
 1. Подготовить постоянную папку с этим репозиторием и Python venv с установленными зависимостями приложения. Использовать учётку RouterOS **только для чтения**, отдельно от рабочего администратора.
 2. Подготовить Google service-account JSON с доступом только к нужной Google-таблице. Не присылать приватный ключ в чат и не коммитить его. На целевом ПК запустить PowerShell **от администратора**:
-   `.\scripts\install_windows_vpn_fleet_monitor.ps1 -RepositoryRoot "C:\LinkVideo\source" -PythonExe "C:\LinkVideo\source\.venv\Scripts\python.exe" -ServiceAccountJson "C:\Secure\service-account.json"`
+   `.\scripts\install_windows_vpn_fleet_monitor.ps1 -RepositoryRoot "C:\LinkVideo\source" -PythonExe "C:\Program Files\Python312\python.exe" -ServiceAccountJson "C:\Secure\service-account.json"`
 3. Скрипт спросит RouterOS username/password, защитит конфигурацию и JSON Google от чтения обычными пользователями через NTFS ACL (только SYSTEM и Administrators), проверит RouterOS в режиме `--dry-run`, затем зарегистрирует и запустит фоновую задачу.
 4. Проверить `Get-ScheduledTask -TaskName LinkVideo.VPN.FleetMonitor | Get-ScheduledTaskInfo` и журнал `C:\ProgramData\LinkVideo.Helper\VPNFleet\vpn-health.log`. Таблица обновится в `LV Мониторинг` при доступном Google API.
 
