@@ -221,9 +221,15 @@ class CreateClientPage(QWidget):
         return f"vpn_create/start_ip/{str(host).strip().lower()}"
 
     def _ip_start_for_server(self, host: str) -> str:
-        return str(self.registry.settings.value(
-            self._ip_start_key(host), DEFAULT_START_IP, str,
-        ) or DEFAULT_START_IP).strip()
+        stored = str(self.registry.settings.value(
+            self._ip_start_key(host), "", str,
+        ) or "").strip()
+        # Early test builds persisted their old hardcoded default when changing
+        # servers. Restore the original VPN-table starting point for those
+        # untouched defaults; preserve any other operator-defined start.
+        if not stored or stored == "172.16.1.176":
+            return DEFAULT_START_IP
+        return stored
 
     def _save_ip_start(self):
         host = self._ip_start_host
