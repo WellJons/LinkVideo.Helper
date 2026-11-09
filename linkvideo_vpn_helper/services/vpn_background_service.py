@@ -4,7 +4,7 @@ from __future__ import annotations
 
 The GUI has no background threads that can silently export secrets after
 closing. A Windows SYSTEM task runs this exact, already installed Helper EXE
-headlessly every 5 minutes. Settings are sealed with Windows DPAPI machine
+headlessly every 6, 12 or 24 hours. Settings are sealed with Windows DPAPI machine
 scope *and* protected with Administrators/SYSTEM-only NTFS ACLs.
 
 This is an explicit full recovery copy: the target Google spreadsheet contains
@@ -23,7 +23,6 @@ import re
 import subprocess
 import sys
 import tempfile
-import time
 import uuid
 
 TASK_NAME = "LinkVideo.Helper.VPNSheetsMirror"
@@ -32,7 +31,19 @@ SERVER_DIRECTORY = "VPNSheetsMirror"
 CONFIG_NAME = "config.json"
 STATUS_NAME = "status.json"
 SCHEMA = 1
-_INTERVAL = 5
+DEFAULT_INTERVAL_HOURS = 12
+ALLOWED_INTERVAL_HOURS = (6, 12, 24)
+
+# Non-secret, stage-specific codes returned by the elevated EXE.
+INSTALL_ERROR_MESSAGES = {
+    3: "Windows не предоставила права администратора.",
+    10: "Не удалось прочитать временную конфигурацию (права на файл/UAC).",
+    11: "Windows не удалось расшифровать временные настройки DPAPI.",
+    12: "Не удалось подготовить защищённую папку ProgramData.",
+    13: "Не удалось сохранить конфигурацию фоновой задачи.",
+    14: "Планировщик Windows отказался создать задание.",
+    15: "Задание создано, но его первый запуск не удался.",
+}
 
 
 def _on_windows() -> bool:
@@ -161,12 +172,18 @@ def _validate_settings(payload: dict) -> None:
         if host in unique:
             raise ValueError("VPN-серверы не должны повторяться")
         unique.add(host)
+    interval = payload.get("interval_hours", DEFAULT_INTERVAL_HOURS)
+    if isinstance(interval, bool) or not isinstance(interval, int) or interval not in ALLOWED_INTERVAL_HOURS:
+        raise ValueError("Период резервного копирования должен быть 6, 12 или 24 часа")
     spreadsheet_id = str(payload.get("spreadsheet_id") or "").strip()
     if not re.fullmatch(r"[A-Za-z0-9_-]{15,120}", spreadsheet_id):
         raise ValueError("Некорректный ID Google-таблицы")
 
 
-def stage_configuration(credentials, google_service_account: dict, servers: list[str], spreadsheet_id: str) -> Path:
+def stage_configuration(
+    credentials, google_service_account: dict, servers: list[str],
+    spreadsheet_id: str, interval_hours: int = DEFAULT_INTERVAL_HOURS,
+) -> Path:
     """Write only DPAPI ciphertext in a per-user staging directory.
 
     No password, API key, or Google private key appears in the command line,
@@ -180,6 +197,7 @@ def stage_configuration(credentials, google_service_account: dict, servers: list
         "google_service_account": google_service_account,
         "servers": list(dict.fromkeys(str(x).strip().lower() for x in servers)),
         "spreadsheet_id": str(spreadsheet_id).strip(),
+        "interval_hours": interval_hours,
     }
     _validate_settings(payload)
     base = os.getenv("LOCALAPPDATA")
@@ -223,46 +241,85 @@ def _installed_executable() -> Path:
     return current
 
 
+def _task_schedule(interval_hours: int) -> list[str]:
+    """schtasks HOURLY /MO supports 1..23; 24h requires DAILY."""
+    if interval_hours not in ALLOWED_INTERVAL_HOURS:
+        raise ValueError("Некорректный период синхронизации")
+    if interval_hours == 24:
+        return ["/SC", "DAILY", "/MO", "1"]
+    return ["/SC", "HOURLY", "/MO", str(interval_hours)]
+
+
 def _admin_install(staged_path: Path) -> int:
+    """Return a non-secret stage code so the UI can explain Windows failures."""
     if not _is_elevated():
         return 3
-    # Untrusted staging content is only DPAPI ciphertext. Validate its
-    # decrypted schema before making any persistent changes.
     try:
         source = staged_path.resolve(strict=True)
         if not source.name.startswith("pending-") or source.suffix != ".json":
-            raise ValueError("Неверное имя временной конфигурации")
+            return 10
         sealed = json.loads(source.read_text(encoding="utf-8"))
-        _unpack_settings(sealed)
+    except Exception:
+        return 10
+    try:
+        payload = _unpack_settings(sealed)
+        schedule = _task_schedule(int(payload.get("interval_hours", DEFAULT_INTERVAL_HOURS)))
+    except Exception:
+        return 11
+    try:
         folder = _data_dir()
         _secure_directory(folder)
-        target = _config_path()
-        temp = folder / ("pending-" + uuid.uuid4().hex + ".tmp")
-        try:
-            temp.write_text(json.dumps(sealed), encoding="utf-8")
-            os.replace(temp, target)
-            _run_command(
-                ["icacls.exe", str(target), "/inheritance:r", "/grant:r",
-                 "*S-1-5-18:F", "*S-1-5-32-544:F"]
-            )
-        finally:
-            temp.unlink(missing_ok=True)
+    except Exception:
+        return 12
 
+    target = _config_path()
+    backup = folder / "config.previous"
+    temp = folder / ("pending-" + uuid.uuid4().hex + ".tmp")
+    had_previous = target.is_file()
+    try:
+        # Preserve the last working configuration until the task is registered.
+        if had_previous:
+            backup.write_bytes(target.read_bytes())
+        temp.write_text(json.dumps(sealed), encoding="utf-8")
+        _run_command(
+            ["icacls.exe", str(temp), "/inheritance:r", "/grant:r",
+             "*S-1-5-18:F", "*S-1-5-32-544:F"]
+        )
+        os.replace(temp, target)
+    except Exception:
+        temp.unlink(missing_ok=True)
+        return 13
+    finally:
+        temp.unlink(missing_ok=True)
+
+    try:
         executable = _installed_executable()
         action = f'"{executable}" --vpn-background-worker'
-        # schtasks runs a new short-lived worker every 5 minutes as SYSTEM.
-        # There is no persistent process holding Program Files open during
-        # future Helper upgrades. The GUI can be closed at any time.
         _run_command([
             "schtasks.exe", "/Create", "/TN", TASK_NAME,
-            "/SC", "MINUTE", "/MO", str(_INTERVAL),
-            "/RU", "SYSTEM", "/RL", "HIGHEST", "/TR", action, "/F",
+            *schedule, "/RU", "SYSTEM", "/RL", "HIGHEST",
+            "/TR", action, "/F",
         ])
-        _run_command(["schtasks.exe", "/Run", "/TN", TASK_NAME])
-        source.unlink(missing_ok=True)
-        return 0
     except Exception:
-        return 2
+        # Restore a previous healthy configuration when scheduler creation fails.
+        if had_previous and backup.exists():
+            os.replace(backup, target)
+        else:
+            target.unlink(missing_ok=True)
+        return 14
+    try:
+        _run_command(["schtasks.exe", "/Run", "/TN", TASK_NAME])
+    except Exception:
+        # The scheduled task now exists: do not pretend that setup succeeded.
+        return 15
+    backup.unlink(missing_ok=True)
+    try:
+        source.unlink(missing_ok=True)
+    except OSError:
+        # Elevated UAC may use a different administrator account. A staging
+        # cleanup failure must not misreport an installed, working task.
+        return 0
+    return 0
 
 
 def _admin_remove() -> int:
@@ -307,6 +364,11 @@ def _elevate(arguments: str) -> int:
         ]
 
     exe = _installed_executable()
+    # ShellExecuteEx may invoke a shell extension and requires COM on the
+    # calling thread. The settings UI launches this from a Python worker
+    # thread which has no apartment initialised by default.
+    com = ctypes.windll.ole32.CoInitializeEx(None, 0x2)  # COINIT_APARTMENTTHREADED
+    release_com = com in (0, 1)
     info = _ShellExecuteInfo()
     info.cbSize = ctypes.sizeof(info)
     info.fMask = 0x40  # SEE_MASK_NOCLOSEPROCESS
@@ -315,26 +377,38 @@ def _elevate(arguments: str) -> int:
     info.lpParameters = arguments
     info.lpDirectory = tempfile.gettempdir()
     info.nShow = 0
-    if not ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(info)):
-        raise RuntimeError("Подтверждение прав администратора отменено либо не выполнено")
     try:
-        # The user can decide on UAC. Keep waiting on a UI worker thread,
-        # never on the main QApplication thread.
-        wait = ctypes.windll.kernel32.WaitForSingleObject(info.hProcess, 240000)
-        if wait != 0:
-            raise RuntimeError("Установка фонового режима не завершилась вовремя")
-        code = wintypes.DWORD()
-        if not ctypes.windll.kernel32.GetExitCodeProcess(info.hProcess, ctypes.byref(code)):
-            raise ctypes.WinError()
-        return int(code.value)
+        if not ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(info)):
+            raise RuntimeError(
+                f"Windows не запустила программу с правами администратора "
+                f"(код {ctypes.WinError().winerror})."
+            )
+        try:
+            # The user decides on UAC. Never wait on the UI's QApplication thread.
+            wait = ctypes.windll.kernel32.WaitForSingleObject(info.hProcess, 240000)
+            if wait != 0:
+                raise RuntimeError("Установка фонового режима не завершилась вовремя")
+            code = wintypes.DWORD()
+            if not ctypes.windll.kernel32.GetExitCodeProcess(info.hProcess, ctypes.byref(code)):
+                raise ctypes.WinError()
+            return int(code.value)
+        finally:
+            ctypes.windll.kernel32.CloseHandle(info.hProcess)
     finally:
-        ctypes.windll.kernel32.CloseHandle(info.hProcess)
+        if release_com:
+            ctypes.windll.ole32.CoUninitialize()
 
 
 def enable_task(staged_file: Path) -> None:
     result = _elevate(f'--vpn-background-install "{staged_file}"')
-    if result != 0 or not task_registered():
-        raise RuntimeError("Не удалось включить фоновый режим. Проверьте права администратора и планировщик Windows.")
+    if result != 0:
+        detail = INSTALL_ERROR_MESSAGES.get(result, f"неизвестный код {result}")
+        raise RuntimeError(f"Не удалось включить фоновый режим (этап {result}): {detail}")
+    if not task_registered():
+        raise RuntimeError(
+            "Планировщик сообщил об успехе, но задание не найдено. "
+            "Проверьте права на чтение задач Windows."
+        )
 
 
 def disable_task() -> None:

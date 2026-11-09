@@ -7,7 +7,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QBoxLayout, QCheckBox, QDialog, QFileDialog, QGridLayout, QHBoxLayout, QInputDialog, QLabel,
+    QBoxLayout, QCheckBox, QComboBox, QDialog, QFileDialog, QGridLayout, QHBoxLayout, QInputDialog, QLabel,
     QLineEdit, QPushButton, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -397,7 +397,7 @@ class SettingsPage(QWidget):
 
         info = QLabel(
             "После включения Windows будет самостоятельно сверять выбранные VPN-серверы "
-            "каждые 5 минут и обновлять существующую Google-таблицу. "
+            "с выбранным интервалом и обновлять существующую Google-таблицу. "
             "LinkVideo.Helper можно закрыть — задача работает независимо от окна."
         )
         info.setWordWrap(True)
@@ -430,6 +430,28 @@ class SettingsPage(QWidget):
         self.bg_targets.setWordWrap(True)
         form.addWidget(self.bg_targets)
 
+        period_row = QHBoxLayout()
+        period_row.setSpacing(8)
+        period_label = QLabel("Интервал резервирования")
+        period_label.setObjectName("Muted")
+        period_row.addWidget(period_label)
+        self.bg_interval = QComboBox()
+        self.bg_interval.setObjectName("VPNBackgroundInterval")
+        self.bg_interval.addItem("Каждые 6 часов", 6)
+        self.bg_interval.addItem("Каждые 12 часов", 12)
+        self.bg_interval.addItem("Раз в сутки", 24)
+        configured = int(self.settings.value("vpn_background/interval_hours", 12, int) or 12)
+        index = self.bg_interval.findData(configured if configured in (6, 12, 24) else 12)
+        self.bg_interval.setCurrentIndex(index)
+        self.bg_interval.currentIndexChanged.connect(self._background_interval_changed)
+        period_row.addWidget(self.bg_interval)
+        self.bg_apply_interval = QPushButton("Применить интервал")
+        self.bg_apply_interval.setProperty("role", "ghost")
+        self.bg_apply_interval.clicked.connect(lambda: self._background_toggle(True))
+        period_row.addWidget(self.bg_apply_interval)
+        period_row.addStretch(1)
+        form.addLayout(period_row)
+
         controls = QHBoxLayout()
         self.bg_enabled = QCheckBox("Включить этот компьютер как сервер VPN")
         self.bg_enabled.setObjectName("VPNBackgroundEnabled")
@@ -456,6 +478,19 @@ class SettingsPage(QWidget):
         self.bg_enabled.setChecked(active)
         self.bg_enabled.blockSignals(False)
         self._background_refresh_status()
+
+    def _background_interval_changed(self, _index: int):
+        if self._background_busy:
+            return
+        interval = self.bg_interval.currentData()
+        if interval not in (6, 12, 24):
+            return
+        self.settings.setValue("vpn_background/interval_hours", interval)
+        self.settings.sync()
+        if self.bg_enabled.isChecked():
+            self.bg_status.setText(
+                "Интервал выбран. Нажмите «Применить интервал», чтобы обновить задание Windows."
+            )
 
     def _background_refresh_key(self):
         saved = str(self.settings.value("vpn_background/google_key_file", "", str) or "").strip()
@@ -505,21 +540,23 @@ class SettingsPage(QWidget):
     def _background_toggle(self, enable: bool):
         if self._background_busy:
             return
+        from linkvideo_vpn_helper.services.vpn_background_service import task_registered
+        original_enabled = task_registered()
         if enable:
             if not sys.platform.startswith("win") or not getattr(sys, "frozen", False):
                 self.bg_status.setText(
                     "Фоновый режим можно включить в установленной Windows-версии LinkVideo.Helper."
                 )
-                self._background_revert_toggle(False)
+                self._background_revert_toggle(original_enabled)
                 return
             if self.credentials is None or not self.credentials.username or not self.credentials.password:
                 self.bg_status.setText("Нет подтверждённой авторизации RouterOS.")
-                self._background_revert_toggle(False)
+                self._background_revert_toggle(original_enabled)
                 return
             servers = self.registry.hosts()
             if not servers:
                 self.bg_status.setText("Сначала включите хотя бы один VPN-сервер.")
-                self._background_revert_toggle(False)
+                self._background_revert_toggle(original_enabled)
                 return
             key_path = str(
                 self.settings.value("vpn_background/google_key_file", "", str)
@@ -542,12 +579,13 @@ class SettingsPage(QWidget):
                 spreadsheet_id = SPREADSHEET_ID
             except Exception as exc:
                 self.bg_status.setText(str(exc))
-                self._background_revert_toggle(False)
+                self._background_revert_toggle(original_enabled)
                 return
 
+            interval_hours = int(self.bg_interval.currentData())
             confirm = ConfirmDialog(
-                "Включить полную синхронизацию?",
-                f"Компьютер начнёт каждые 5 минут резервировать {len(servers)} VPN-серверов "
+                "Включить полную синхронизацию?" if not original_enabled else "Изменить расписание синхронизации?",
+                f"Компьютер будет каждые {interval_hours} ч резервировать {len(servers)} VPN-серверов "
                 "в Google Sheets, даже после закрытия Helper.\n\n"
                 "Будут передаваться PPP-пароли и полные RouterOS-снимки клиентов. "
                 "Любой редактор этой таблицы сможет видеть пароли. "
@@ -556,14 +594,17 @@ class SettingsPage(QWidget):
                 confirm_text="Включить с полным резервом", parent=self
             )
             if confirm.exec() != QDialog.DialogCode.Accepted:
-                self._background_revert_toggle(False)
+                self._background_revert_toggle(original_enabled)
                 return
             try:
                 from linkvideo_vpn_helper.services.vpn_background_service import stage_configuration
-                staged = stage_configuration(self.credentials, google, servers, spreadsheet_id)
+                staged = stage_configuration(
+                    self.credentials, google, servers, spreadsheet_id,
+                    interval_hours=interval_hours,
+                )
             except Exception as exc:
                 self.bg_status.setText(f"Не удалось подготовить защищённую конфигурацию: {exc}")
-                self._background_revert_toggle(False)
+                self._background_revert_toggle(original_enabled)
                 return
         else:
             confirm = ConfirmDialog(
@@ -581,6 +622,8 @@ class SettingsPage(QWidget):
         self.bg_enabled.setEnabled(False)
         self.bg_check.setEnabled(False)
         self.bg_key_button.setEnabled(False)
+        self.bg_interval.setEnabled(False)
+        self.bg_apply_interval.setEnabled(False)
         self.bg_status.setText(
             "Настраиваю планировщик Windows… подтвердите запрос UAC."
             if enable else "Отключаю фоновую задачу Windows…"
@@ -607,22 +650,26 @@ class SettingsPage(QWidget):
         self.bg_enabled.setEnabled(True)
         self.bg_check.setEnabled(True)
         self.bg_key_button.setEnabled(True)
+        self.bg_interval.setEnabled(True)
+        self.bg_apply_interval.setEnabled(True)
         if success:
             self.settings.setValue("vpn_background/enabled", bool(enabled))
             self.settings.sync()
             self._background_revert_toggle(enabled)
             self.bg_status.setText(
-                "Фоновая синхронизация включена. Windows выполняет полный резерв каждые 5 минут."
+                f"Фоновая синхронизация включена. Резерв каждые {self.bg_interval.currentData()} ч."
                 if enabled else "Фоновая задача отключена. Сохранённые в Google Sheets резервные данные не удалены."
             )
         else:
-            self._background_revert_toggle(not enabled)
+            from linkvideo_vpn_helper.services.vpn_background_service import task_registered
+            self._background_revert_toggle(task_registered())
             self.bg_status.setText("Настройка не выполнена: " + message)
 
     def _background_refresh_status(self):
         from linkvideo_vpn_helper.services.vpn_background_service import task_registered, read_status
         actual = task_registered()
         self._background_revert_toggle(actual)
+        self.bg_apply_interval.setEnabled(actual and not self._background_busy)
         if not actual:
             self.bg_status.setText("Выключен: задание фоновой синхронизации не зарегистрировано.")
             return
@@ -639,7 +686,8 @@ class SettingsPage(QWidget):
             message = f"Сверка началась: {checked}."
         else:
             message = "Задание установлено; результата первой сверки пока нет."
-        self.bg_status.setText("Включён · раз в 5 минут. " + message)
+        self.bg_status.setText("Включён · выбранный интервал: "
+                               + str(self.bg_interval.currentData()) + " ч. " + message)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
