@@ -107,7 +107,11 @@ def compose_lv_comment(
 ) -> str:
     """Compose the compact LV2 marker used by RouterOS automation."""
     base = str(base_comment or "").strip()
-    marker = f"{LV_MARKER}s={str(state or 'U').upper()}|l={_ns_to_day(last_ns)}|"
+    code = str(state or "U").upper()
+    if code == "U" and int(last_ns or 0) <= 0:
+        # Unknown accounts do not need a metadata marker at all.
+        return base
+    marker = f"{LV_MARKER}s={code}|l={_ns_to_day(last_ns)}|"
     return f"{base} {marker}".strip()
 
 
