@@ -92,6 +92,20 @@ healthy = ArchiveDiscovery(
 )
 assert engine.analyze(healthy, [], []).side is DiagnosisSide.NONE
 
+# Player HLS duration without timestamped DVR slices is NOT evidence of
+# a full-period outage (or complete DVR coverage).
+player_only = ArchiveDiscovery(
+    camera, 0.0, 100000.0, [],
+    [ArchiveGap(0.0, 100000.0)], ["vcore.example"], [],
+    hls_fallback_url="https://vcore.example/playlist.m3u8",
+    hls_fallback_duration=100000.0, hls_fallback_segments=1000,
+)
+fallback_verdict = engine.analyze(player_only, [], [])
+assert fallback_verdict.side is DiagnosisSide.UNKNOWN
+assert fallback_verdict.confidence_text == "Недостаточно данных"
+assert not fallback_verdict.gaps
+assert "HLS" in fallback_verdict.title
+
 source = __import__("pathlib").Path(__file__).resolve().parents[1].joinpath(
     "linkvideo_vpn_helper/ui/pages/archive_diagnostics_page.py"
 ).read_text(encoding="utf-8")
