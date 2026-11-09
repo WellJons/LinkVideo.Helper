@@ -7,8 +7,8 @@ import shutil
 import uuid
 import zipfile
 
-from PySide6.QtCore import Qt, QSize, QRect
-from PySide6.QtGui import QIcon, QImageReader, QPixmap
+from PySide6.QtCore import QEvent, Qt, QSize, QRect, QTimer
+from PySide6.QtGui import QIcon, QImageReader, QPixmap, QFontMetrics
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QListView, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
@@ -274,74 +274,137 @@ class SupportTemplatesPage(QWidget):
             self.category_input.setCurrentText(chosen)
 
     def _template_tile(self, template) -> QWidget:
-        """Compact visual tile: title, category and readable excerpt.
-
-        QListWidget owns selection; the tile is mouse-transparent, so clicks
-        always select the correct template and work with keyboard navigation.
-        """
+        """Full-height reply item — no truncation halfway through a line."""
         tile = QFrame()
         tile.setObjectName("TemplateReplyTile")
+        tile.setProperty("selected", "true" if template.id == self._selected_id else "false")
         tile.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         layout = QVBoxLayout(tile)
-        layout.setContentsMargins(12, 9, 12, 9)
+        layout.setContentsMargins(13, 10, 13, 10)
         layout.setSpacing(4)
 
         title_line = QHBoxLayout()
-        title_line.setSpacing(5)
+        title_line.setSpacing(6)
         title = QLabel(template.title)
         title.setObjectName("TemplateTileTitle")
         title.setWordWrap(True)
-        title.setMaximumHeight(39)
         title_line.addWidget(title, 1)
         if template.favorite:
             star = QLabel("★")
             star.setObjectName("TemplateTileFavorite")
-            star.setToolTip("Избранное")
             title_line.addWidget(star, 0, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(title_line)
 
         meta = QLabel(template.category)
         meta.setObjectName("TemplateTileMeta")
-        meta.setMaximumHeight(20)
         layout.addWidget(meta)
-
         preview = " ".join(template.body.split())
-        if len(preview) > 100:
-            preview = preview[:97].rstrip() + "…"
+        if len(preview) > 130:
+            preview = preview[:127].rstrip() + "…"
         excerpt = QLabel(preview)
         excerpt.setObjectName("TemplateTileExcerpt")
         excerpt.setWordWrap(True)
-        excerpt.setMaximumHeight(38)
         layout.addWidget(excerpt)
         return tile
+
+    @staticmethod
+    def _wrapped_height(label: QLabel, width: int) -> int:
+        label.ensurePolished()
+        metrics = QFontMetrics(label.font())
+        flags = int(Qt.TextFlag.TextWordWrap)
+        bounding = metrics.boundingRect(QRect(0, 0, max(80, width), 5000), flags, label.text())
+        return max(metrics.height(), bounding.height() + 4)
+
+    def _update_list_row_heights(self):
+        """Re-measure every card on resize to prevent cropped text."""
+        if not hasattr(self, "templates_list"):
+            return
+        width = max(185, self.templates_list.viewport().width() - 54)
+        for i in range(self.templates_list.count()):
+            item = self.templates_list.item(i)
+            tile = self.templates_list.itemWidget(item)
+            if tile is None:
+                continue
+            title = tile.findChild(QLabel, "TemplateTileTitle")
+            meta = tile.findChild(QLabel, "TemplateTileMeta")
+            excerpt = tile.findChild(QLabel, "TemplateTileExcerpt")
+            if not (title and meta and excerpt):
+                continue
+            height = (
+                20 + self._wrapped_height(title, width)
+                + self._wrapped_height(meta, width)
+                + self._wrapped_height(excerpt, width) + 12
+            )
+            item.setSizeHint(QSize(0, max(95, height)))
+
+    def eventFilter(self, watched, event):
+        if (hasattr(self, "templates_list")
+                and watched is self.templates_list.viewport()
+                and event.type() == QEvent.Type.Resize):
+            QTimer.singleShot(0, self._update_list_row_heights)
+        return super().eventFilter(watched, event)
+
+    def _highlight_selected_tile(self):
+        for i in range(self.templates_list.count()):
+            item = self.templates_list.item(i)
+            tile = self.templates_list.itemWidget(item)
+            if tile is None:
+                continue
+            active = item is self.templates_list.currentItem()
+            tile.setProperty("selected", "true" if active else "false")
+            tile.style().unpolish(tile)
+            tile.style().polish(tile)
 
     def _refresh(self, *_):
         selected = self._selected_id
         category = self.category_filter.currentData() if self.category_filter.count() else ""
         self._categories()
-        records = self.store.list(self.search.text(), category or "",
-                                  self.favorites_only.isChecked())
+        records = self.store.list(
+            self.search.text(), category or "", self.favorites_only.isChecked())
         self.templates_list.blockSignals(True)
         self.templates_list.clear()
         for template in records:
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, template.id)
-            item.setSizeHint(QSize(0, 103))
-            item.setToolTip(template.title + "\n" + template.category)
+            item.setSizeHint(QSize(0, 112))
+            item.setToolTip(template.title + "\n" + template.body)
             self.templates_list.addItem(item)
             self.templates_list.setItemWidget(item, self._template_tile(template))
             if template.id == selected:
                 self.templates_list.setCurrentItem(item)
         self.templates_list.blockSignals(False)
-        self.library_count.setText(
-            f"Всего: {len(self.store.list())}  ·  Найдено: {len(records)}")
+        self._update_list_row_heights()
+        self._highlight_selected_tile()
+        self.library_count.setText(f"Найдено: {len(records)} / {len(self.store.list())}")
         self.empty_label.setVisible(not records)
         if selected is not None and self.store.get(selected) is None:
             self._new()
 
+    def _set_editing(self, editing: bool):
+        self._editing = bool(editing)
+        self.title_input.setReadOnly(not self._editing)
+        self.body_input.setReadOnly(not self._editing)
+        self.category_input.setEnabled(self._editing)
+        self.add_image_btn.setEnabled(self._editing)
+        self.paste_image_btn.setEnabled(self._editing)
+        self.remove_image_btn.setEnabled(self._editing)
+        self.save_btn.setVisible(self._editing)
+        self.edit_btn.setVisible(not self._editing and self._selected_id is not None)
+        for widget in (self.title_input, self.body_input):
+            widget.setProperty("viewMode", "false" if self._editing else "true")
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+        if self._editing:
+            self.title_input.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.image_help.setText(
+            "Сохраните шаблон, чтобы закрепить добавленные изображения"
+            if self._editing else "Двойной щелчок — просмотреть скриншот")
+
     def _select(self,item,*_):
         if item is None:
             return
+        self._pending_images.clear()
+        self._removed_image_ids.clear()
         self._selected_id = int(item.data(Qt.ItemDataRole.UserRole))
         template = self.store.get(self._selected_id)
         if template is None:
@@ -350,12 +413,15 @@ class SupportTemplatesPage(QWidget):
         self.category_input.setCurrentText(template.category)
         self.body_input.setPlainText(template.body)
         self.star.setText("★ В избранном" if template.favorite else "☆ В избранное")
-        self.add_image_btn.setEnabled(True)
         self._load_images()
-        self.notice.setText("Шаблон загружен. Изменения сохраняются кнопкой «Сохранить».")
+        self._set_editing(False)
+        self._highlight_selected_tile()
+        self.notice.setText("Выберите «Редактировать», чтобы изменить ответ.")
 
     def _new(self):
         self._selected_id = None
+        self._pending_images.clear()
+        self._removed_image_ids.clear()
         self.templates_list.clearSelection()
         self.templates_list.setCurrentRow(-1)
         self.title_input.clear()
@@ -365,9 +431,9 @@ class SupportTemplatesPage(QWidget):
         self.images_list.clear()
         self.image_area.hide()
         self.attachment_count.setText("Вложения · 0")
-        self.add_image_btn.setEnabled(False)
-        self.image_preview.clear()
-        self.notice.setText("Новый ответ. Заполните название и текст.")
+        self._set_editing(True)
+        self._highlight_selected_tile()
+        self.notice.setText("Новый ответ: можно добавлять изображения до сохранения.")
 
     def _save(self):
         try:
