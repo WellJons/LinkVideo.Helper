@@ -33,7 +33,7 @@ DELETE_DAYS = 365
 NEVER_ACTIVE_DELETE_DAYS = 30
 
 _REASON_TO_CODE = {
-    "created": "c",
+    "created": "b",
     "never_active_tracking": "c",
     "tracked": "a",
     "activity": "a",
@@ -47,6 +47,7 @@ _REASON_TO_CODE = {
     "auto_restore": "r",
 }
 _CODE_TO_REASON = {
+    "b": "created",
     "c": "never_active_tracking",
     "a": "activity",
     "s": "inactive_30",
@@ -187,6 +188,7 @@ def aging_script_source() -> str:
     :local state "U"
     :local last 0
     :local created $nowDay
+    :local verifiedNever false
     :if ($p != nil) do={{
         :set base [:pick $c 0 $p]
         :local tail [:pick $c $p [:len $c]]
@@ -196,6 +198,11 @@ def aging_script_source() -> str:
         :if ($lp != nil) do={{ :local x [:pick $tail ($lp + 3) [:len $tail]]; :local e [:find $x "|"]; :if ($e != nil) do={{ :set last [:tonum [:pick $x 0 $e]] }} }}
         :local cp [:find $tail "|c="]
         :if ($cp != nil) do={{ :local x [:pick $tail ($cp + 3) [:len $tail]]; :local e [:find $x "|"]; :if ($e != nil) do={{ :set created [:tonum [:pick $x 0 $e]] }} }}
+        :local rp [:find $tail "|r="]
+        :if ($rp != nil) do={{
+            :local reason [:pick $tail ($rp + 3) ($rp + 4)]
+            :if (($reason = "b") || ($reason = "n")) do={{ :set verifiedNever true }}
+        }}
     }}
     :local isActive ([:len [/ppp active find where name=$u]] > 0)
     :local disabled [/ppp secret get $sid disabled]
@@ -205,6 +212,8 @@ def aging_script_source() -> str:
         :local reference $last
         :if ($reference = 0) do={{ :set reference $created }}
         :local age ($nowDay - $reference)
+        # Legacy "no last-login data" is NOT proof of never connecting.
+        :if (($last = 0) && ($verifiedNever = false)) do={{ :set age 0 }}
         :local deleteAfter {DELETE_DAYS}
         :local deleteCode "d"
         :if ($last = 0) do={{
@@ -233,7 +242,9 @@ def aging_script_source() -> str:
                         /ppp secret set $sid comment=($base . "{LV_MARKER}s=S|l=" . $last . "|c=" . $created . "|r=s|")
                     }} else={{
                         :if ($last = 0) do={{
-                            /ppp secret set $sid comment=($base . "{LV_MARKER}s=U|l=0|c=" . $created . "|r=c|")
+                            :local code "c"
+                            :if ($verifiedNever) do={{ :set code "b" }}
+                            /ppp secret set $sid comment=($base . "{LV_MARKER}s=U|l=0|c=" . $created . "|r=" . $code . "|")
                         }} else={{
                             /ppp secret set $sid comment=($base . "{LV_MARKER}s=A|l=" . $last . "|c=" . $created . "|r=a|")
                         }}
@@ -265,11 +276,13 @@ def _native_last_ns(vpn, row: dict) -> int:
         return 0
 
 
-def _desired_state(last_ns: int, created_ns: int, disabled: bool, was_quarantine: bool, now_ns: int) -> tuple[str, str]:
+def _desired_state(last_ns: int, created_ns: int, disabled: bool, was_quarantine: bool, now_ns: int, *, verified_never: bool = False) -> tuple[str, str]:
     reference = int(last_ns or created_ns or now_ns)
     age = max(0, int((now_ns - reference) // DAY_NS))
-    if last_ns <= 0 and age >= NEVER_ACTIVE_DELETE_DAYS:
-        return "R", "never_active_30"
+    if last_ns <= 0:
+        if verified_never and age >= NEVER_ACTIVE_DELETE_DAYS:
+            return "R", "never_active_30"
+        return ("M", "manual_or_external_disabled") if disabled else ("U", "never_active_tracking")
     if last_ns > 0 and age >= DELETE_DAYS:
         return "R", "inactive_365"
     if disabled:
@@ -321,6 +334,7 @@ def _ensure_tracking_for_server(server, creds) -> int:
                     disabled,
                     meta.state == "Q",
                     now_ns,
+                    verified_never=meta.reason in {"created", "never_active_30"},
                 )
 
             new_comment = compose_extended_comment(meta.base_comment, state, last_ns, created_ns, reason)
@@ -445,6 +459,16 @@ def apply_policy_now(server, creds, *, backed_up_logins: set[str] | None = None)
             age = max(0, int((now_ns - reference) // DAY_NS))
             disabled = _bool(secret.get("disabled", "no"))
 
+            if last_ns <= 0 and meta.reason not in {"created", "never_active_30"}:
+                # Migrated legacy accounts may have no RouterOS login history.
+                # Missing evidence is not proof of non-use.
+                state = "M" if disabled else "U"
+                reason = "manual_or_external_disabled" if disabled else "never_active_tracking"
+                api.set("/ppp/secret", rid, {
+                    "comment": compose_extended_comment(meta.base_comment, state, last_ns, created_ns, reason)
+                })
+                continue
+
             delete_after = NEVER_ACTIVE_DELETE_DAYS if last_ns <= 0 else DELETE_DAYS
             if age >= delete_after:
                 reason = "never_active_30" if last_ns <= 0 else "inactive_365"
@@ -464,6 +488,8 @@ def apply_policy_now(server, creds, *, backed_up_logins: set[str] | None = None)
                     current_meta = parse_extended_comment(str(current.get("comment", "") or ""))
                     current_last = max(int(current_meta.last_ns or 0), _native_last_ns(vpn, current))
                     current_created = int(current_meta.created_ns or now_ns)
+                    if current_last <= 0 and current_meta.reason not in {"created", "never_active_30"}:
+                        continue
                     current_age = max(0, int((now_ns - (current_last or current_created)) // DAY_NS))
                     if current_age < (NEVER_ACTIVE_DELETE_DAYS if current_last <= 0 else DELETE_DAYS):
                         continue
