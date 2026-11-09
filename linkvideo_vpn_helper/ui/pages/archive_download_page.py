@@ -19,6 +19,7 @@ from linkvideo_vpn_helper.ui.components import (
     Card, DateTimePickerButton, MetricCard, PageHeader, SegmentedControl, StatusPill, TaskStatus, WorkflowStep, button_feedback, build_page_scaffold,
 )
 from linkvideo_vpn_helper.ui.dialogs import B2OLoginDialog
+from linkvideo_vpn_helper.ui.archive_extra_cluster_picker import ArchiveExtraClusterPicker
 
 
 class ArchiveDownloadPage(QWidget):
@@ -131,6 +132,9 @@ class ArchiveDownloadPage(QWidget):
         operator_row.addWidget(operator_label)
         operator_row.addWidget(self.operator, 1)
         params.insertLayout(1, operator_row)
+        self.extra_clusters = ArchiveExtraClusterPicker(self.service.b2o, self)
+        self.extra_clusters.changed.connect(self._extra_operator_changed)
+        params.insertWidget(2, self.extra_clusters)
         self._operator_changed(saved_operator)
 
         self.btn_find = QPushButton("Найти архив")
@@ -242,6 +246,7 @@ class ArchiveDownloadPage(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         if hasattr(self, "operator"):
+            self.extra_clusters.refresh()
             saved = str(self.settings.value("archive/operator_id", "241", str) or "241")
             if saved not in {"241", "1721", "1741"}:
                 saved = "241"
@@ -354,13 +359,25 @@ class ArchiveDownloadPage(QWidget):
         return datetime(d.year(), d.month(), d.day(), t.hour(), t.minute(), t.second())
 
     def _operator_id(self) -> int:
+        extra = self.extra_clusters.selected_operator()
+        if extra is not None:
+            return extra
         try:
             return int(self.operator.current())
         except Exception:
             return 241
 
+    def _extra_operator_changed(self, operator_id):
+        self.operator.setEnabled(operator_id is None)
+        if operator_id is not None:
+            self.camera.setPlaceholderText("ID камеры дополнительного оператора, например: 100046")
+        else:
+            self._operator_changed(self.operator.current())
+
     def _operator_changed(self, value: str):
         operator_id = self.service.b2o.valid_operator_id(value)
+        if self.extra_clusters.selected_operator() is not None:
+            return
         self.settings.setValue("archive/operator_id", str(operator_id))
         prefix = self.service.b2o.operator_prefix(operator_id)
         self.camera.setPlaceholderText(f"Например: 268527 или {prefix}268527")
@@ -372,6 +389,7 @@ class ArchiveDownloadPage(QWidget):
         detected = self.service.b2o.detect_operator_id(raw, self._operator_id())
         # Числовой ID сам по себе не меняет выбор оператора. Префикс камеры — меняет.
         if raw.startswith(("linkvideo_", "linkvideokz_", "linkvideoby_")):
+            self.extra_clusters.clear_selection()
             self.operator.setCurrent(str(detected))
 
     def _find(self):
@@ -385,8 +403,9 @@ class ArchiveDownloadPage(QWidget):
             self._authorize()
             return
         operator = self.service.b2o.resolve_operator_id(camera_id, self._operator_id())
-        self.operator.setCurrent(str(operator))
-        self.settings.setValue("archive/operator_id", str(operator))
+        if operator in (241, 1721, 1741):
+            self.operator.setCurrent(str(operator))
+            self.settings.setValue("archive/operator_id", str(operator))
         start = self._py(self.start.value())
         end = self._py(self.end.value())
         if end <= start:
