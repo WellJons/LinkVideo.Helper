@@ -539,11 +539,6 @@ def _download_with_ffmpeg_audio(self, discovery, output: Path, progress=None, ca
         cancel_event,
     )
     total = max(1.0, float(discovery.covered_duration or discovery.requested_duration or 1.0))
-    header_value = (
-        "Origin: https://test-desktop-player-b2o.elct.ru\r\n"
-        "Referer: https://test-desktop-player-b2o.elct.ru/\r\n"
-        "User-Agent: LinkVideo.Helper/3.0\r\n"
-    )
     # Do not create anything in the user's destination directory until FFmpeg
     # has been found/downloaded and all local preconditions are ready.  A failed
     # first-use FFmpeg setup must not leave an empty .download.mp4 behind.
@@ -555,18 +550,27 @@ def _download_with_ffmpeg_audio(self, discovery, output: Path, progress=None, ca
         ):
             if progress:
                 progress({"type": "stage", "title": "Скачиваю через FFmpeg", "detail": "Плейлист плеера · со звуком"})
-            cmd = ffmpeg_audio_args(ffmpeg, str(discovery.hls_fallback_url), staged_output, headers=header_value)
-            code, text = _run_ffmpeg_progress(
-                cmd,
-                base_done=0.0,
-                item_duration=total,
-                total=total,
-                progress=progress,
-                cancel_event=cancel_event,
-            )
-            if code != 0 or not staged_output.exists() or staged_output.stat().st_size <= 0:
-                reason = (text or "").strip().splitlines()
-                detail = reason[-1] if reason else "FFmpeg не получил архив со звуком"
+            def command_for_attempt(attempt: int):
+                url = str(discovery.hls_fallback_url)
+                if attempt:
+                    # Long-running searches sometimes leave an expiring signed
+                    # HLS URL. Re-read the documented player playlist once.
+                    try:
+                        fresh, _ = self._probe_hls_host(
+                            discovery.hls_fallback_host or discovery.camera.server,
+                            discovery.camera, discovery.requested_start,
+                            discovery.requested_end, 8)
+                        if fresh and fresh.get("url"):
+                            url = str(fresh["url"])
+                    except Exception:
+                        pass
+                return _ffmpeg_transport_args(self, ffmpeg, url, staged_output)
+
+            success, detail = _ffmpeg_hls_attempts(
+                command_for_attempt, staged_output,
+                base_done=0.0, item_duration=total, total=total,
+                progress=progress, cancel_event=cancel_event)
+            if not success:
                 raise RuntimeError(detail + ". Попробуйте метод «Без звука».")
             _commit_staged_output(staged_output, output)
             if progress:
@@ -596,21 +600,17 @@ def _download_with_ffmpeg_audio(self, discovery, output: Path, progress=None, ca
                             "detail": f"Участок {idx}/{len(slices)} · {sl.host}",
                         }
                     )
-                code, text = _run_ffmpeg_progress(
-                    ffmpeg_audio_args(ffmpeg, url, target),
-                    base_done=completed,
-                    item_duration=sl.duration,
-                    total=total,
-                    progress=progress,
-                    cancel_event=cancel_event,
+                success, detail = _ffmpeg_hls_attempts(
+                    lambda _attempt: _ffmpeg_transport_args(self, ffmpeg, url, target),
+                    target, base_done=completed, item_duration=sl.duration,
+                    total=total, progress=progress, cancel_event=cancel_event,
                 )
-                if code == 0 and target.exists() and target.stat().st_size > 0:
+                if success:
                     parts.append(target)
                     downloaded.append(sl)
                 else:
                     failed.append(sl)
-                    reason = (text or "").strip().splitlines()
-                    errors.append(f"{sl.host}: {reason[-1] if reason else 'FFmpeg не получил участок'}")
+                    errors.append(f"{sl.host}: {detail or 'FFmpeg не получил участок'}")
                     target.unlink(missing_ok=True)
                 completed += sl.duration
 
@@ -641,11 +641,6 @@ def _download_no_audio(self, discovery, output: Path, progress=None, cancel_even
         cancel_event,
     )
     total = max(1.0, float(discovery.covered_duration or discovery.requested_duration or 1.0))
-    header_value = (
-        "Origin: https://test-desktop-player-b2o.elct.ru\r\n"
-        "Referer: https://test-desktop-player-b2o.elct.ru/\r\n"
-        "User-Agent: LinkVideo.Helper/3.0\r\n"
-    )
     staged_output = _create_staged_output(output)
 
     try:
@@ -654,18 +649,27 @@ def _download_no_audio(self, discovery, output: Path, progress=None, cancel_even
         ):
             if progress:
                 progress({"type": "stage", "title": "Скачиваю без звука", "detail": "Плейлист плеера · аудио отключено"})
-            cmd = ffmpeg_no_audio_args(ffmpeg, str(discovery.hls_fallback_url), staged_output, headers=header_value)
-            code, text = _run_ffmpeg_progress(
-                cmd,
-                base_done=0.0,
-                item_duration=total,
-                total=total,
-                progress=progress,
-                cancel_event=cancel_event,
-            )
-            if code != 0 or not staged_output.exists() or staged_output.stat().st_size <= 0:
-                reason = (text or "").strip().splitlines()
-                raise RuntimeError(reason[-1] if reason else "FFmpeg не получил архив без аудио")
+            def command_for_attempt(attempt: int):
+                url = str(discovery.hls_fallback_url)
+                if attempt:
+                    try:
+                        fresh, _ = self._probe_hls_host(
+                            discovery.hls_fallback_host or discovery.camera.server,
+                            discovery.camera, discovery.requested_start,
+                            discovery.requested_end, 8)
+                        if fresh and fresh.get("url"):
+                            url = str(fresh["url"])
+                    except Exception:
+                        pass
+                return _ffmpeg_transport_args(
+                    self, ffmpeg, url, staged_output, no_audio=True)
+
+            success, detail = _ffmpeg_hls_attempts(
+                command_for_attempt, staged_output,
+                base_done=0.0, item_duration=total, total=total,
+                progress=progress, cancel_event=cancel_event)
+            if not success:
+                raise RuntimeError(detail or "FFmpeg не получил архив без аудио")
             _commit_staged_output(staged_output, output)
             if progress:
                 progress({"type": "progress", "value": 100, "done": total, "total": total})
@@ -694,22 +698,18 @@ def _download_no_audio(self, discovery, output: Path, progress=None, cancel_even
                             "detail": f"Участок {idx}/{len(slices)} · {sl.host}",
                         }
                     )
-                cmd = ffmpeg_no_audio_args(ffmpeg, url, target)
-                code, text = _run_ffmpeg_progress(
-                    cmd,
-                    base_done=completed,
-                    item_duration=sl.duration,
-                    total=total,
-                    progress=progress,
-                    cancel_event=cancel_event,
+                success, detail = _ffmpeg_hls_attempts(
+                    lambda _attempt: _ffmpeg_transport_args(
+                        self, ffmpeg, url, target, no_audio=True),
+                    target, base_done=completed, item_duration=sl.duration,
+                    total=total, progress=progress, cancel_event=cancel_event,
                 )
-                if code == 0 and target.exists() and target.stat().st_size > 0:
+                if success:
                     parts.append(target)
                     downloaded.append(sl)
                 else:
                     failed.append(sl)
-                    reason = (text or "").strip().splitlines()
-                    errors.append(f"{sl.host}: {reason[-1] if reason else 'FFmpeg не получил участок'}")
+                    errors.append(f"{sl.host}: {detail or 'FFmpeg не получил участок'}")
                     target.unlink(missing_ok=True)
                 completed += sl.duration
 
