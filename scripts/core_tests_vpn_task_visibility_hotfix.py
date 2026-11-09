@@ -84,7 +84,7 @@ with TemporaryDirectory() as td:
         assert page.bg_enabled.isChecked() is True
         assert "Регистрация подтверждена администратором" in page.bg_status.text()
         assert "12" in page.bg_status.text()
-        assert page.bg_admin_check.isVisible() is False or page.bg_admin_check.isHidden() is False
+        assert not page.bg_admin_check.isHidden()
         page.close()
 
 # No RouterOS passwords, Google keys or token fields in the readable receipt.
