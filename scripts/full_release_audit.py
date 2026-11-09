@@ -374,9 +374,16 @@ def audit_release_chain(audit: Audit) -> None:
             audit.error("Installer must fully stage the payload before activating it")
 
     transaction_section = backend.split("func verifyRuntimeSnapshot", 1)[-1].split("func extractPayload", 1)[0]
-    for marker in ('dest + ".rollback"', "os.Rename(dest, backup)", "os.Rename(staging, dest)", "LinkVideo.Helper.Updater.exe"):
+    for marker in ('dest + ".rollback"', "renameRuntimeWithRetry(dest, backup)",
+                   "renameRuntimeWithRetry(staging, dest)", "LinkVideo.Helper.Updater.exe"):
         if marker not in transaction_section:
             audit.error(f"Installer runtime transaction misses: {marker}")
+    # The renamed helper must continue using the OS atomic rename (not a
+    # delete/copy fallback) and retry only documented Windows lock errors.
+    retry_section = backend.split("func renameRuntimeWithRetry(", 1)[-1].split("func isProcessElevated", 1)[0]
+    for marker in ("os.Rename(from, to)", "12 * time.Second", "code != 5 && code != 32 && code != 33"):
+        if marker not in retry_section:
+            audit.error(f"Installer atomic rename retry contract missing: {marker}")
     if "LOCALAPPDATA" in transaction_section or "APPDATA" in transaction_section:
         audit.error("Full installer transaction must not delete LocalAppData/AppData user cache")
 
