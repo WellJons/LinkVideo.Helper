@@ -96,7 +96,7 @@ class TemplateStore:
 
     def list(self, query: str = "", category: str = "", favorites: bool = False) -> list[Template]:
         with self._db() as db:
-            rows = db.execute("SELECT * FROM templates ORDER BY favorite DESC, updated_at DESC, id DESC")
+            rows = db.execute("SELECT * FROM templates ORDER BY favorite DESC, updated_at DESC, id DESC").fetchall()
         needle = query.strip().casefold()
         return [self._row(r) for r in rows
                 if (not needle or needle in str(r["title"]).casefold()
