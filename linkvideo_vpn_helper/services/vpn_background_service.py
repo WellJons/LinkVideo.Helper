@@ -26,6 +26,10 @@ import tempfile
 import uuid
 
 TASK_NAME = "LinkVideo.Helper.VPNSheetsMirror"
+# This key contains NO credentials. Windows HKLM grants normal users read
+# access, so an unelevated GUI can inspect the installation receipt even when
+# Task Scheduler hides SYSTEM tasks from the creating desktop account.
+TASK_RECEIPT_REGISTRY = r"SOFTWARE\LinkVideo\Helper\VPNBackground"
 STAGING_NAME = "LinkVideo.Helper"  # user-private LOCALAPPDATA
 SERVER_DIRECTORY = "VPNSheetsMirror"
 CONFIG_NAME = "config.json"
@@ -43,7 +47,40 @@ INSTALL_ERROR_MESSAGES = {
     13: "Не удалось сохранить конфигурацию фоновой задачи.",
     14: "Планировщик Windows отказался создать задание.",
     15: "Задание создано, но его первый запуск не удался.",
+    16: "Создание задания завершилось, но проверка из-под администратора не прошла.",
+    17: "Задание создано, но Windows не позволила сохранить его общедоступный статус.",
 }
+
+
+def _write_task_receipt(*, installed: bool, interval_hours: int = DEFAULT_INTERVAL_HOURS) -> None:
+    """Admin-only install receipt: no passwords or private keys."""
+    import winreg
+
+    with winreg.CreateKeyEx(
+        winreg.HKEY_LOCAL_MACHINE, TASK_RECEIPT_REGISTRY,
+        0, winreg.KEY_SET_VALUE,
+    ) as registry:
+        winreg.SetValueEx(registry, "Installed", 0, winreg.REG_DWORD, int(installed))
+        winreg.SetValueEx(registry, "IntervalHours", 0, winreg.REG_DWORD, int(interval_hours))
+        winreg.SetValueEx(
+            registry, "UpdatedUTC", 0, winreg.REG_SZ,
+            datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ"),
+        )
+
+
+def read_task_receipt() -> dict:
+    """Visible to the desktop user; a receipt is not proof the task ran."""
+    if not _on_windows():
+        return {}
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, TASK_RECEIPT_REGISTRY) as key:
+            installed = int(winreg.QueryValueEx(key, "Installed")[0]) == 1
+            interval = int(winreg.QueryValueEx(key, "IntervalHours")[0])
+            return {"installed": installed, "interval_hours": interval}
+    except (OSError, ValueError, TypeError):
+        return {}
 
 
 def _on_windows() -> bool:
@@ -312,6 +349,16 @@ def _admin_install(staged_path: Path) -> int:
     except Exception:
         # The scheduled task now exists: do not pretend that setup succeeded.
         return 15
+    try:
+        # Verify with the SAME elevated security token that registered the task.
+        # The unelevated GUI may legitimately be denied /Query.
+        if _run_command(
+            ["schtasks.exe", "/Query", "/TN", TASK_NAME], tolerate_failure=True
+        ).returncode != 0:
+            return 16
+        _write_task_receipt(installed=True, interval_hours=payload["interval_hours"])
+    except Exception:
+        return 17
     backup.unlink(missing_ok=True)
     try:
         source.unlink(missing_ok=True)
@@ -330,20 +377,42 @@ def _admin_remove() -> int:
         _run_command(["schtasks.exe", "/Delete", "/TN", TASK_NAME, "/F"], tolerate_failure=True)
         _config_path().unlink(missing_ok=True)
         _status_file().unlink(missing_ok=True)
+        _write_task_receipt(installed=False)
         return 0
     except Exception:
         return 2
 
 
-def task_registered() -> bool:
+def task_inspection() -> dict:
+    """Separate 'not visible to this user' from 'not installed'.
+
+    A registry receipt is written only after successful elevated registration.
+    It can become stale if someone deletes the Windows task manually, so the
+    UI must label that state as unverified until an elevated inspection.
+    """
     if not _on_windows():
-        return False
+        return {"installed": False, "verified": False, "source": "unsupported"}
     try:
-        return _run_command(
+        query = _run_command(
             ["schtasks.exe", "/Query", "/TN", TASK_NAME], tolerate_failure=True
-        ).returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return False
+        )
+        if query.returncode == 0:
+            return {"installed": True, "verified": True, "source": "task_scheduler"}
+    except (OSError, subprocess.TimeoutExpired, UnicodeError):
+        pass
+
+    receipt = read_task_receipt()
+    if receipt.get("installed"):
+        return {
+            "installed": True, "verified": False, "source": "admin_receipt",
+            "interval_hours": receipt.get("interval_hours"),
+        }
+    return {"installed": False, "verified": False, "source": "unknown"}
+
+
+def task_registered() -> bool:
+    return bool(task_inspection()["installed"])
+
 
 
 def _elevate(arguments: str) -> int:
@@ -404,11 +473,10 @@ def enable_task(staged_file: Path) -> None:
     if result != 0:
         detail = INSTALL_ERROR_MESSAGES.get(result, f"неизвестный код {result}")
         raise RuntimeError(f"Не удалось включить фоновый режим (этап {result}): {detail}")
-    if not task_registered():
-        raise RuntimeError(
-            "Планировщик сообщил об успехе, но задание не найдено. "
-            "Проверьте права на чтение задач Windows."
-        )
+    # A zero exit code is already validated by the elevated installer, which
+    # queries the task and writes an HKLM receipt. The desktop user's /Query
+    # may return Access Denied even when SYSTEM is running the task.
+    # Do NOT produce a false installation error in that situation.
 
 
 def disable_task() -> None:
