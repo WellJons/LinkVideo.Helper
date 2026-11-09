@@ -5,6 +5,7 @@ from __future__ import annotations
 No server connection, B2O credentials or cloud account is required. The data
 lives in the current Windows user's application data directory.
 """
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import os
@@ -51,12 +52,17 @@ class TemplateStore:
         self.path = self.root / "templates.sqlite3"
         self._init()
 
+    @contextmanager
     def _db(self):
         con = sqlite3.connect(self.path, timeout=10)
         con.row_factory = sqlite3.Row
         con.execute("PRAGMA foreign_keys=ON")
         con.execute("PRAGMA busy_timeout=10000")
-        return con
+        try:
+            with con:
+                yield con
+        finally:
+            con.close()
 
     def _init(self):
         with self._db() as db:
