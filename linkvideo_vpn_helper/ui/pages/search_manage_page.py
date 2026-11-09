@@ -22,6 +22,8 @@ from linkvideo_vpn_helper.ui.components import (
 )
 from linkvideo_vpn_helper.ui.dialogs import AddServerDialog, ConfirmDialog, PasswordDialog
 from linkvideo_vpn_helper.ui.camera_diagnostics_panel import CameraDiagnosticsPanel
+from linkvideo_vpn_helper.services.archive_service_core import B2OService
+from linkvideo_vpn_helper.services.vpn_camera_port_match import account_login, match_vpn_ports
 
 
 class TrafficGraph(QWidget):
@@ -236,6 +238,7 @@ class SearchManagePage(QWidget):
     progressReady = Signal(int, int, str)
     actionReady = Signal(object, object, str)
     liveReady = Signal(object)
+    cameraPortsReady = Signal(int, object, object, str)
 
     MAX_CONTENT_WIDTH = 1280
 
@@ -258,6 +261,12 @@ class SearchManagePage(QWidget):
         self._action_busy = False
         self._recent_new_ports: set[int] = set()
         self._pending_old_ports: set[int] = set()
+        self._camera_match_generation = 0
+        self._camera_match_key = None
+        self._camera_match_result = None
+        self._camera_match_message = "Камеры пока не проверены."
+        self._camera_lookup_override = ""
+        self.cameraPortsReady.connect(self._on_camera_ports)
         self.searchReady.connect(self._on_search)
         self.progressReady.connect(self._on_progress)
         self.actionReady.connect(self._on_action)
@@ -559,6 +568,7 @@ class SearchManagePage(QWidget):
         self.client_info_card.show()
         self.detail_panel.show()
         self._render_client()
+        self._start_camera_port_check()
         QTimer.singleShot(0, lambda: self.page_scroll.verticalScrollBar().setValue(0))
 
     def _close_client_view(self, checked=False, immediate: bool = False):
@@ -923,6 +933,10 @@ class SearchManagePage(QWidget):
         self.current = client
         if changed_client:
             self._recent_new_ports.clear()
+            self._camera_match_generation += 1
+            self._camera_match_key = None
+            self._camera_match_result = None
+            self._camera_lookup_override = ""
         self._selected_port = client.ports[0] if client.ports else None
         self._open_client_view()
 
@@ -1306,7 +1320,18 @@ class SearchManagePage(QWidget):
                     if current_port in self._recent_new_ports:
                         details.append("Новый")
                     item.setText(f"Порт {port}  ·  {status}\n" + "  ·  ".join(details[1:]))
-                item.setSizeHint(QSize(0, 57))
+                matching = self._camera_match_result if self._camera_match_key and self._camera_match_result else None
+                if matching:
+                    for link in matching.links:
+                        if link.port == int(port):
+                            item.setText(item.text() + "\nB2O: " + link.label + " · ID " + link.camera_id)
+                            item.setToolTip("Камера подтверждена по аккаунту B2O и внешнему порту")
+                            item.setSizeHint(QSize(0, 76))
+                            break
+                    else:
+                        item.setSizeHint(QSize(0, 57))
+                else:
+                    item.setSizeHint(QSize(0, 57))
                 self.port_list.addItem(item)
             desired = self._selected_port if self._selected_port in c.ports else c.ports[0]
             for i in range(self.port_list.count()):
@@ -1320,6 +1345,53 @@ class SearchManagePage(QWidget):
             self.port_list.addItem(item)
         pl.addWidget(self.port_list, 1)
         self.info_content.addWidget(ports)
+        camera_card = Card()
+        camera_l = QVBoxLayout(camera_card)
+        camera_l.setContentsMargins(12, 12, 12, 12)
+        camera_l.setSpacing(8)
+        title = QLabel("Камеры B2O по портам")
+        title.setObjectName("SectionTitle")
+        camera_l.addWidget(title)
+        explanatory = QLabel(
+            "Проверяется основной логин без суффиксов _1, _3 и т. д. "
+            "Если камеры принадлежат другому аккаунту, укажите его логин."
+        )
+        explanatory.setObjectName("TinyMuted")
+        explanatory.setWordWrap(True)
+        camera_l.addWidget(explanatory)
+        lookup_row = QHBoxLayout()
+        self.camera_b2o_login = QLineEdit()
+        self.camera_b2o_login.setObjectName("VPNB2OAccountLogin")
+        self.camera_b2o_login.setText(self._camera_lookup_override or account_login(c.login))
+        self.camera_b2o_login.setPlaceholderText("Логин аккаунта B2O")
+        self.camera_b2o_button = QPushButton("Сверить")
+        self.camera_b2o_button.setProperty("role", "soft")
+        self.camera_b2o_button.clicked.connect(
+            lambda: self._start_camera_port_check(self.camera_b2o_login.text().strip()))
+        lookup_row.addWidget(self.camera_b2o_login, 1)
+        lookup_row.addWidget(self.camera_b2o_button)
+        camera_l.addLayout(lookup_row)
+        status = QLabel(self._camera_match_message)
+        status.setObjectName("TinyMuted")
+        status.setWordWrap(True)
+        camera_l.addWidget(status)
+        report = self._camera_match_result
+        if report is not None and self._camera_match_key and c.ports:
+            for link in report.links:
+                row = QLabel(f"Порт {link.port}: {link.label} · камера ID {link.camera_id}")
+                row.setObjectName("Value")
+                row.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                row.setWordWrap(True)
+                camera_l.addWidget(row)
+            if report.ambiguous:
+                warning = QLabel(
+                    "⚠ Один порт указан у нескольких камер B2O: "
+                    + ", ".join(map(str, report.ambiguous)) + ". Связь не подтверждена."
+                )
+                warning.setObjectName("WarningText")
+                warning.setWordWrap(True)
+                camera_l.addWidget(warning)
+        self.info_content.addWidget(camera_card)
         self.info_content.addStretch(1)
 
         control = QWidget()
@@ -1607,6 +1679,9 @@ class SearchManagePage(QWidget):
             elif name == "remove_port":
                 self._recent_new_ports.intersection_update(int(x) for x in result.ports)
             self.current = result
+            if name in {"add_ports", "remove_port", "port_toggle"}:
+                self._camera_match_key = None
+                self._camera_match_result = None
             if self._selected_port not in self.current.ports:
                 self._selected_port = self.current.ports[0] if self.current.ports else None
             self._sync_result_record(self.current)
@@ -1622,10 +1697,78 @@ class SearchManagePage(QWidget):
         action_task.show()
         action_task.done("Готово", messages.get(name, "Состояние клиента обновлено"))
         self._render_client()
+        if name in {"add_ports", "remove_port", "port_toggle"}:
+            self._start_camera_port_check()
         # RouterOS может обновить динамические поля с небольшой задержкой.
         # Дополнительная тихая синхронизация убирает необходимость вручную
         # нажимать «Обновить» после добавления/удаления/переключения портов.
         QTimer.singleShot(700, self._silent_refresh)
+
+    def _start_camera_port_check(self, override_login: str = ""):
+        client = self.current
+        if client is None or not client.ports:
+            return
+        login = override_login or self._camera_lookup_override or account_login(client.login)
+        self._camera_lookup_override = login if override_login else self._camera_lookup_override
+        key = (client.server, client.login, tuple(sorted(client.ports)), login)
+        if key == self._camera_match_key:
+            return
+        self._camera_match_key = key
+        self._camera_match_result = None
+        self._camera_match_generation += 1
+        generation = self._camera_match_generation
+        account = self.work_account
+        settings = self.registry.settings
+        b2o = B2OService(settings)
+        if not b2o.token() or account is None or not account.has_credentials:
+            self._camera_match_message = (
+                "Войдите в учётную запись «Админка» для проверки камер. "
+                "Подключение MikroTik не предоставляет доступ к B2O."
+            )
+            self._render_client()
+            return
+        creds = account.credentials
+        try:
+            country = self.registry.get(client.server).country
+        except Exception:
+            country = ""
+        self._camera_match_message = "Проверяю камеры аккаунта B2O…"
+        self._render_client()
+        def worker():
+            try:
+                result = match_vpn_ports(client.login, tuple(client.ports), b2o, creds,
+                                         override_login=login, country=country)
+                self.cameraPortsReady.emit(generation, key, result, "")
+            except Exception:
+                # Never echo arbitrary URL or API response (may include credentials).
+                self.cameraPortsReady.emit(generation, key, None,
+                    "Не удалось сверить камеры. Проверьте вход в Админку и доступ B2O.")
+        threading.Thread(target=worker, daemon=True,
+                         name="vpn-b2o-camera-port-read").start()
+
+    def _on_camera_ports(self, generation: int, key, report, error: str):
+        if generation != self._camera_match_generation or key != self._camera_match_key:
+            return
+        if self.current is None or (self.current.server, self.current.login) != key[:2]:
+            return
+        self._camera_match_result = report
+        if error:
+            self._camera_match_message = error
+        elif report is not None:
+            self._camera_match_message = (
+                f"Проверено камер: {report.checked_cameras}. "
+                f"Найдено точных совпадений портов: {len(report.links)}."
+            )
+            if report.incomplete:
+                self._camera_match_message += (
+                    " Проверка неполная: часть камер недоступна, "
+                    "автоматических предположений не делаем."
+                )
+            elif not report.links:
+                self._camera_match_message += (
+                    " Совпадающий внешний порт в данных B2O не найден."
+                )
+        self._render_client()
 
     def _copy_new_ports(self, value: str, button: QPushButton):
         QGuiApplication.clipboard().setText(value)
