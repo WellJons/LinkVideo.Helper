@@ -15,6 +15,7 @@ spreadsheet access to authorised recovery administrators.
 import base64
 import ctypes
 from ctypes import wintypes
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -29,6 +30,7 @@ TASK_NAME = "LinkVideo.Helper.VPNSheetsMirror"
 STAGING_NAME = "LinkVideo.Helper"  # user-private LOCALAPPDATA
 SERVER_DIRECTORY = "VPNSheetsMirror"
 CONFIG_NAME = "config.json"
+STATUS_NAME = "status.json"
 SCHEMA = 1
 _INTERVAL = 5
 
@@ -45,6 +47,38 @@ def _data_dir() -> Path:
 
 def _config_path() -> Path:
     return _data_dir() / CONFIG_NAME
+
+
+def _status_file() -> Path:
+    return _data_dir() / STATUS_NAME
+
+
+def read_status() -> dict:
+    try:
+        payload = json.loads(_status_file().read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_status(**fields) -> None:
+    # Status is deliberately safe for normal local users to read:
+    # NO PPP login, password, token, camera IP, Google credentials or snapshot.
+    path = _status_file()
+    payload = {
+        "checked_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ"),
+        **fields,
+    }
+    temporary = path.with_suffix(".pending")
+    try:
+        temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        os.replace(temporary, path)
+        _run_command(
+            ["icacls.exe", str(path), "/inheritance:r", "/grant:r",
+             "*S-1-5-18:F", "*S-1-5-32-544:F", "*S-1-5-32-545:R"]
+        )
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _is_elevated() -> bool:
@@ -238,6 +272,7 @@ def _admin_remove() -> int:
         _run_command(["schtasks.exe", "/End", "/TN", TASK_NAME], tolerate_failure=True)
         _run_command(["schtasks.exe", "/Delete", "/TN", TASK_NAME, "/F"], tolerate_failure=True)
         _config_path().unlink(missing_ok=True)
+        _status_file().unlink(missing_ok=True)
         return 0
     except Exception:
         return 2
@@ -341,18 +376,32 @@ def run_worker() -> int:
     )
     service = VPNSheetsSyncService(VPNService(), backend)
     failures = 0
+    successes = 0
+    try:
+        _write_status(state="running", servers=len(payload["servers"]), successful=0, failed=0)
+    except Exception:
+        # Status is supplementary; do not skip the actual backup.
+        pass
     for server in payload["servers"]:
         try:
             result = service.sync_server(
                 server, creds, source="LinkVideo.Helper background",
                 initiator="scheduled-sync",
             )
+            successes += 1
             # Only aggregate counts reach the log; NEVER client credentials.
             print(f"{server}: clients={result.clients}, added={result.added}, "
                   f"changed={result.changed}, deleted={result.deleted}", flush=True)
         except Exception as exc:
             failures += 1
             print(f"{server}: {type(exc).__name__} (сверка не выполнена)", file=sys.stderr, flush=True)
+    try:
+        _write_status(
+            state="ok" if not failures else "partial",
+            servers=len(payload["servers"]), successful=successes, failed=failures,
+        )
+    except Exception:
+        pass
     return 1 if failures else 0
 
 
