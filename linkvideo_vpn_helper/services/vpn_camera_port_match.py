@@ -124,7 +124,7 @@ def _detail_for_camera(b2o: B2OService, choice, login: str) -> tuple[object, set
 
 def match_vpn_ports(
     vpn_login: str, ports, b2o: B2OService, credentials, *,
-    override_login: str = "", lookup=search_by_login, detail_reader=_detail_for_camera,
+    override_login: str = "", country: str = "", lookup=search_by_login, detail_reader=_detail_for_camera,
     max_details: int = _MAX_CAMERA_DETAILS,
 ) -> CameraPortReport:
     """Never guess B2O port ownership from camera name or VPN login alone."""
@@ -139,7 +139,8 @@ def match_vpn_ports(
     if credentials is None or not getattr(credentials, "username", "") or not getattr(credentials, "password", ""):
         raise PermissionError("Войдите в учётную запись «Админка».")
     choices = [choice for choice in lookup(login, b2o, credentials)
-               if str(choice.customer_login or "").casefold() == login.casefold()]
+               if str(choice.customer_login or "").casefold() == login.casefold()
+               and (not country or str(choice.country).casefold() == country.casefold())]
     # The account must match EXACTLY. A fuzzy search or camera from another
     # account never authorizes a match, even if its RTSP port happens to match.
     candidates = list({(choice.operator_id, choice.camera_id): choice for choice in choices}.values())
