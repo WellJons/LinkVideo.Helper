@@ -193,6 +193,7 @@ class SupportTemplatesPage(QWidget):
         view_layout.setContentsMargins(0, 8, 0, 3)
         view_layout.setSpacing(5)
         self.view_title = QLabel("Выберите ответ из библиотеки")
+        self.view_title.setTextFormat(Qt.TextFormat.PlainText)
         self.view_title.setObjectName("TemplateViewHeading")
         self.view_title.setWordWrap(True)
         view_layout.addWidget(self.view_title)
@@ -336,6 +337,7 @@ class SupportTemplatesPage(QWidget):
         title_line = QHBoxLayout()
         title_line.setSpacing(6)
         title = QLabel(template.title)
+        title.setTextFormat(Qt.TextFormat.PlainText)
         title.setObjectName("TemplateTileTitle")
         title.setWordWrap(True)
         title_line.addWidget(title, 1)
@@ -346,12 +348,14 @@ class SupportTemplatesPage(QWidget):
         layout.addLayout(title_line)
 
         meta = QLabel(template.category)
+        meta.setTextFormat(Qt.TextFormat.PlainText)
         meta.setObjectName("TemplateTileMeta")
         layout.addWidget(meta)
         preview = " ".join(template.body.split())
         if len(preview) > 130:
             preview = preview[:127].rstrip() + "…"
         excerpt = QLabel(preview)
+        excerpt.setTextFormat(Qt.TextFormat.PlainText)
         excerpt.setObjectName("TemplateTileExcerpt")
         excerpt.setWordWrap(True)
         layout.addWidget(excerpt)
