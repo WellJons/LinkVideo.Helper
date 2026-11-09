@@ -1719,7 +1719,7 @@ class SearchManagePage(QWidget):
 
     def _start_camera_port_check(self, override_login: str = "", *, force: bool = False):
         client = self.current
-        if client is None or not client.ports:
+        if client is None or not getattr(client, "ports", None):
             return
         login = override_login or self._camera_lookup_override or account_login(client.login)
         self._camera_lookup_override = login if override_login else self._camera_lookup_override
