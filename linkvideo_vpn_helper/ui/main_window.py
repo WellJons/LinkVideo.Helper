@@ -7,10 +7,10 @@ import threading
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSettings, QSize, Qt, Signal, QTimer
+from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QSettings, QSize, Qt, Signal, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton,
+    QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QMenu, QPushButton,
     QVBoxLayout, QWidget,
 )
 
@@ -167,17 +167,12 @@ class MainWindow(QMainWindow):
         sl.addWidget(user_card)
         # Two distinct accounts: MikroTik and administrator. Their usernames
         # and passwords never flow into each other's authentication endpoints.
-        self.work_account_panel = Card(subtle=True)
+        # Pop-up menus never increase the sidebar's minimum height.
+        # Inline expanding cards clipped work navigation at 640–800px heights.
+        self.work_account_panel = QMenu(self)
         self.work_account_panel.setObjectName("WorkAccountPanel")
-        router_layout = QVBoxLayout(self.work_account_panel)
-        router_layout.setContentsMargins(10, 10, 10, 10)
-        self.work_signout = QPushButton("Сменить аккаунт MikroTik")
-        self.work_signout.setObjectName("WorkAccountSignOut")
-        self.work_signout.setProperty("role", "soft")
-        self.work_signout.clicked.connect(self._logout)
-        router_layout.addWidget(self.work_signout)
-        self.work_account_panel.hide()
-        sl.addWidget(self.work_account_panel)
+        self.work_account_panel.setMinimumWidth(224)
+        self.work_account_panel.addAction("Сменить аккаунт MikroTik", self._logout)
 
         self.admin_card = Card(subtle=True)
         self.admin_card.setObjectName("SidebarAdminCard")
@@ -207,28 +202,24 @@ class MainWindow(QMainWindow):
         al.addWidget(self.admin_toggle)
         sl.addWidget(self.admin_card)
 
-        self.admin_account_panel = Card(subtle=True)
+        self.admin_account_panel = QMenu(self)
         self.admin_account_panel.setObjectName("AdminAccountPanel")
-        admin_actions = QVBoxLayout(self.admin_account_panel)
-        admin_actions.setContentsMargins(10, 10, 10, 10)
-        admin_actions.setSpacing(7)
-        self.admin_login_btn = QPushButton("Войти в админку")
+        self.admin_account_panel.setMinimumWidth(224)
+        # Hidden controls keep the existing connection-state logic and its
+        # public regression-test contract. Visible actions are QMenu actions.
+        self.admin_login_btn = QPushButton("Войти в админку", self)
         self.admin_login_btn.setObjectName("AdminAccountLogin")
-        self.admin_login_btn.setProperty("role", "primary")
-        self.admin_login_btn.clicked.connect(self._open_admin_login)
-        admin_actions.addWidget(self.admin_login_btn)
-        self.admin_retry_btn = QPushButton("Проверить подключение")
+        self.admin_retry_btn = QPushButton("Проверить подключение", self)
         self.admin_retry_btn.setObjectName("AdminAccountRetry")
-        self.admin_retry_btn.setProperty("role", "soft")
-        self.admin_retry_btn.clicked.connect(self._reconnect_work_billing)
-        admin_actions.addWidget(self.admin_retry_btn)
-        self.admin_forget_btn = QPushButton("Забыть данные админки")
+        self.admin_forget_btn = QPushButton("Забыть данные админки", self)
         self.admin_forget_btn.setObjectName("AdminAccountForget")
-        self.admin_forget_btn.setProperty("role", "soft")
-        self.admin_forget_btn.clicked.connect(self._forget_admin)
-        admin_actions.addWidget(self.admin_forget_btn)
-        self.admin_account_panel.hide()
-        sl.addWidget(self.admin_account_panel)
+        for button in (self.admin_login_btn, self.admin_retry_btn, self.admin_forget_btn):
+            button.hide()
+        self.admin_login_action = self.admin_account_panel.addAction("Войти в админку", self._open_admin_login)
+        self.admin_retry_action = self.admin_account_panel.addAction("Проверить подключение", self._reconnect_work_billing)
+        self.admin_account_panel.addSeparator()
+        self.admin_forget_action = self.admin_account_panel.addAction("Забыть данные админки", self._forget_admin)
+        self.admin_account_panel.aboutToShow.connect(self._sync_admin_menu_actions)
         sl.addSpacing(10)
         self.work_account.b2oChanged.connect(self._on_work_b2o_status)
         self._refresh_work_billing_status()
@@ -479,9 +470,7 @@ class MainWindow(QMainWindow):
         self.logo.setVisible(not collapsed)
         self.logo_sub.setVisible(not collapsed)
         self.user_card.setVisible(not collapsed)
-        self.work_account_panel.setVisible(not collapsed and self._account_panel_open)
         self.admin_card.setVisible(not collapsed)
-        self.admin_account_panel.setVisible(not collapsed and self._admin_panel_open)
         self.work_label.setVisible(not collapsed)
         self.version.setVisible(not collapsed)
         self.brand_mark.setVisible(True)
@@ -569,17 +558,23 @@ class MainWindow(QMainWindow):
             self.toast.showMessage("Не удалось запустить установщик", str(exc), 5500)
             self._position_toast()
 
+    def _show_account_menu(self, menu: QMenu, card: QWidget) -> None:
+        # Qt Popup handles closing on an outside click or Esc, and won't push
+        # the sidebar's work section below the visible window height.
+        menu.setMinimumWidth(max(224, card.width()))
+        menu.popup(card.mapToGlobal(QPoint(0, card.height() + 4)))
+
     def _toggle_work_account_panel(self):
-        self._account_panel_open = not self._account_panel_open
-        self.work_account_panel.setVisible(self._account_panel_open and not self._collapsed)
-        self.logout.setText("⌃" if self._account_panel_open else "⌄")
+        self._show_account_menu(self.work_account_panel, self.user_card)
 
     def _toggle_admin_panel(self):
-        self._admin_panel_open = not self._admin_panel_open
-        self.admin_account_panel.setVisible(
-            self._admin_panel_open and not self._collapsed
-        )
-        self.admin_toggle.setText("⌃" if self._admin_panel_open else "⌄")
+        self._show_account_menu(self.admin_account_panel, self.admin_card)
+
+    def _sync_admin_menu_actions(self):
+        self.admin_login_action.setText(self.admin_login_btn.text())
+        self.admin_login_action.setEnabled(self.admin_login_btn.isEnabled())
+        self.admin_retry_action.setEnabled(self.admin_retry_btn.isEnabled())
+        self.admin_forget_action.setEnabled(self.admin_forget_btn.isEnabled())
 
     def _refresh_work_billing_status(self):
         account = self.work_account
