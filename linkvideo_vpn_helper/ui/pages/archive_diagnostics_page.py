@@ -586,8 +586,10 @@ class ArchiveDiagnosticsPage(QWidget):
         client_start = self.service.format_local(main.requested_start, main.camera.timezone_offset)
         client_end = self.service.format_local(main.requested_end, main.camera.timezone_offset)
 
-        valid_address = [(cid, d) for cid, d, err in address_compare if d is not None]
-        valid_server = [(cid, d) for cid, d, err in server_compare if d is not None]
+        valid_address = [(cid, d) for cid, d, err in address_compare
+                         if d is not None and err is None]
+        valid_server = [(cid, d) for cid, d, err in server_compare
+                        if d is not None and err is None]
         diagnosis = self.engine.analyze(main, address_compare, server_compare)
         bad_address = [(cid, d) for cid, d in valid_address if self._is_problem(d)]
         bad_server = [(cid, d) for cid, d in valid_server if self._is_problem(d)]
@@ -614,8 +616,13 @@ class ArchiveDiagnosticsPage(QWidget):
             "",
         ]
 
-        if cov >= 99.5:
-            summary.append("[OK] Архив за выбранный период найден практически полностью.")
+        if cov >= 99.5 and not main.gaps:
+            summary.append("[OK] Архив за выбранный период найден практически полностью, разрывов нет.")
+        elif cov >= 99.5:
+            summary.append(
+                f"[WARN] Покрытие {cov:.1f}%, но найдены реальные DVR-разрывы: {len(main.gaps)}. "
+                "Высокий процент не исключает кратких сбоев."
+            )
         elif cov > 0:
             summary.append("[WARN] Архив найден частично. Точные интервалы указаны во вкладке «Разрывы».")
         else:
@@ -859,7 +866,8 @@ class ArchiveDiagnosticsPage(QWidget):
         diagnosis: ArchiveDiagnosis = result["diagnosis"]
         self._render_verdict(diagnosis)
         cov = main.coverage_percent
-        kind = "success" if cov >= 99 else ("warning" if cov > 0 else "danger")
+        kind = ("success" if cov >= 99 and not main.gaps
+                else "warning" if cov > 0 else "danger")
         self.badge.set_status(f"{cov:.1f}% покрытия", kind)
         self.report.show()
         self.mode.setCurrent("summary")
