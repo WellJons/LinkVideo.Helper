@@ -47,21 +47,28 @@ def main() -> None:
         assert combo.currentData() == "ffmpeg"
         assert page.archive_command_button.objectName() == "ArchiveManualFFmpegButton"
 
+        modal_errors = []
         def apply_manual():
             dialog = QApplication.activeModalWidget()
-            assert isinstance(dialog, QDialog)
-            editor = dialog.findChild(QPlainTextEdit, "ArchiveManualFFmpegEditor")
-            assert editor is not None
-            assert "{input}" in editor.toPlainText()
-            assert "{output}" in editor.toPlainText()
-            editor.setPlainText(
-                'ffmpeg -y -nostdin -i "{input}" -c copy "{output}"')
-            save = next(button for button in dialog.findChildren(QPushButton)
-                        if button.text() == "Сохранить")
-            save.click()
+            try:
+                assert isinstance(dialog, QDialog)
+                editor = dialog.findChild(QPlainTextEdit, "ArchiveManualFFmpegEditor")
+                assert editor is not None
+                assert "{input}" in editor.toPlainText()
+                assert "{output}" in editor.toPlainText()
+                editor.setPlainText(
+                    'ffmpeg -y -nostdin -i "{input}" -c copy "{output}"')
+                save = next(button for button in dialog.findChildren(QPushButton)
+                            if button.text() == "Сохранить")
+                save.click()
+            except Exception as exc:
+                modal_errors.append(exc)
+                if dialog is not None:
+                    dialog.reject()  # Prevent a stuck modal on CI.
 
         QTimer.singleShot(0, apply_manual)
         page.archive_command_button.click()
+        assert not modal_errors, modal_errors
         assert page._lv_archive_manual_command
         assert "изменена" in page.archive_command_button.text()
         assert page.service._lv_archive_manual_command == page._lv_archive_manual_command
