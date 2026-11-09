@@ -1724,6 +1724,7 @@ class SearchManagePage(QWidget):
         def worker():
             try:
                 result = match_vpn_ports(client.login, tuple(client.ports), b2o, creds,
+                                         vpn_server=client.server,
                                          override_login=login, country=country)
                 self.cameraPortsReady.emit(generation, key, result, "")
             except Exception:
@@ -1748,8 +1749,12 @@ class SearchManagePage(QWidget):
             self._camera_match_message = (
                 f"B2O: {report.checked_cameras} камер · "
                 f"RTSP-ссылок с портом: {report.stream_cameras} · "
-                f"совпадений: {len(report.links)}."
+                f"подтверждено камер: {report.matched_camera_count}."
             )
+            if report.grouped:
+                self._camera_match_message += (
+                    f" Портов с несколькими каналами: {len(report.grouped)}."
+                )
             if report.incomplete:
                 self._camera_match_message += (
                     f" Неполный ответ B2O ({report.stream_errors} ошибок), "
@@ -1757,7 +1762,7 @@ class SearchManagePage(QWidget):
                 )
             elif report.ambiguous:
                 self._camera_match_message += " Есть неоднозначные порты."
-            elif not report.links:
+            elif not (report.links or report.grouped):
                 self._camera_match_message += " Совпадающих портов не найдено."
         self._render_client()
 
