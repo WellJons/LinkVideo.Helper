@@ -9,7 +9,8 @@ import sqlite3
 
 from linkvideo_vpn_helper.services.camera_lookup import CameraChoice
 from linkvideo_vpn_helper.services.vpn_camera_port_match import (
-    account_login, explicit_camera_ports, match_vpn_ports, _detail_for_camera,
+    account_login, explicit_camera_ports, explicit_camera_endpoints,
+    match_vpn_ports, _detail_for_camera,
 )
 from linkvideo_vpn_helper.services.support_templates import TemplateStore
 
@@ -48,27 +49,34 @@ def exact_lookup(login, b2o, creds):
     return choices
 
 def detail(b2o, camera, login):
-    return camera, {"999":{11690}, "1000":{11691}, "2000":{11690},
-                    "3000":{11690}}[camera.camera_id]
+    return camera, {"999":{("vpn02.linkvideo.ru",11690)},
+                    "1000":{("vpn02.linkvideo.ru",11691)},
+                    "2000":{("vpn02.linkvideo.ru",11690)},
+                    "3000":{("vpn02.linkvideo.ru",11690)}}[camera.camera_id]
 
 report = match_vpn_ports("89950639067_1", [11690,11691,11692],b2o,creds,
-                         country="Россия", lookup=exact_lookup, detail_reader=detail)
+                         country="Россия", vpn_server="vpn02.linkvideo.ru",
+                         lookup=exact_lookup, detail_reader=detail)
 assert {(x.port,x.camera_id) for x in report.links} == {(11690,"999"),(11691,"1000")}
 assert report.unmatched == (11692,)
 assert report.checked_cameras == 2
 assert not report.incomplete
 report = match_vpn_ports("89950639067_3",[11690],b2o,creds,country="Россия",
     lookup=lambda login,*_: (first,second),
-    detail_reader=lambda _b, choice, login: (choice,{11690}))
-assert report.ambiguous == (11690,) and not report.links
+    vpn_server="vpn02.linkvideo.ru",
+    detail_reader=lambda _b, choice, login: (choice,{("vpn02.linkvideo.ru",11690)}))
+assert not report.ambiguous and not report.links
+assert len(report.grouped) == 1 and len(report.grouped[0][1]) == 2
+assert report.matched_camera_count == 2
 
 # If B2O failed to return complete camera details, do NOT claim that the
 # remaining single match is definitely unique.
 def incomplete(_b,choice,_l):
     if choice.camera_id == "1000":
         raise TimeoutError("B2O unavailable")
-    return choice,{11690}
+    return choice,{("vpn02.linkvideo.ru",11690)}
 report = match_vpn_ports("89950639067_3",[11690],b2o,creds,country="Россия",
+    vpn_server="vpn02.linkvideo.ru",
     lookup=lambda *_: (first,second),detail_reader=incomplete)
 assert report.incomplete and not report.links
 assert match_vpn_ports("client_3",[],b2o,creds).links == ()
@@ -100,7 +108,7 @@ actual_b2o=StreamB2O()
 five = tuple(CameraChoice(str(999+i),241,"Россия",f"Камера {i}",
                           customer_login="89950639067") for i in range(5))
 actual = match_vpn_ports("89950639067_3",[11690,11691,11692],actual_b2o,creds,
-                         country="Россия", lookup=lambda *_: five)
+                         country="Россия", vpn_server="vpn02.linkvideo.ru", lookup=lambda *_: five)
 assert {(x.port,x.camera_id) for x in actual.links} == {
     (11690,"999"),(11691,"1000"),(11692,"1001")}
 assert actual.stream_cameras == 5
@@ -108,9 +116,46 @@ assert actual.checked_cameras == 5
 assert len([url for url in actual_b2o.routes if url.endswith("/camera-streams-urls")]) == 5
 assert not actual.incomplete
 
+# Exact VPN-server matching: identical port on vpn06 must not appear on vpn08.
+assert explicit_camera_endpoints({
+    "data": {"channels": [
+        {"stream_url": "rtsp://u:pass@vpn06.linkvideo.ru:10700/ch1"},
+        {"rtsp_url": "rtsp://vpn08.linkvideo.ru:10700/ch2"}
+    ]}
+}) == {("vpn06.linkvideo.ru", 10700), ("vpn08.linkvideo.ru", 10700)}
+nvr = (
+    CameraChoice("101", 241, "Россия", "Канал 1", customer_login="89950639067"),
+    CameraChoice("102", 241, "Россия", "Канал 2", customer_login="89950639067"),
+    CameraChoice("103", 241, "Россия", "Канал с vpn06", customer_login="89950639067"),
+)
+def nvr_reader(_service, camera, _login):
+    hostname = "vpn06.linkvideo.ru" if camera.camera_id == "103" else "vpn08.linkvideo.ru"
+    return camera, {(hostname, 10700)}, True, False
+nvr_report = match_vpn_ports(
+    "89950639067_1", [10700], b2o, creds,
+    vpn_server="vpn08.linkvideo.ru", country="Россия",
+    lookup=lambda *_: nvr, detail_reader=nvr_reader)
+assert not nvr_report.links
+assert nvr_report.matched_camera_count == 2
+assert nvr_report.grouped[0][0] == 10700
+assert {c.camera_id for c in nvr_report.grouped[0][1]} == {"101", "102"}
+assert all(c.server == "vpn08.linkvideo.ru" for c in nvr_report.grouped[0][1])
+# A port without a verified server must not expose any B2O camera IDs.
+no_host = match_vpn_ports(
+    "89950639067_1", [10700], b2o, creds, country="Россия",
+    lookup=lambda *_: nvr, detail_reader=nvr_reader)
+assert no_host.incomplete and not no_host.links and not no_host.grouped
+# A numeric-only port hint is not sufficient, even when it equals the port.
+no_endpoint = match_vpn_ports(
+    "89950639067_1", [10700], b2o, creds,
+    vpn_server="vpn08.linkvideo.ru", country="Россия",
+    lookup=lambda *_: nvr[:1], detail_reader=lambda _, ch, __: (ch, {10700}))
+assert not no_endpoint.links and not no_endpoint.grouped
+
+
 actual_b2o.fail_stream=True
 partial = match_vpn_ports("89950639067_3",[11690],actual_b2o,creds,
-                          country="Россия", lookup=lambda *_: five)
+                          country="Россия", vpn_server="vpn02.linkvideo.ru", lookup=lambda *_: five)
 assert partial.incomplete and not partial.links and partial.stream_errors == 5
 
 # If camera detail reports a conflicting owner, do not fetch or link it.
