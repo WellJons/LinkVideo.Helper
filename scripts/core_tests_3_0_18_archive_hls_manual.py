@@ -161,4 +161,21 @@ with TemporaryDirectory(prefix="lvh_hls_regression_") as td:
     assert "old.m3u8" in captured[0][captured[0].index("-i")+1]
     assert "new.m3u8" in captured[1][captured[1].index("-i")+1]
 
+    # Automatic audio fallback keeps video in copy mode, but converts
+    # incompatible G.711/PCM audio into AAC on the second attempt.
+    service._lv_archive_manual_command = ""
+    captured.clear()
+    def codec_retry(cmd, **kwargs):
+        captured.append(cmd)
+        if len(captured) == 1:
+            return 1, "Could not write header for audio codec pcm_alaw"
+        Path(cmd[-1]).write_bytes(MP4)
+        return 0, ""
+    with patch.object(dl,"_run_ffmpeg_progress",side_effect=codec_retry):
+        result=dl._download_with_ffmpeg_audio(
+            service, discovery, tmp / "audio-fallback.mp4")
+    assert result.output.is_file()
+    assert "-c:a" in captured[1] and "aac" in captured[1]
+    assert "-c:v" in captured[1] and "copy" in captured[1]
+
 print("CORE TESTS 3.0.18 HLS PLAYLIST AND MANUAL FFMPEG OK")
