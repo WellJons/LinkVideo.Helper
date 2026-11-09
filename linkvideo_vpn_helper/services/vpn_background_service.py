@@ -312,11 +312,13 @@ def _admin_install(staged_path: Path) -> int:
     except Exception:
         # The scheduled task now exists: do not pretend that setup succeeded.
         return 15
+    backup.unlink(missing_ok=True)
     try:
         source.unlink(missing_ok=True)
     except OSError:
-        pass  # elevated admin may differ from the original desktop account
-    backup.unlink(missing_ok=True)
+        # Elevated UAC may use a different administrator account. A staging
+        # cleanup failure must not misreport an installed, working task.
+        return 0
     return 0
 
 
