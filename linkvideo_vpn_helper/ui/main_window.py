@@ -39,6 +39,7 @@ class MainWindow(QMainWindow):
         ("inactive", "⌛", "VPN-клиенты", "Состояния и карантин"),
         ("tariffs", "₽", "Клиенты и тарифы", "Корпоративный биллинг, VPN и КЦ"),
         ("new_agent", "◉", "Новый Агент", "Настройки камер LD через agent-vcore"),
+        ("templates", "▤", "Шаблоны ответов", "Личные шаблоны поддержки"),
         # Управление инфраструктурой оставляем последним рабочим разделом,
         # а не вклиниваем между ежедневными операциями сотрудников.
         ("vpn_servers", "▦", "VPN-серверы", "Нагрузка, резервные копии и LV"),
@@ -310,6 +311,9 @@ class MainWindow(QMainWindow):
         elif key == "new_agent":
             from linkvideo_vpn_helper.ui.pages.new_agent_page import NewAgentPage
             page = NewAgentPage(self.settings, self.credentials, self)
+        elif key == "templates":
+            from linkvideo_vpn_helper.ui.pages.support_templates_page import SupportTemplatesPage
+            page = SupportTemplatesPage(self)
         elif key == "settings":
             from linkvideo_vpn_helper.ui.pages.settings_page import SettingsPage
             page = SettingsPage(self.settings, self.registry, self.service, self.credentials, self)
