@@ -64,7 +64,7 @@ def main() -> int:
     assert policy.NEVER_ACTIVE_DELETE_DAYS == 30
     assert policy.DELETE_DAYS == 365
     aging = policy.aging_script_source()
-    assert "never_active_30" in aging
+    assert ":set deleteAfter 30" in aging
     assert "deleteAfter" in aging
     assert "NEVER_ACTIVE_DELETE_DAYS" not in aging  # rendered to the numeric threshold
     state, reason = policy._desired_state(
@@ -73,6 +73,7 @@ def main() -> int:
         False,
         False,
         (1_000 + 31) * policy.DAY_NS,
+        verified_never=True,
     )
     assert state == "R" and reason == "never_active_30"
 
