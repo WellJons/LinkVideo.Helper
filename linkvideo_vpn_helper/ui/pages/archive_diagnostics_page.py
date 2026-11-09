@@ -592,6 +592,7 @@ class ArchiveDiagnosticsPage(QWidget):
         server_debug: dict,
     ) -> dict:
         cov = main.coverage_percent
+        hls_only = bool(main.hls_fallback_url and not main.slices)
         reserve_start, reserve_end = self.service.reserve_log_period(main.requested_start, main.requested_end)
         client_start = self.service.format_local(main.requested_start, main.camera.timezone_offset)
         client_end = self.service.format_local(main.requested_end, main.camera.timezone_offset)
@@ -621,12 +622,19 @@ class ArchiveDiagnosticsPage(QWidget):
             f"Текущий server_name: {main.camera.server}",
             f"Период камеры: {client_start} — {client_end}  UTC{main.camera.timezone_offset:+d}",
             f"Запрошено: {self._dur(main.requested_duration)}",
-            f"Подтверждено: {self._dur(main.covered_duration)} ({cov:.1f}%)",
+            (f"Оценка HLS-длительности: {self._dur(main.covered_duration)} (без точного таймлайна)"
+             if hls_only else
+             f"Подтверждено DVR: {self._dur(main.covered_duration)} ({cov:.1f}%)"),
             f"Пропусков: {len(main.gaps)}",
             "",
         ]
 
-        if cov >= 99.5 and not main.gaps:
+        if hls_only:
+            summary.append(
+                "[INFO] Плейлист HLS доступен, но точные интервалы DVR не подтверждены. "
+                "Длительность плейлиста не доказывает отсутствие/наличие конкретных разрывов."
+            )
+        elif cov >= 99.5 and not main.gaps:
             summary.append("[OK] Архив за выбранный период найден практически полностью, разрывов нет.")
         elif cov >= 99.5:
             summary.append(
@@ -686,7 +694,12 @@ class ArchiveDiagnosticsPage(QWidget):
             summary.extend(f"- {x}" for x in diagnosis.cautions)
 
         breaks: list[str] = ["РАЗРЫВЫ ПО ВРЕМЕНИ", ""]
-        if main.gaps:
+        if hls_only:
+            breaks.append(
+                "Точных DVR-интервалов нет. Нельзя показывать вычисленный полный "
+                "пропуск как подтверждённый разрыв, пока доступен лишь HLS-плейлист."
+            )
+        elif main.gaps:
             for index, gap in enumerate(main.gaps, 1):
                 a = self.service.format_local(gap.start, main.camera.timezone_offset)
                 b = self.service.format_local(gap.end, main.camera.timezone_offset)
@@ -876,16 +889,24 @@ class ArchiveDiagnosticsPage(QWidget):
         diagnosis: ArchiveDiagnosis = result["diagnosis"]
         self._render_verdict(diagnosis)
         cov = main.coverage_percent
-        kind = ("success" if cov >= 99 and not main.gaps
+        hls_only = bool(main.hls_fallback_url and not main.slices)
+        kind = ("warning" if hls_only
+                else "success" if cov >= 99 and not main.gaps
                 else "warning" if cov > 0 else "danger")
-        self.badge.set_status(f"{cov:.1f}% покрытия", kind)
+        self.badge.set_status(
+            "HLS найден · DVR-таймлайн не подтверждён" if hls_only
+            else f"{cov:.1f}% покрытия", kind)
         self.report.show()
         self.mode.setCurrent("summary")
         self._show_report("summary")
 
         address_ok = sum(1 for _, d, _ in result["address_compare"] if d is not None)
         server_ok = sum(1 for _, d, _ in result["server_compare"] if d is not None)
-        detail = f"Подтверждено {self._dur(main.covered_duration)} из {self._dur(main.requested_duration)}"
+        detail = (
+            "HLS-доступ подтверждён, точные интервалы DVR требуют дополнительной проверки"
+            if hls_only else
+            f"Подтверждено {self._dur(main.covered_duration)} из {self._dur(main.requested_duration)}"
+        )
         if result["address_compare"]:
             detail += f" · камеры адреса {address_ok}/{len(result['address_compare'])}"
         if result["server_compare"]:
