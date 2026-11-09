@@ -385,14 +385,8 @@ class SearchManagePage(QWidget):
         info_l = QVBoxLayout(self.client_info_card)
         info_l.setContentsMargins(14, 14, 14, 14)
         info_l.setSpacing(8)
-        info_nav = QHBoxLayout()
-        self.info_back = QPushButton("← К результатам")
-        self.info_back.setObjectName("SearchClientInfoBack")
-        self.info_back.setProperty("role", "ghost")
-        self.info_back.clicked.connect(self._close_client_view)
-        info_nav.addWidget(self.info_back)
-        info_nav.addStretch(1)
-        info_l.addLayout(info_nav)
+        # The page header already has «К поиску»; avoid a redundant row
+        # that pushes the left client card below the right actions panel.
         identity_row = QHBoxLayout()
         self.info_title = QLabel("Данные клиента")
         self.info_title.setObjectName("SectionTitle")
@@ -1173,18 +1167,20 @@ class SearchManagePage(QWidget):
             line.addWidget(detail, 1)
             dl.addLayout(line)
 
-        # Show the client PPP password directly to the authenticated operator.
-        # This is not the Helper login password and is already copyable as VPN config.
+        # PPP password is a normal selectable value, same layout and
+        # typography as Server/Login/VPN address. No framed input.
         password_row = QHBoxLayout()
-        password_row.setSpacing(6)
-        password_label = QLabel("Пароль:")
-        password_label.setObjectName("TinyMuted")
-        password_view = QLineEdit(c.password)
-        password_view.setReadOnly(True)
-        password_view.setEchoMode(QLineEdit.EchoMode.Normal)
-        password_view.setToolTip("Пароль VPN-клиента. Можно выделить и скопировать.")
+        password_row.setSpacing(8)
+        password_label = QLabel("Пароль")
+        password_label.setObjectName("Muted")
+        password_label.setFixedWidth(104)
+        password_value = QLabel(c.password)
+        password_value.setObjectName("Value")
+        password_value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        password_value.setWordWrap(True)
+        password_value.setToolTip("Пароль VPN-клиента: выделите текст для копирования.")
         password_row.addWidget(password_label)
-        password_row.addWidget(password_view, 1)
+        password_row.addWidget(password_value, 1)
         dl.addLayout(password_row)
 
         vpn = Card()
