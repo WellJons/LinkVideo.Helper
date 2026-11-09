@@ -231,8 +231,8 @@ func helperProcessNames() []string {
         "LinkVideo.Helper.Updater.Worker.exe",
         "LinkVideo.Helper_Patch_Update.exe",
         "official-patch.exe",
-        // Older installations also shipped this generic updater binary.
-        "updater.exe",
+        // Do not kill a generic "updater.exe": another installed product
+        // may have a process with that same image name.
     }
 }
 

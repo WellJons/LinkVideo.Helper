@@ -13,10 +13,11 @@ from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication, QLabel
 
 from linkvideo_vpn_helper.release_notes import RELEASE_HISTORY, release_notes
+from linkvideo_vpn_helper.version import APP_VERSION
 from linkvideo_vpn_helper.ui.pages.settings_page import SettingsPage
 
 
-assert RELEASE_HISTORY[0][0] == "3.0.18"
+assert RELEASE_HISTORY[0][0] == APP_VERSION
 assert "FFmpeg" in " ".join(release_notes("3.0.18"))
 assert all(release_notes(version) for version, _ in RELEASE_HISTORY)
 
@@ -53,7 +54,7 @@ with TemporaryDirectory() as tmp:
     page._render_archive_hosts(1721)
 
     about = page.about_tab.findChildren(QLabel)
-    assert any("Что нового в 3.0.18" in label.text() for label in about)
+    assert any(f"Что нового в {APP_VERSION}" in label.text() for label in about)
     assert any("История изменений" in label.text() for label in about)
     page.close()
 
