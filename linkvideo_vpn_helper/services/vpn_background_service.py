@@ -462,14 +462,16 @@ def task_inspection() -> dict:
     """
     if not _on_windows():
         return {"installed": False, "verified": False, "source": "unsupported"}
+    query_failure = "not_visible"
     try:
         query = _run_command(
             ["schtasks.exe", "/Query", "/TN", TASK_NAME], tolerate_failure=True
         )
         if query.returncode == 0:
             return {"installed": True, "verified": True, "source": "task_scheduler"}
-    except (OSError, subprocess.TimeoutExpired, UnicodeError):
-        pass
+        query_failure = f"exit_{query.returncode}"
+    except (OSError, subprocess.TimeoutExpired, UnicodeError) as exc:
+        query_failure = type(exc).__name__
 
     receipt = read_task_receipt()
     if receipt.get("installed"):
@@ -477,7 +479,10 @@ def task_inspection() -> dict:
             "installed": True, "verified": False, "source": "admin_receipt",
             "interval_hours": receipt.get("interval_hours"),
         }
-    return {"installed": False, "verified": False, "source": "unknown"}
+    return {
+        "installed": False, "verified": False,
+        "source": "unknown", "query_failure": query_failure,
+    }
 
 
 def task_registered() -> bool:
