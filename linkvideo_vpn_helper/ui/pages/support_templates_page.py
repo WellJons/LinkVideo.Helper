@@ -73,7 +73,7 @@ class SupportTemplatesPage(QWidget):
         columns.setChildrenCollapsible(False)
         columns.setHandleWidth(14)
         columns.setMinimumHeight(600)
-        columns.splitterMoved.connect(lambda *_: self._update_list_row_heights())
+        columns.splitterMoved.connect(self._on_splitter_moved)
 
         left = Card()
         left.setMinimumWidth(350)
@@ -386,6 +386,9 @@ class SupportTemplatesPage(QWidget):
                 + self._wrapped_height(excerpt, width) + 12
             )
             item.setSizeHint(QSize(0, max(95, height)))
+
+    def _on_splitter_moved(self, *_):
+        self._update_list_row_heights()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
