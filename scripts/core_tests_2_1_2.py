@@ -101,7 +101,7 @@ servers_ui = (ROOT / "linkvideo_vpn_helper/ui/pages/vpn_servers_page.py").read_t
 clients_ui = (ROOT / "linkvideo_vpn_helper/ui/pages/inactive_clients_page.py").read_text(encoding="utf-8")
 for token in (
     "Памятка состояний VPN-клиентов", "Активная", "Спящая — 30+ дней",
-    "Карантин — 90+ дней", "Кандидат в архив — 365+ дней", "Отключена вручную",
+    "Карантин — 90+ дней", "Ожидает удаления — 365+ дней", "Отключена вручную",
     "Активность неизвестна", "Остановить LV", "Запустить LV", "Остановить LV на всех",
     "Запустить LV на всех", "set_automation_enabled",
 ):
