@@ -7,7 +7,7 @@ import zipfile
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
+    QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMessageBox, QPushButton, QSplitter,
     QTextEdit, QVBoxLayout, QWidget,
 )
@@ -26,10 +26,10 @@ class SupportTemplatesPage(QWidget):
 
     def _build(self):
         self.page_scroll, self.page_canvas, root = build_page_scaffold(
-            self, max_width=1580, min_width=760, margins=20, spacing=12)
+            self, max_width=1440, min_width=740, margins=22, spacing=12)
         root.addWidget(PageHeader(
             "Шаблоны ответов",
-            "Быстрый поиск, редактирование и копирование ответов. Библиотека хранится на этом ПК."
+            "Готовые ответы поддержки · поиск по тексту и категориям · копирование одним нажатием."
         ))
 
         toolbar = QHBoxLayout()
@@ -37,11 +37,11 @@ class SupportTemplatesPage(QWidget):
         self.library_count = QLabel("Личная библиотека")
         self.library_count.setObjectName("Muted")
         toolbar.addWidget(self.library_count, 1)
-        import_btn = QPushButton("↓ Импорт DOCX")
+        import_btn = QPushButton("Импортировать DOCX")
         import_btn.setToolTip("Загрузить отдельные шаблоны из заголовков Word-документа")
         import_btn.clicked.connect(self._import_docx)
         toolbar.addWidget(import_btn)
-        new_btn = QPushButton("＋ Новый шаблон")
+        new_btn = QPushButton("＋ Создать шаблон")
         new_btn.setProperty("role", "primary")
         new_btn.clicked.connect(self._new)
         toolbar.addWidget(new_btn)
@@ -49,33 +49,35 @@ class SupportTemplatesPage(QWidget):
 
         columns = QSplitter(Qt.Orientation.Horizontal)
         columns.setChildrenCollapsible(False)
-        columns.setHandleWidth(10)
-        columns.setMinimumHeight(625)
+        columns.setHandleWidth(14)
+        columns.setMinimumHeight(600)
 
         left = Card()
-        left.setMinimumWidth(300)
+        left.setMinimumWidth(320)
+        left.setObjectName("TemplateLibraryPanel")
         ll = QVBoxLayout(left)
         ll.setContentsMargins(16, 16, 16, 16)
         ll.setSpacing(11)
-        heading = QLabel("Все ответы")
+        heading = QLabel("Библиотека ответов")
         heading.setObjectName("SectionTitle")
         ll.addWidget(heading)
 
         self.search = QLineEdit()
         self.search.setObjectName("TemplateSearch")
         self.search.setMinimumHeight(42)
-        self.search.setPlaceholderText("Поиск по названию и тексту")
+        self.search.setPlaceholderText("Найти шаблон или фразу…")
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._refresh)
         ll.addWidget(self.search)
 
-        filters = QHBoxLayout()
-        filters.setSpacing(8)
+        filters = QVBoxLayout()
+        filters.setSpacing(7)
         self.category_filter = QComboBox()
+        self.category_filter.setObjectName("TemplateCategoryFilter")
         self.category_filter.setMinimumHeight(38)
         self.category_filter.currentIndexChanged.connect(self._refresh)
-        filters.addWidget(self.category_filter, 1)
-        self.favorites_only = QCheckBox("★ Избранные")
+        filters.addWidget(self.category_filter)
+        self.favorites_only = QCheckBox("★ Только избранное")
         self.favorites_only.toggled.connect(self._refresh)
         filters.addWidget(self.favorites_only)
         ll.addLayout(filters)
@@ -83,7 +85,8 @@ class SupportTemplatesPage(QWidget):
         self.templates_list = QListWidget()
         self.templates_list.setObjectName("TemplateResultsList")
         self.templates_list.setWordWrap(True)
-        self.templates_list.setSpacing(6)
+        self.templates_list.setSpacing(8)
+        self.templates_list.setUniformItemSizes(True)
         self.templates_list.setMinimumHeight(380)
         self.templates_list.currentItemChanged.connect(self._select)
         ll.addWidget(self.templates_list, 1)
@@ -101,12 +104,13 @@ class SupportTemplatesPage(QWidget):
 
         right = Card()
         right.setMinimumWidth(440)
+        right.setObjectName("TemplateEditorPanel")
         rl = QVBoxLayout(right)
-        rl.setContentsMargins(20, 18, 20, 18)
+        rl.setContentsMargins(22, 18, 22, 18)
         rl.setSpacing(10)
 
         title_row = QHBoxLayout()
-        section = QLabel("Редактор ответа")
+        section = QLabel("Ответ клиенту")
         section.setObjectName("SectionTitle")
         title_row.addWidget(section)
         title_row.addStretch(1)
@@ -114,8 +118,9 @@ class SupportTemplatesPage(QWidget):
         self.star.setProperty("role", "soft")
         self.star.clicked.connect(self._toggle_favorite)
         title_row.addWidget(self.star)
-        self.copy_btn = QPushButton("⧉ Копировать")
-        self.copy_btn.setToolTip("Скопировать текст ответа в буфер обмена")
+        self.copy_btn = QPushButton("Копировать текст")
+        self.copy_btn.setProperty("role", "primary")
+        self.copy_btn.setToolTip("Скопировать весь текст ответа в буфер обмена")
         self.copy_btn.clicked.connect(self._copy)
         title_row.addWidget(self.copy_btn)
         rl.addLayout(title_row)
@@ -124,7 +129,7 @@ class SupportTemplatesPage(QWidget):
         fields.setSpacing(12)
         name_column = QVBoxLayout()
         name_column.setSpacing(6)
-        name_title = QLabel("НАЗВАНИЕ")
+        name_title = QLabel("Название шаблона")
         name_title.setObjectName("TinyMuted")
         name_column.addWidget(name_title)
         self.title_input = QLineEdit()
@@ -135,7 +140,7 @@ class SupportTemplatesPage(QWidget):
         fields.addLayout(name_column, 3)
         category_column = QVBoxLayout()
         category_column.setSpacing(6)
-        name_category = QLabel("КАТЕГОРИЯ")
+        name_category = QLabel("Категория")
         name_category.setObjectName("TinyMuted")
         category_column.addWidget(name_category)
         self.category_input = QComboBox()
@@ -159,7 +164,7 @@ class SupportTemplatesPage(QWidget):
         self.body_input.setObjectName("TemplateBodyInput")
         self.body_input.setPlaceholderText("Выберите шаблон слева или создайте новый ответ…")
         self.body_input.setAcceptRichText(False)
-        self.body_input.setMinimumHeight(315)
+        self.body_input.setMinimumHeight(305)
         rl.addWidget(self.body_input, 1)
 
         attachment_header = QHBoxLayout()
@@ -199,11 +204,11 @@ class SupportTemplatesPage(QWidget):
         self.image_area.hide()
 
         actions = QHBoxLayout()
-        self.save_btn = QPushButton("Сохранить шаблон")
+        self.save_btn = QPushButton("Сохранить изменения")
         self.save_btn.setObjectName("TemplateSaveButton")
         self.save_btn.setProperty("role", "primary")
         self.save_btn.clicked.connect(self._save)
-        delete_btn = QPushButton("Удалить")
+        delete_btn = QPushButton("Удалить шаблон")
         delete_btn.setProperty("role", "dangerGhost")
         delete_btn.clicked.connect(self._delete)
         actions.addWidget(self.save_btn, 1)
@@ -215,8 +220,8 @@ class SupportTemplatesPage(QWidget):
         rl.addWidget(self.notice)
         columns.addWidget(right)
 
-        columns.setStretchFactor(0, 4)
-        columns.setStretchFactor(1, 6)
+        columns.setStretchFactor(0, 35)
+        columns.setStretchFactor(1, 65)
         root.addWidget(columns, 1)
 
     def _categories(self):
@@ -238,6 +243,48 @@ class SupportTemplatesPage(QWidget):
         elif chosen:
             self.category_input.setCurrentText(chosen)
 
+    def _template_tile(self, template) -> QWidget:
+        """Compact visual tile: title, category and readable excerpt.
+
+        QListWidget owns selection; the tile is mouse-transparent, so clicks
+        always select the correct template and work with keyboard navigation.
+        """
+        tile = QFrame()
+        tile.setObjectName("TemplateReplyTile")
+        tile.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        layout = QVBoxLayout(tile)
+        layout.setContentsMargins(12, 9, 12, 9)
+        layout.setSpacing(4)
+
+        title_line = QHBoxLayout()
+        title_line.setSpacing(5)
+        title = QLabel(template.title)
+        title.setObjectName("TemplateTileTitle")
+        title.setWordWrap(True)
+        title.setMaximumHeight(39)
+        title_line.addWidget(title, 1)
+        if template.favorite:
+            star = QLabel("★")
+            star.setObjectName("TemplateTileFavorite")
+            star.setToolTip("Избранное")
+            title_line.addWidget(star, 0, Qt.AlignmentFlag.AlignTop)
+        layout.addLayout(title_line)
+
+        meta = QLabel(template.category)
+        meta.setObjectName("TemplateTileMeta")
+        meta.setMaximumHeight(20)
+        layout.addWidget(meta)
+
+        preview = " ".join(template.body.split())
+        if len(preview) > 100:
+            preview = preview[:97].rstrip() + "…"
+        excerpt = QLabel(preview)
+        excerpt.setObjectName("TemplateTileExcerpt")
+        excerpt.setWordWrap(True)
+        excerpt.setMaximumHeight(38)
+        layout.addWidget(excerpt)
+        return tile
+
     def _refresh(self, *_):
         selected = self._selected_id
         category = self.category_filter.currentData() if self.category_filter.count() else ""
@@ -247,20 +294,17 @@ class SupportTemplatesPage(QWidget):
         self.templates_list.blockSignals(True)
         self.templates_list.clear()
         for template in records:
-            preview = " ".join(template.body.split())
-            if len(preview) > 74:
-                preview = preview[:71].rstrip() + "…"
-            item = QListWidgetItem(
-                ("★  " if template.favorite else "") + template.title +
-                "\n" + template.category + "  ·  " + preview)
+            item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, template.id)
-            item.setSizeHint(QSize(0, 76))
+            item.setSizeHint(QSize(0, 103))
             item.setToolTip(template.title + "\n" + template.category)
             self.templates_list.addItem(item)
+            self.templates_list.setItemWidget(item, self._template_tile(template))
             if template.id == selected:
                 self.templates_list.setCurrentItem(item)
         self.templates_list.blockSignals(False)
-        self.library_count.setText(f"Всего шаблонов: {len(self.store.list())} · найдено: {len(records)}")
+        self.library_count.setText(
+            f"Всего: {len(self.store.list())}  ·  Найдено: {len(records)}")
         self.empty_label.setVisible(not records)
         if selected is not None and self.store.get(selected) is None:
             self._new()
