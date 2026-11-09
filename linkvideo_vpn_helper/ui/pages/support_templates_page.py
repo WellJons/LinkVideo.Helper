@@ -2,17 +2,21 @@ from __future__ import annotations
 
 """Desktop offline support reply library: fast search, editing and clipboard."""
 from pathlib import Path
+from tempfile import TemporaryDirectory
+import shutil
+import uuid
 import zipfile
 
-from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import Qt, QSize, QRect
+from PySide6.QtGui import QIcon, QImageReader, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QListWidget, QListWidgetItem, QMessageBox, QPushButton, QSplitter,
-    QTextEdit, QVBoxLayout, QWidget,
+    QListView, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
+    QSplitter, QTextEdit, QVBoxLayout, QWidget,
 )
 
-from linkvideo_vpn_helper.services.support_templates import TemplateStore
+from linkvideo_vpn_helper.services.support_templates import TemplateStore, ALLOWED_IMAGES, IMAGE_LIMIT
+from linkvideo_vpn_helper.ui.reply_clipboard import build_reply_mime
 from linkvideo_vpn_helper.ui.components import Card, PageHeader, build_page_scaffold
 
 
@@ -21,6 +25,10 @@ class SupportTemplatesPage(QWidget):
         super().__init__(parent)
         self.store = store or TemplateStore()
         self._selected_id: int | None = None
+        self._pending_images: list[Path] = []
+        self._removed_image_ids: set[int] = set()
+        self._draft_dir = TemporaryDirectory(prefix="lv_reply_images_")
+        self._editing = False
         self._build()
         self._refresh()
 
@@ -34,9 +42,7 @@ class SupportTemplatesPage(QWidget):
 
         toolbar = QHBoxLayout()
         toolbar.setSpacing(10)
-        self.library_count = QLabel("Личная библиотека")
-        self.library_count.setObjectName("Muted")
-        toolbar.addWidget(self.library_count, 1)
+        toolbar.addStretch(1)
         import_btn = QPushButton("Импортировать DOCX")
         import_btn.setToolTip("Загрузить отдельные шаблоны из заголовков Word-документа")
         import_btn.clicked.connect(self._import_docx)
@@ -53,14 +59,20 @@ class SupportTemplatesPage(QWidget):
         columns.setMinimumHeight(600)
 
         left = Card()
-        left.setMinimumWidth(320)
+        left.setMinimumWidth(350)
         left.setObjectName("TemplateLibraryPanel")
         ll = QVBoxLayout(left)
         ll.setContentsMargins(16, 16, 16, 16)
-        ll.setSpacing(11)
-        heading = QLabel("Библиотека ответов")
+        ll.setSpacing(9)
+        heading_line = QHBoxLayout()
+        heading = QLabel("Библиотека")
         heading.setObjectName("SectionTitle")
-        ll.addWidget(heading)
+        heading_line.addWidget(heading)
+        heading_line.addStretch(1)
+        self.library_count = QLabel("0 ответов")
+        self.library_count.setObjectName("TinyMuted")
+        heading_line.addWidget(self.library_count)
+        ll.addLayout(heading_line)
 
         self.search = QLineEdit()
         self.search.setObjectName("TemplateSearch")
@@ -86,9 +98,10 @@ class SupportTemplatesPage(QWidget):
         self.templates_list.setObjectName("TemplateResultsList")
         self.templates_list.setWordWrap(True)
         self.templates_list.setSpacing(8)
-        self.templates_list.setUniformItemSizes(True)
+        self.templates_list.setUniformItemSizes(False)
         self.templates_list.setMinimumHeight(380)
         self.templates_list.currentItemChanged.connect(self._select)
+        self.templates_list.viewport().installEventFilter(self)
         ll.addWidget(self.templates_list, 1)
         self.empty_label = QLabel("Пока нет ответов.\nСоздайте шаблон или импортируйте DOCX.")
         self.empty_label.setObjectName("TinyMuted")
@@ -103,7 +116,7 @@ class SupportTemplatesPage(QWidget):
         columns.addWidget(left)
 
         right = Card()
-        right.setMinimumWidth(440)
+        right.setMinimumWidth(400)
         right.setObjectName("TemplateEditorPanel")
         rl = QVBoxLayout(right)
         rl.setContentsMargins(22, 18, 22, 18)
@@ -118,9 +131,13 @@ class SupportTemplatesPage(QWidget):
         self.star.setProperty("role", "soft")
         self.star.clicked.connect(self._toggle_favorite)
         title_row.addWidget(self.star)
-        self.copy_btn = QPushButton("Копировать текст")
+        self.edit_btn = QPushButton("Редактировать")
+        self.edit_btn.setProperty("role", "soft")
+        self.edit_btn.clicked.connect(lambda: self._set_editing(True))
+        title_row.addWidget(self.edit_btn)
+        self.copy_btn = QPushButton("Копировать ответ")
         self.copy_btn.setProperty("role", "primary")
-        self.copy_btn.setToolTip("Скопировать весь текст ответа в буфер обмена")
+        self.copy_btn.setToolTip("Копировать текст и прикреплённые изображения для форматированного редактора")
         self.copy_btn.clicked.connect(self._copy)
         title_row.addWidget(self.copy_btn)
         rl.addLayout(title_row)
@@ -156,7 +173,7 @@ class SupportTemplatesPage(QWidget):
         body_title.setObjectName("CardTitle")
         body_row.addWidget(body_title)
         body_row.addStretch(1)
-        hint = QLabel("Обычный текст")
+        hint = QLabel("Текст и изображения копируются вместе")
         hint.setObjectName("TinyMuted")
         body_row.addWidget(hint)
         rl.addLayout(body_row)
@@ -164,7 +181,7 @@ class SupportTemplatesPage(QWidget):
         self.body_input.setObjectName("TemplateBodyInput")
         self.body_input.setPlaceholderText("Выберите шаблон слева или создайте новый ответ…")
         self.body_input.setAcceptRichText(False)
-        self.body_input.setMinimumHeight(305)
+        self.body_input.setMinimumHeight(260)
         rl.addWidget(self.body_input, 1)
 
         attachment_header = QHBoxLayout()
@@ -173,33 +190,45 @@ class SupportTemplatesPage(QWidget):
         self.attachment_count.setObjectName("CardTitle")
         attachment_header.addWidget(self.attachment_count)
         attachment_header.addStretch(1)
-        self.add_image_btn = QPushButton("＋ Добавить изображение")
+        self.add_image_btn = QPushButton("＋ Добавить фото")
         self.add_image_btn.setProperty("role", "soft")
-        self.add_image_btn.setEnabled(False)
         self.add_image_btn.clicked.connect(self._add_image)
         attachment_header.addWidget(self.add_image_btn)
+        self.paste_image_btn = QPushButton("Вставить из буфера")
+        self.paste_image_btn.setProperty("role", "soft")
+        self.paste_image_btn.clicked.connect(self._paste_image)
+        attachment_header.addWidget(self.paste_image_btn)
         rl.addLayout(attachment_header)
 
         self.image_area = QWidget()
         image_layout = QVBoxLayout(self.image_area)
         image_layout.setContentsMargins(0, 0, 0, 0)
-        image_layout.setSpacing(6)
-        image_row = QHBoxLayout()
+        image_layout.setSpacing(7)
         self.images_list = QListWidget()
-        self.images_list.setMaximumHeight(100)
         self.images_list.setObjectName("TemplateImagesList")
+        self.images_list.setViewMode(QListView.ViewMode.IconMode)
+        self.images_list.setResizeMode(QListView.ResizeMode.Adjust)
+        self.images_list.setMovement(QListView.Movement.Static)
+        self.images_list.setWrapping(True)
+        self.images_list.setIconSize(QSize(112, 78))
+        self.images_list.setGridSize(QSize(140, 108))
+        self.images_list.setSpacing(5)
+        self.images_list.setMaximumHeight(122)
+        self.images_list.setMinimumHeight(115)
+        self.images_list.setWordWrap(False)
+        self.images_list.setToolTip("Двойной щелчок открывает крупный просмотр")
         self.images_list.currentItemChanged.connect(self._preview_image)
-        image_row.addWidget(self.images_list, 1)
-        remove_image = QPushButton("Удалить вложение")
-        remove_image.clicked.connect(self._remove_image)
-        image_row.addWidget(remove_image)
-        image_layout.addLayout(image_row)
-        self.image_preview = QLabel()
-        self.image_preview.setObjectName("TinyMuted")
-        self.image_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.image_preview.setMaximumHeight(125)
-        self.image_preview.setMinimumHeight(0)
-        image_layout.addWidget(self.image_preview)
+        self.images_list.itemDoubleClicked.connect(self._open_image_preview)
+        image_layout.addWidget(self.images_list)
+        image_footer = QHBoxLayout()
+        self.image_help = QLabel("Изображения добавятся к ответу при сохранении")
+        self.image_help.setObjectName("TinyMuted")
+        image_footer.addWidget(self.image_help, 1)
+        self.remove_image_btn = QPushButton("Убрать выбранное")
+        self.remove_image_btn.setProperty("role", "ghost")
+        self.remove_image_btn.clicked.connect(self._remove_image)
+        image_footer.addWidget(self.remove_image_btn)
+        image_layout.addLayout(image_footer)
         rl.addWidget(self.image_area)
         self.image_area.hide()
 
@@ -220,9 +249,10 @@ class SupportTemplatesPage(QWidget):
         rl.addWidget(self.notice)
         columns.addWidget(right)
 
-        columns.setStretchFactor(0, 35)
-        columns.setStretchFactor(1, 65)
+        columns.setStretchFactor(0, 40)
+        columns.setStretchFactor(1, 60)
         root.addWidget(columns, 1)
+        self._set_editing(False)
 
     def _categories(self):
         existing = self.category_filter.currentData()
