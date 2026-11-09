@@ -110,9 +110,10 @@ class VPNServersPage(QWidget):
         metrics.setSpacing(10)
         self.m_available = MetricCard("Доступно", "—")
         self.m_active = MetricCard("Активные L2TP", "—")
+        self.m_online_ports = MetricCard("Порты активных учёток", "—")
         self.m_installed = MetricCard("LV установлено", "—")
         self.m_quarantine = MetricCard("Карантин / архив", "—")
-        for item in (self.m_available, self.m_active, self.m_installed, self.m_quarantine):
+        for item in (self.m_available, self.m_active, self.m_online_ports, self.m_installed, self.m_quarantine):
             metrics.addWidget(item, 1)
         root.addLayout(metrics)
 
@@ -211,7 +212,7 @@ class VPNServersPage(QWidget):
 
         self.table = ServerTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels([
-            "VPN-сервер", "Страна", "Активные L2TP", "Учётки", "CPU", "RAM", "NAT", "LV-автоматика"
+            "VPN-сервер", "Страна", "Активные L2TP", "Учётки", "CPU", "RAM", "Порты онлайн / всего", "LV-автоматика"
         ])
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -332,6 +333,7 @@ class VPNServersPage(QWidget):
         self._automation_by_host.clear()
         self._stats_by_host.clear()
         active_total = 0
+        online_ports_total = 0
         ok_count = 0
         quarantine_total = 0
         installed = 0
@@ -343,6 +345,7 @@ class VPNServersPage(QWidget):
             else:
                 active = int(stat.clients_online)
                 active_total += active
+                online_ports_total += int(stat.ports_active)
                 ok_count += 1
                 if isinstance(auto, AutomationStatus):
                     self._automation_by_host[host] = auto
@@ -357,7 +360,7 @@ class VPNServersPage(QWidget):
                     host, country, f"{active} / {VPN_L2TP_HARD_LIMIT}", str(stat.clients_total),
                     "—" if stat.cpu_load is None else f"{stat.cpu_load}%",
                     "—" if stat.memory_usage_percent is None else f"{stat.memory_usage_percent}%",
-                    str(stat.ports_total), auto_text,
+                    f"{stat.ports_active} / {stat.ports_total}", auto_text,
                 ]
             for c, value in enumerate(values):
                 item = QTableWidgetItem(value)
@@ -366,10 +369,16 @@ class VPNServersPage(QWidget):
                     item.setTextAlignment(int(Qt.AlignmentFlag.AlignCenter))
                 if error and c == 0:
                     item.setToolTip(error)
+                if c == 6:
+                    item.setToolTip(
+                        "Онлайн: включённые TCP-порты с однозначной связью с активной L2TP-учёткой. "
+                        "Это НЕ проверка камеры или доступности TCP/RTSP."
+                    )
                 self.table.setItem(r, c, item)
 
         self.m_available.setValue(f"{ok_count} / {len(rows)}")
         self.m_active.setValue(str(active_total))
+        self.m_online_ports.setValue(str(online_ports_total))
         self.m_installed.setValue(f"{installed} / {ok_count}")
         self.m_quarantine.setValue(str(quarantine_total))
         self.summary.setText(f"Обновлено серверов: {ok_count}/{len(rows)}")
@@ -435,6 +444,15 @@ class VPNServersPage(QWidget):
             top.addWidget(StatusPill(state, kind))
         top.addWidget(StatusPill(auto.state_text if auto else "LV: нет данных", "success" if auto and auto.installed and not auto.paused else "neutral"))
         self.detail_layout.addLayout(top)
+        if stat is not None:
+            online_note = QLabel(
+                f"Порты учёток с активным VPN: {stat.ports_active} из {stat.ports_total}. "
+                "Оценивается по текущим L2TP-сессиям и включённым правилам. "
+                "Наличие связи с камерой не проверяется."
+            )
+            online_note.setObjectName("TinyMuted")
+            online_note.setWordWrap(True)
+            self.detail_layout.addWidget(online_note)
 
         counts = QHBoxLayout()
         counts.setSpacing(8)
