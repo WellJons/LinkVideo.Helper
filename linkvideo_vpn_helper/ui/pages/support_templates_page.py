@@ -561,6 +561,12 @@ class SupportTemplatesPage(QWidget):
         if not text and not paths:
             self.notice.setText("Нет текста или изображений для копирования.")
             return
+        if not paths:
+            # Preserve Qt's native text-only clipboard path. It avoids
+            # retaining a Python-owned QMimeData at QApplication shutdown.
+            QApplication.clipboard().setText(text)
+            self.notice.setText("✓ Текст скопирован в буфер обмена.")
+            return
         mime, count, failed = build_reply_mime(text, paths)
         QApplication.clipboard().setMimeData(mime)
         if failed:
