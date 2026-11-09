@@ -563,7 +563,9 @@ def _download_with_ffmpeg_audio(self, discovery, output: Path, progress=None, ca
                         if fresh and fresh.get("url"):
                             url = str(fresh["url"])
                     except Exception:
-                        pass
+                        # Keep the original signed URL as a bounded fallback;
+                        # never expose it in diagnostics or event logs.
+                        url = str(discovery.hls_fallback_url)
                 return _ffmpeg_transport_args(self, ffmpeg, url, staged_output)
 
             success, detail = _ffmpeg_hls_attempts(
@@ -660,7 +662,7 @@ def _download_no_audio(self, discovery, output: Path, progress=None, cancel_even
                         if fresh and fresh.get("url"):
                             url = str(fresh["url"])
                     except Exception:
-                        pass
+                        url = str(discovery.hls_fallback_url)
                 return _ffmpeg_transport_args(
                     self, ffmpeg, url, staged_output, no_audio=True)
 
