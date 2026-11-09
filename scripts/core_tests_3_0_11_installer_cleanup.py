@@ -36,8 +36,8 @@ def main() -> None:
         '"LinkVideo VPN Helper.exe"',
         '"Uninstall.exe"',
         'dest + ".rollback"',
-        'os.Rename(dest, backup)',
-        'os.Rename(staging, dest)',
+        'renameRuntimeWithRetry(dest, backup)',
+        'renameRuntimeWithRetry(staging, dest)',
     ):
         assert required in transaction, f"installer transaction missing {required}"
 
