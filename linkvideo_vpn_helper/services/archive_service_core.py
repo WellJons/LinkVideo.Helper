@@ -907,12 +907,35 @@ class ArchiveService:
         return len(durations), sum(durations)
 
     @staticmethod
-    def _first_nested_playlist(raw: str, base_url: str) -> str:
-        for line in str(raw or "").splitlines():
-            value = line.strip()
-            if value and not value.startswith("#") and ".m3u8" in value.lower():
-                return urllib.parse.urljoin(base_url, value)
-        return ""
+    def _nested_playlist_urls(raw: str, base_url: str) -> list[str]:
+        """Resolve HLS variants even when URIs have no .m3u8 suffix.
+
+        A master playlist has #EXT-X-STREAM-INF followed by a URI; a media
+        playlist has #EXTINF followed by a segment URI. Never mistake segments
+        for nested playlists.
+        """
+        urls: list[str] = []
+        expect_variant = False
+        is_media = "#EXTINF:" in str(raw or "").upper()
+        for source_line in str(raw or "").splitlines():
+            value = source_line.strip()
+            upper = value.upper()
+            if upper.startswith("#EXT-X-STREAM-INF:"):
+                expect_variant = True
+                continue
+            if not value or value.startswith("#"):
+                continue
+            if expect_variant or (not is_media and ".m3u8" in value.lower()):
+                resolved = urllib.parse.urljoin(base_url, value)
+                if resolved not in urls and urllib.parse.urlsplit(resolved).scheme in ("https", "http"):
+                    urls.append(resolved)
+            expect_variant = False
+        return urls[:4]
+
+    @classmethod
+    def _first_nested_playlist(cls, raw: str, base_url: str) -> str:
+        urls = cls._nested_playlist_urls(raw, base_url)
+        return urls[0] if urls else ""
 
     @staticmethod
     def _parse_playlist_datetime(value: str) -> float | None:
@@ -935,6 +958,7 @@ class ArchiveService:
         segments: list[dict] = []
         pending_duration: float | None = None
         pending_program_time: float | None = None
+        pending_gap = False
         cursor = float(assumed_start)
         base_host = (urllib.parse.urlparse(playlist_url).hostname or "").lower()
         for raw_line in str(raw or "").splitlines():
@@ -951,6 +975,9 @@ class ArchiveService:
             if line.upper().startswith("#EXT-X-PROGRAM-DATE-TIME:"):
                 pending_program_time = cls._parse_playlist_datetime(line.split(":", 1)[1])
                 continue
+            if line.upper().startswith("#EXT-X-GAP"):
+                pending_gap = True
+                continue
             if line.startswith("#"):
                 continue
             # master playlist URI — это не медиасегмент
@@ -962,10 +989,13 @@ class ArchiveService:
             host = (urllib.parse.urlparse(url).hostname or base_host or "").lower()
             start = float(pending_program_time if pending_program_time is not None else cursor)
             end = start + max(0.0, float(pending_duration or 0.0))
-            segments.append({"url": url, "host": host, "start": start, "end": end, "duration": max(0.0, end-start)})
-            cursor = end
+            if not pending_gap and end > start:
+                segments.append({"url": url, "host": host, "start": start, "end": end,
+                                 "duration": max(0.0, end-start)})
+            cursor = end  # Gaps still advance the timeline.
             pending_program_time = None
             pending_duration = None
+            pending_gap = False
         return segments
 
     @staticmethod
@@ -996,22 +1026,41 @@ class ArchiveService:
             master_url = self.playlist_url(fake)
             try:
                 master = self._http_hls_text(master_url, timeout)
-                selected_raw = master
-                selected_url = master_url
-                method = "player playlist"
-                nested_url = self._first_nested_playlist(master, master_url)
-                if nested_url:
-                    nested = self._http_hls_text(nested_url, timeout)
-                    m_count, m_total = self._parse_hls_duration(master)
-                    n_count, n_total = self._parse_hls_duration(nested)
-                    if n_count >= m_count and n_total >= m_total:
-                        selected_raw = nested
-                        selected_url = nested_url
-                        method = "player playlist → chunks"
-                segments = self._parse_hls_segments(selected_raw, selected_url, start_ts)
-                if not segments:
-                    errors.append(f"{clean}: player playlist пуст для {app}/{stream}")
+                candidates = [(master_url, master, "player playlist")]
+                # A master can expose several alternatives. Choose the media
+                # playlist with the greatest verified overlap instead of
+                # assuming the first nested playlist is always correct.
+                for nested_url in self._nested_playlist_urls(master, master_url):
+                    try:
+                        nested = self._http_hls_text(nested_url, timeout)
+                        candidates.append((nested_url, nested, "player playlist → chunks"))
+                    except Exception as nested_error:
+                        errors.append(f"{clean}: вложенный HLS недоступен: "
+                                      f"{type(nested_error).__name__}")
+                selection = None
+                for candidate_url, candidate_raw, candidate_method in candidates:
+                    parsed = self._parse_hls_segments(candidate_raw, candidate_url, start_ts)
+                    # Respect absolute PROGRAM-DATE-TIME, exclude segments
+                    # outside the requested range, and clip edge segments.
+                    overlaps: list[dict] = []
+                    for seg in parsed:
+                        overlap_start = max(start_ts, float(seg["start"]))
+                        overlap_end = min(end_ts, float(seg["end"]))
+                        if overlap_end <= overlap_start:
+                            continue
+                        overlaps.append({
+                            **seg, "start": overlap_start, "end": overlap_end,
+                            "duration": overlap_end - overlap_start,
+                        })
+                    duration = sum(segment["duration"] for segment in overlaps)
+                    if overlaps and (selection is None or
+                                     duration > selection[0] + 0.01):
+                        selection = (duration, candidate_url, candidate_method, overlaps)
+                if selection is None:
+                    errors.append(f"{clean}: нет HLS-сегментов за выбранный период "
+                                  f"для {app}/{stream}")
                     continue
+                _, selected_url, method, segments = selection
                 slices = self._slices_from_hls_segments(segments, app, stream, camera.signature, "player")
                 hosts_count: dict[str, int] = {}
                 for seg in segments:
@@ -1020,7 +1069,17 @@ class ArchiveService:
                         hosts_count[h] = hosts_count.get(h, 0) + 1
                 hosts = [h for h, _count in sorted(hosts_count.items(), key=lambda item: (-item[1], item[0]))]
                 dominant = hosts[0] if hosts else clean
-                total = sum(float(seg.get("duration") or 0.0) for seg in segments)
+                # Overlap of segments (not their raw EXTINF sum) is the
+                # truthful available duration. Repeated/overlapping segments
+                # must not inflate the coverage to more than requested.
+                ordered = sorted(segments, key=lambda seg: (seg["start"], seg["end"]))
+                covered = 0.0
+                covered_until = start_ts
+                for seg in ordered:
+                    covered += max(0.0, float(seg["end"]) -
+                                   max(covered_until, float(seg["start"])))
+                    covered_until = max(covered_until, float(seg["end"]))
+                total = min(float(end_ts - start_ts), covered)
                 return {
                     "host": dominant,
                     "hosts": hosts,
