@@ -499,11 +499,21 @@ class ArchiveDiagnosticsPage(QWidget):
                 # Возвращаем её, но коротким DVR timeline-запросом без глубокого
                 # перебора для каждой чужой камеры.
                 self.statusReady.emit("Проверяю массовость", f"Ищу другие камеры на {main.camera.server}…")
-                server_candidates, server_debug = self.service.b2o.cameras_on_server(
-                    operator,
-                    main.camera.server,
-                    int(self.settings.value("archive_diag/compare_limit", self.DEFAULT_SERVER_COMPARE, int) or self.DEFAULT_SERVER_COMPARE),
-                )
+                # A failure in the optional comparison API must not discard
+                # the valid main camera timeline. Report limited confidence
+                # instead of showing "Диагностика не выполнена".
+                try:
+                    server_candidates, server_debug = self.service.b2o.cameras_on_server(
+                        operator,
+                        main.camera.server,
+                        int(self.settings.value("archive_diag/compare_limit", self.DEFAULT_SERVER_COMPARE, int) or self.DEFAULT_SERVER_COMPARE),
+                    )
+                except Exception as exc:
+                    server_candidates = []
+                    server_debug = {
+                        "found_total": 0, "online_same_server": 0, "pages": 0,
+                        "errors": [f"Не удалось получить сравнение vcore: {exc}"],
+                    }
                 main_num = str(main.camera.camera_id)
                 address_nums = set()
                 for raw in address_ids:
