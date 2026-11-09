@@ -120,7 +120,15 @@ FakeRouterOSAPIClient.actives = FakeRouterOSAPIClient._copy(FakeRouterOSAPIClien
 policy.RouterOSAPIClient = FakeRouterOSAPIClient
 
 creds = SessionCredentials("test", "test")
-result = policy.apply_policy_now("vpn-test", creds)
+staged = policy.apply_policy_now("vpn-test", creds)
+assert staged["deleted"] == 0 and staged["staged"] == 2, staged
+assert {"delete370", "never31"}.issubset({row["name"] for row in FakeRouterOSAPIClient.secrets})
+assert any(row.get("to-addresses") == "10.0.0.20" for row in FakeRouterOSAPIClient.nat_rules)
+
+# Only clients with a confirmed Sheets snapshot may be physically removed.
+result = policy.apply_policy_now(
+    "vpn-test", creds, backed_up_logins={"delete370", "never31"},
+)
 
 by_name = {row["name"]: row for row in FakeRouterOSAPIClient.secrets}
 assert "delete370" not in by_name
