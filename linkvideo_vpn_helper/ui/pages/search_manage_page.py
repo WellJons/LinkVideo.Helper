@@ -1276,12 +1276,47 @@ class SearchManagePage(QWidget):
         port_head.addStretch(1)
         port_head.addWidget(self.selected_port_pill)
         pl.addLayout(port_head)
+        # Match B2O in a compact row ABOVE the port list. Camera IDs are
+        # displayed INSIDE their ports, never in a separate bottom card.
+        camera_lookup = QHBoxLayout()
+        camera_lookup.setSpacing(6)
+        self.camera_b2o_login = QLineEdit()
+        self.camera_b2o_login.setObjectName("VPNB2OAccountLogin")
+        self.camera_b2o_login.setText(
+            self._camera_lookup_draft or self._camera_lookup_override or account_login(c.login))
+        self.camera_b2o_login.setPlaceholderText("Логин B2O")
+        self.camera_b2o_login.setToolTip(
+            "Проверяется основной логин; при другой учётке B2O укажите нужный логин.")
+        self.camera_b2o_login.setMinimumHeight(34)
+        self.camera_b2o_login.textEdited.connect(
+            lambda text: setattr(self, "_camera_lookup_draft", text))
+        self.camera_b2o_button = QPushButton("Сверить B2O")
+        self.camera_b2o_button.setProperty("role", "soft")
+        self.camera_b2o_button.clicked.connect(
+            lambda: self._start_camera_port_check(
+                self.camera_b2o_login.text().strip(), force=True))
+        camera_lookup.addWidget(self.camera_b2o_login, 1)
+        camera_lookup.addWidget(self.camera_b2o_button)
+        pl.addLayout(camera_lookup)
+        camera_status = QLabel(self._camera_match_message)
+        camera_status.setObjectName("TinyMuted")
+        camera_status.setWordWrap(True)
+        camera_status.setToolTip(
+            "ID показывается только при совпадении номера порта и "
+            "подтверждённой принадлежности камеры учётке B2O.")
+        pl.addWidget(camera_status)
         self.port_list = QListWidget()
         self.port_list.setObjectName("PortList")
         self.port_list.setProperty("lvWheelBoundaryLock", True)
         self.port_list.setMinimumHeight(118)
-        self.port_list.setMaximumHeight(275)
-        self.port_list.setFixedHeight(min(272, max(118, len(c.ports) * 60 + 16)))
+        self.port_list.setMaximumHeight(310)
+        verified_ports = {
+            row.port for row in self._camera_match_result.links
+        } if self._camera_match_result is not None and self._camera_match_key and (
+            self._camera_match_key[:3] == (c.server, c.login, tuple(sorted(c.ports)))
+        ) else set()
+        self.port_list.setFixedHeight(
+            min(310, max(118, len(c.ports) * 60 + len(verified_ports) * 24 + 16)))
         self.port_list.setWordWrap(True)
         self.port_list.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.port_list.setSpacing(4)
@@ -1316,7 +1351,7 @@ class SearchManagePage(QWidget):
                     connections = c.port_connections.get(current_port)
                     details = [status]
                     if byte_value is not None:
-                        details.append(f"NAT: {self._fmt_bytes(byte_value)}")
+                        details.append(f"Трафик порта: {self._fmt_bytes(byte_value)}")
                     if connections is not None:
                         details.append(f"Пакеты/соединения: {connections}")
                     if current_port in self._recent_new_ports:
@@ -1328,16 +1363,26 @@ class SearchManagePage(QWidget):
                             and self._camera_match_key[:3] ==
                                 (c.server, c.login, tuple(sorted(c.ports)))
                             else None)
-                if matching:
-                    for link in matching.links:
-                        if link.port == int(port):
-                            item.setText(item.text() + "\nB2O: " + link.label + " · ID " + link.camera_id)
-                            item.setToolTip("Камера подтверждена по аккаунту B2O и внешнему порту")
-                            item.setSizeHint(QSize(0, 76))
-                            break
-                    else:
-                        item.setSizeHint(QSize(0, 57))
+                camera_link = next(
+                    (link for link in matching.links if link.port == int(port)),
+                    None,
+                ) if matching is not None and not conflict_rows else None
+                if camera_link is not None:
+                    original_lines = item.text().split("\n", 1)
+                    # Camera ID belongs ABOVE the traffic line, directly in
+                    # the selected port card, not below the port list.
+                    item.setText(
+                        original_lines[0] + "\nID камеры B2O: " + camera_link.camera_id +
+                        ("\n" + original_lines[1] if len(original_lines) > 1 else "")
+                    )
+                    item.setToolTip(
+                        "Камера: " + camera_link.label + " · ID " + camera_link.camera_id +
+                        " · Проверено по B2O RTSP-порту и логину аккаунта"
+                    )
+                    item.setSizeHint(QSize(0, 82))
                 else:
+                    if matching is not None and int(port) in matching.ambiguous:
+                        item.setToolTip("Несколько камер B2O используют этот порт — ID не подтверждён.")
                     item.setSizeHint(QSize(0, 57))
                 self.port_list.addItem(item)
             desired = self._selected_port if self._selected_port in c.ports else c.ports[0]
@@ -1352,59 +1397,6 @@ class SearchManagePage(QWidget):
             self.port_list.addItem(item)
         pl.addWidget(self.port_list, 1)
         self.info_content.addWidget(ports)
-        camera_card = Card()
-        camera_l = QVBoxLayout(camera_card)
-        camera_l.setContentsMargins(12, 12, 12, 12)
-        camera_l.setSpacing(8)
-        title = QLabel("Камеры B2O по портам")
-        title.setObjectName("SectionTitle")
-        camera_l.addWidget(title)
-        explanatory = QLabel(
-            "Проверяется основной логин без суффиксов _1, _3 и т. д. "
-            "Если камеры принадлежат другому аккаунту, укажите его логин."
-        )
-        explanatory.setObjectName("TinyMuted")
-        explanatory.setWordWrap(True)
-        camera_l.addWidget(explanatory)
-        lookup_row = QHBoxLayout()
-        self.camera_b2o_login = QLineEdit()
-        self.camera_b2o_login.setObjectName("VPNB2OAccountLogin")
-        self.camera_b2o_login.setText(
-            self._camera_lookup_draft or self._camera_lookup_override or account_login(c.login))
-        self.camera_b2o_login.textEdited.connect(
-            lambda text: setattr(self, "_camera_lookup_draft", text))
-        self.camera_b2o_login.setPlaceholderText("Логин аккаунта B2O")
-        self.camera_b2o_button = QPushButton("Сверить")
-        self.camera_b2o_button.setProperty("role", "soft")
-        self.camera_b2o_button.clicked.connect(
-            lambda: self._start_camera_port_check(
-                self.camera_b2o_login.text().strip(), force=True))
-        lookup_row.addWidget(self.camera_b2o_login, 1)
-        lookup_row.addWidget(self.camera_b2o_button)
-        camera_l.addLayout(lookup_row)
-        status = QLabel(self._camera_match_message)
-        status.setObjectName("TinyMuted")
-        status.setWordWrap(True)
-        camera_l.addWidget(status)
-        report = self._camera_match_result
-        if (report is not None and self._camera_match_key
-                and self._camera_match_key[:3] ==
-                    (c.server, c.login, tuple(sorted(c.ports)))):
-            for link in report.links:
-                row = QLabel(f"Порт {link.port}: {link.label} · камера ID {link.camera_id}")
-                row.setObjectName("Value")
-                row.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-                row.setWordWrap(True)
-                camera_l.addWidget(row)
-            if report.ambiguous:
-                warning = QLabel(
-                    "⚠ Один порт указан у нескольких камер B2O: "
-                    + ", ".join(map(str, report.ambiguous)) + ". Связь не подтверждена."
-                )
-                warning.setObjectName("WarningText")
-                warning.setWordWrap(True)
-                camera_l.addWidget(warning)
-        self.info_content.addWidget(camera_card)
         self.info_content.addStretch(1)
 
         control = QWidget()
@@ -1775,18 +1767,19 @@ class SearchManagePage(QWidget):
             self._camera_match_message = error
         elif report is not None:
             self._camera_match_message = (
-                f"Проверено камер: {report.checked_cameras}. "
-                f"Найдено точных совпадений портов: {len(report.links)}."
+                f"B2O: {report.checked_cameras} камер · "
+                f"RTSP-ссылок с портом: {report.stream_cameras} · "
+                f"совпадений: {len(report.links)}."
             )
             if report.incomplete:
                 self._camera_match_message += (
-                    " Проверка неполная: часть камер недоступна, "
-                    "автоматических предположений не делаем."
+                    f" Неполный ответ B2O ({report.stream_errors} ошибок), "
+                    "ID не подтверждены."
                 )
+            elif report.ambiguous:
+                self._camera_match_message += " Есть неоднозначные порты."
             elif not report.links:
-                self._camera_match_message += (
-                    " Совпадающий внешний порт в данных B2O не найден."
-                )
+                self._camera_match_message += " Совпадающих портов не найдено."
         self._render_client()
 
     def _copy_new_ports(self, value: str, button: QPushButton):
