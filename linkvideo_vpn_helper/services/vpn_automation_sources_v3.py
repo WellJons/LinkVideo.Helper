@@ -68,7 +68,7 @@ META_READ = r'''
                 :if ([:typeof $n] = "num") do={
                     :if ($n > 0) do={
                         :if ($legacyNs) do={
-                            :set lastDay ($n / $dayNs)
+                            :set lastDay [:tonum ($n / $dayNs)]
                         } else={
                             :set lastDay $n
                         }
@@ -96,7 +96,7 @@ def activity_script_source_v3(version: str) -> str:
     return (
         f"# LinkVideo.Helper LV Automation {version}\n"
         + r''':local dayNs 86400000000000
-:local nowDay ([:tonsec [:timestamp]] / $dayNs)
+:local nowDay [:tonum ([:tonsec [:timestamp]] / $dayNs)]
 :foreach activeId in=[/ppp active find where service="l2tp"] do={
     :local login [/ppp active get $activeId name]
     :foreach sid in=[/ppp secret find where name=$login] do={
@@ -124,7 +124,7 @@ def aging_script_source_v3(version: str, sleep_days: int, quarantine_days: int, 
         + f":local quarantineDays {quarantine_days}\n"
         + f":local archiveDays {archive_days}\n"
         + r''':local dayNs 86400000000000
-:local nowDay ([:tonsec [:timestamp]] / $dayNs)
+:local nowDay [:tonum ([:tonsec [:timestamp]] / $dayNs)]
 :foreach sid in=[/ppp secret find] do={
     :local login [/ppp secret get $sid name]
     :local c [/ppp secret get $sid comment]
@@ -172,7 +172,7 @@ def restore_script_source_v3(version: str) -> str:
     return (
         f"# LinkVideo.Helper LV Automation {version}\n"
         + r''':local dayNs 86400000000000
-:local nowDay ([:tonsec [:timestamp]] / $dayNs)
+:local nowDay [:tonum ([:tonsec [:timestamp]] / $dayNs)]
 :local token "login failure for user "
 :foreach logId in=[/log find where buffer="LVAuth"] do={
     :local message [/log get $logId message]
