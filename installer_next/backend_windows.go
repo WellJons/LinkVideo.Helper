@@ -171,6 +171,15 @@ func runCleanup(name string, args ...string) {
     _ = runHiddenTimeout(6*time.Second, name, args...)
 }
 
+func removeLegacyHelperBotTask() {
+    // Old 3.0.16 test installations might retain a SYSTEM scheduled task.
+    // The bot is no longer distributed; stop the stale task before replacing
+    // the EXE so it cannot accidentally reopen the desktop GUI at startup.
+    const oldTask = "LinkVideo.Helper.TelegramBot"
+    runCleanup("schtasks.exe", "/End", "/TN", oldTask)
+    runCleanup("schtasks.exe", "/Delete", "/F", "/TN", oldTask)
+}
+
 func stopHelperProcesses() {
     for _, image := range []string{
         appExeName,
@@ -478,6 +487,7 @@ func installProduct(opts installOptions, progress progressFunc) (string, error) 
     // installer for the same Program Files directory. Full Setup supersedes
     // any staged differential patch. The task is never recreated.
     removeSilentUpdateTask()
+    removeLegacyHelperBotTask()
     stopHelperProcesses()
     if err := recoverInterruptedRuntimeUpgrade(dest); err != nil {
         return "", fmt.Errorf("не удалось восстановить прерванное обновление: %w", err)
@@ -558,6 +568,7 @@ func uninstallProduct(removeData bool, progress progressFunc) error {
     dest := defaultInstallDir()
     progress(8, "Остановка LinkVideo.Helper…")
     stopHelperProcesses()
+    removeLegacyHelperBotTask()
     progress(18, "Удаление фонового updater…")
     removeSilentUpdateTask()
 
