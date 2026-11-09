@@ -9,7 +9,7 @@ second row instead of squeezing every value into one horizontal line.
 
 from PySide6.QtCore import QRect, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFontMetrics, QGuiApplication, QIcon, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QAbstractItemView, QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget
 
 
 _INSTALLED = False
