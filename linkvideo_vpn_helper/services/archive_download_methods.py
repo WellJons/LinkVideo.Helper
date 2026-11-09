@@ -148,12 +148,20 @@ def ffmpeg_manual_args(ffmpeg: str, url: str, output: Path, template: str,
 
 
 def _ffmpeg_transport_args(self, ffmpeg: str, url: str, output: Path,
-                           *, no_audio: bool = False) -> list[str]:
+                           *, no_audio: bool = False,
+                           transcode_audio: bool = False) -> list[str]:
     manual = str(getattr(self, "_lv_archive_manual_command", "") or "").strip()
     if manual:
         return ffmpeg_manual_args(ffmpeg, url, output, manual)
     builder = ffmpeg_no_audio_args if no_audio else ffmpeg_audio_args
-    return builder(ffmpeg, url, output, headers=_PLAYER_HEADERS)
+    args = builder(ffmpeg, url, output, headers=_PLAYER_HEADERS)
+    if transcode_audio and not no_audio:
+        # Some DVR cameras use G.711/PCM or other audio that an MP4
+        # container cannot stream-copy. On retry preserve video copy and
+        # convert only audio to AAC instead of silently dropping sound.
+        index = args.index("-c")
+        args[index:index + 2] = ["-c:v", "copy", "-c:a", "aac", "-b:a", "128k"]
+    return args
 
 
 def _safe_hls_error(text: str) -> str:
@@ -571,7 +579,8 @@ def _download_with_ffmpeg_audio(self, discovery, output: Path, progress=None, ca
                         # Keep the original signed URL as a bounded fallback;
                         # never expose it in diagnostics or event logs.
                         url = str(discovery.hls_fallback_url)
-                return _ffmpeg_transport_args(self, ffmpeg, url, staged_output)
+                return _ffmpeg_transport_args(
+                    self, ffmpeg, url, staged_output, transcode_audio=bool(attempt))
 
             success, detail = _ffmpeg_hls_attempts(
                 command_for_attempt, staged_output,
@@ -608,7 +617,8 @@ def _download_with_ffmpeg_audio(self, discovery, output: Path, progress=None, ca
                         }
                     )
                 success, detail = _ffmpeg_hls_attempts(
-                    lambda _attempt: _ffmpeg_transport_args(self, ffmpeg, url, target),
+                    lambda attempt: _ffmpeg_transport_args(
+                        self, ffmpeg, url, target, transcode_audio=bool(attempt)),
                     target, base_done=completed, item_duration=sl.duration,
                     total=total, progress=progress, cancel_event=cancel_event,
                 )
