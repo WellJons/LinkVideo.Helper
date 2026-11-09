@@ -146,7 +146,10 @@ class ArchiveDiagnosisEngine:
         failed_address = sum(1 for _, d, err in address_compare if d is None or err is not None)
         failed_server = sum(1 for _, d, err in server_compare if d is None or err is not None)
 
-        if not main.gaps or main.coverage_percent >= 99.5:
+        # A high percentage is NOT proof that no gaps exist. For example,
+        # a 2-minute outage over 7 days still gives >99.98% coverage.
+        # Only the actual DVR gap list can establish a complete timeline.
+        if not main.gaps:
             return ArchiveDiagnosis(
                 side=DiagnosisSide.NONE,
                 confidence=DiagnosisConfidence.HIGH,
