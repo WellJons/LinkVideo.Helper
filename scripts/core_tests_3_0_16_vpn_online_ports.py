@@ -93,7 +93,8 @@ client_ui=(root/"linkvideo_vpn_helper/ui/pages/search_manage_page.py").read_text
 server_ui=(root/"linkvideo_vpn_helper/ui/pages/vpn_servers_page.py").read_text(encoding="utf-8")
 assert '("IP источника туннеля", c.tunnel_source_ip' in client_ui
 assert "password_view.setEchoMode(QLineEdit.EchoMode.Password)" not in client_ui
-assert 'password_view.setEchoMode(QLineEdit.EchoMode.Normal)' in client_ui
+assert 'password_value = QLabel(c.password)' in client_ui
+assert 'password_view = QLineEdit(c.password)' not in client_ui
 assert '"Порты онлайн / всего"' in server_ui
 assert "self.m_online_ports.setValue(str(online_ports_total))" in server_ui
 print("CORE TESTS 3.0.16 DESKTOP VPN ONLINE PORTS / CALLER-IP OK")
