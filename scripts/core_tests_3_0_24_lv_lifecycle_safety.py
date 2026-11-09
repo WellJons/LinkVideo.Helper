@@ -170,7 +170,7 @@ with TemporaryDirectory() as temp:
 
 ui = (Path(__file__).resolve().parents[1] /
       "linkvideo_vpn_helper/ui/vpn_servers_status_ui.py").read_text(encoding="utf-8")
-assert "LV-Aging не удаляет PPP-учётки автоматически" in ui
-assert "удаляются PPP Secret" not in ui
+assert "Непосредственно на RouterOS LV-Aging только помечает" in ui
+assert "Полное удаление выполняется после успешного копирования в Google Sheets" in ui
 
 print("CORE TESTS 3.0.24 LV2.1 COMPACT COMMENT, MIGRATION AND SAFE QUARANTINE OK")
