@@ -10,7 +10,7 @@ planning and re-check the selected addresses before creating PPP profiles.
 import ipaddress
 from typing import Iterable, Mapping
 
-DEFAULT_START_IP = "172.16.1.176"
+DEFAULT_START_IP = "172.16.0.1"
 
 
 def validate_start_ip(value: str) -> str:
