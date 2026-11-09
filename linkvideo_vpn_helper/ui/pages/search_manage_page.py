@@ -1276,28 +1276,7 @@ class SearchManagePage(QWidget):
         port_head.addStretch(1)
         port_head.addWidget(self.selected_port_pill)
         pl.addLayout(port_head)
-        # Match B2O in a compact row ABOVE the port list. Camera IDs are
-        # displayed INSIDE their ports, never in a separate bottom card.
-        camera_lookup = QHBoxLayout()
-        camera_lookup.setSpacing(6)
-        self.camera_b2o_login = QLineEdit()
-        self.camera_b2o_login.setObjectName("VPNB2OAccountLogin")
-        self.camera_b2o_login.setText(
-            self._camera_lookup_draft or self._camera_lookup_override or account_login(c.login))
-        self.camera_b2o_login.setPlaceholderText("Логин B2O")
-        self.camera_b2o_login.setToolTip(
-            "Проверяется основной логин; при другой учётке B2O укажите нужный логин.")
-        self.camera_b2o_login.setMinimumHeight(34)
-        self.camera_b2o_login.textEdited.connect(
-            lambda text: setattr(self, "_camera_lookup_draft", text))
-        self.camera_b2o_button = QPushButton("Сверить B2O")
-        self.camera_b2o_button.setProperty("role", "soft")
-        self.camera_b2o_button.clicked.connect(
-            lambda: self._start_camera_port_check(
-                self.camera_b2o_login.text().strip(), force=True))
-        camera_lookup.addWidget(self.camera_b2o_login, 1)
-        camera_lookup.addWidget(self.camera_b2o_button)
-        pl.addLayout(camera_lookup)
+        # Связь с B2O проверяется автоматически при открытии карточки.
         camera_status = QLabel(self._camera_match_message)
         camera_status.setObjectName("TinyMuted")
         camera_status.setWordWrap(True)
