@@ -152,6 +152,43 @@ with TemporaryDirectory() as temp:
             '<w:p><w:r><w:t>Проверили архив.</w:t></w:r></w:p></w:body></w:document>')
     imported=store.import_docx(doc,"Видеоархив")
     assert store.get(imported).body=="Здравствуйте!\nПроверили архив."
+    # Headings and bold standalone titles must become independent templates.
+    structured = root / "multiple-replies.docx"
+    with ZipFile(structured, "w") as archive:
+        archive.writestr("word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:body>'
+            '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>'
+            '<w:r><w:t>Потери Wi-Fi</w:t></w:r></w:p>'
+            '<w:p><w:r><w:t>Проверьте качество сигнала.</w:t></w:r></w:p>'
+            '<w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr>'
+            '<w:r><w:t>Вопрос по архиву</w:t></w:r></w:p>'
+            '<w:p><w:r><w:t>Укажите время и камеру.</w:t></w:r></w:p>'
+            '</w:body></w:document>')
+    imported_ids = store.import_docx_many(structured, "Диагностика")
+    assert len(imported_ids) == 2
+    assert [store.get(k).title for k in imported_ids] == [
+        "Потери Wi-Fi", "Вопрос по архиву"]
+    assert [store.get(k).body for k in imported_ids] == [
+        "Проверьте качество сигнала.", "Укажите время и камеру."]
+
+    # An unstyled document with explicit blank-line blocks is also divided.
+    plain_blocks = root / "separated.docx"
+    with ZipFile(plain_blocks, "w") as archive:
+        archive.writestr("word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            '<w:body>'
+            '<w:p><w:r><w:t>Первый ответ</w:t></w:r></w:p>'
+            '<w:p><w:r><w:t>Текст первого ответа.</w:t></w:r></w:p>'
+            '<w:p/><w:p/>'
+            '<w:p><w:r><w:t>Второй ответ</w:t></w:r></w:p>'
+            '<w:p><w:r><w:t>Текст второго ответа.</w:t></w:r></w:p>'
+            '</w:body></w:document>')
+    separated_ids = store.import_docx_many(plain_blocks)
+    assert len(separated_ids) == 2, separated_ids
+    assert store.get(separated_ids[0]).title == "Первый ответ"
+    assert store.get(separated_ids[1]).body == "Текст второго ответа."
+
     # Data must still be present when the page/store reopens.
     reopened=TemplateStore(root)
     assert reopened.get(ident).favorite
