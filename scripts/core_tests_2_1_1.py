@@ -45,7 +45,7 @@ aging = aging_script_source()
 restore = restore_script_source()
 assert 'service="l2tp"' in activity
 assert '($state != "M")' in aging
-assert '($last > 0)' in aging
+assert '($lastDay > 0)' in aging  # compact LV2 uses whole days
 assert 'disabled=yes' in aging
 assert '(($state = "Q") || ($state = "R"))' in restore
 assert 'disabled=no' in restore
