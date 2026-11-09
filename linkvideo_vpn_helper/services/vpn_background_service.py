@@ -379,9 +379,9 @@ def run_worker() -> int:
     successes = 0
     try:
         _write_status(state="running", servers=len(payload["servers"]), successful=0, failed=0)
-    except Exception:
+    except Exception as exc:
         # Status is supplementary; do not skip the actual backup.
-        pass
+        print(f"Status write unavailable: {type(exc).__name__}", file=sys.stderr, flush=True)
     for server in payload["servers"]:
         try:
             result = service.sync_server(
@@ -400,8 +400,8 @@ def run_worker() -> int:
             state="ok" if not failures else "partial",
             servers=len(payload["servers"]), successful=successes, failed=failures,
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"Status write unavailable: {type(exc).__name__}", file=sys.stderr, flush=True)
     return 1 if failures else 0
 
 
