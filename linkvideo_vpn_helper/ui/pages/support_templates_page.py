@@ -279,6 +279,11 @@ class SupportTemplatesPage(QWidget):
         self.image_help = QLabel("Изображения добавятся к ответу при сохранении")
         self.image_help.setObjectName("TinyMuted")
         image_footer.addWidget(self.image_help, 1)
+        self.copy_image_btn = QPushButton("Копировать фото")
+        self.copy_image_btn.setObjectName("TemplateCopyImage")
+        self.copy_image_btn.setProperty("role", "soft")
+        self.copy_image_btn.clicked.connect(self._copy_selected_image)
+        image_footer.addWidget(self.copy_image_btn)
         self.remove_image_btn = QPushButton("Убрать выбранное")
         self.remove_image_btn.setProperty("role", "ghost")
         self.remove_image_btn.clicked.connect(self._remove_image)
@@ -474,6 +479,7 @@ class SupportTemplatesPage(QWidget):
         self.add_image_btn.setVisible(self._editing)
         self.paste_image_btn.setVisible(self._editing)
         self.remove_image_btn.setVisible(self._editing)
+        self.copy_image_btn.setVisible(not self._editing)
         self.remove_image_btn.setEnabled(self._editing and bool(self.images_list.count()))
         self.save_btn.setVisible(self._editing)
         self.edit_btn.setVisible(not self._editing and self._selected_id is not None)
@@ -586,8 +592,8 @@ class SupportTemplatesPage(QWidget):
                 + "; ".join(failed[:2]))
         elif count:
             self.notice.setText(
-                f"✓ Текст и {count} изображений скопированы. "
-                "Вставляйте в редактор с поддержкой форматирования.")
+                f"✓ Текст и {count} фото помещены в буфер. "
+                "Если мессенджер вставляет только текст, нажмите «Копировать фото».")
         else:
             self.notice.setText("✓ Текст скопирован в буфер обмена.")
 
@@ -636,10 +642,32 @@ class SupportTemplatesPage(QWidget):
                    else "Двойной щелчок для просмотра"))
             self.images_list.addItem(item)
         self.remove_image_btn.setEnabled(self._editing and bool(records))
+        self.copy_image_btn.setEnabled(bool(records))
 
     def _preview_image(self, item, *_):
         # Thumbnails are already visible. The selected one can be removed.
         self.remove_image_btn.setEnabled(self._editing and item is not None)
+        self.copy_image_btn.setEnabled(bool(self._visible_image_paths()))
+
+    def _copy_selected_image(self):
+        from PySide6.QtWidgets import QApplication
+        record = self.images_list.currentItem()
+        if record is not None:
+            _kind, _identifier, selected = record.data(Qt.ItemDataRole.UserRole)
+            path = Path(selected)
+        else:
+            paths = self._visible_image_paths()
+            if not paths:
+                self.notice.setText("Вложения отсутствуют.")
+                return
+            path = paths[0]
+        image = QPixmap(str(path))
+        if image.isNull():
+            self.notice.setText("Не удалось загрузить фотографию.")
+            return
+        QApplication.clipboard().setPixmap(image)
+        self.notice.setText(
+            "✓ Изображение скопировано. Можно вставить в Telegram или Битрикс.")
 
     def _open_image_preview(self, item):
         if item is None:
