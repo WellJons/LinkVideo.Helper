@@ -85,11 +85,8 @@ _ALLOWED_PASS_SITES = {
     ("linkvideo_vpn_helper/ui/camera_detail_dialog.py", "_safe_emit", "RuntimeError"): 1,
     # Privileged Telegram setup returns only a fixed sanitized error code;
     # never send raw exceptions because they can expose secret file paths.
-    ("linkvideo_vpn_helper/services/telegram_service_runtime.py", "administer_operation", "Exception"): 1,
     # Camera preview and FFmpeg bootstrap failures are non-fatal: camera
     # card still reports media probe status. Credentials aren't logged.
-    ("linkvideo_vpn_helper/services/telegram_bot_menu.py", "_show_camera", "(OSError, ValueError, TypeError)"): 1,
-    ("linkvideo_vpn_helper/services/telegram_bot_menu.py", "_show_camera", "(OSError, ValueError, RuntimeError)"): 1,
     ("linkvideo_vpn_helper/ui/main_window.py", "_go", "Exception"): 3,
     # Only OS launch failures are intentionally ignored after credentials were cleared.
     ("linkvideo_vpn_helper/ui/main_window.py", "_logout", "OSError"): 1,

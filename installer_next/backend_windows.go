@@ -171,23 +171,6 @@ func runCleanup(name string, args ...string) {
     _ = runHiddenTimeout(6*time.Second, name, args...)
 }
 
-const telegramBotTask = "LinkVideo.Helper.TelegramBot"
-
-func restartConfiguredTelegramBot() {
-    // The full installer stops the old Helper.exe (including the bot worker).
-    // Bring back a configured bot task without restarting the desktop app.
-    // Never create a task without the operator's explicit opt-in.
-    if err := runHiddenTimeout(6*time.Second, "schtasks.exe",
-        "/Query", "/TN", telegramBotTask); err == nil {
-        runCleanup("schtasks.exe", "/Run", "/TN", telegramBotTask)
-    }
-}
-
-func removeTelegramBotTask() {
-    runCleanup("schtasks.exe", "/End", "/TN", telegramBotTask)
-    runCleanup("schtasks.exe", "/Delete", "/F", "/TN", telegramBotTask)
-}
-
 func stopHelperProcesses() {
     for _, image := range []string{
         appExeName,
@@ -541,7 +524,6 @@ func installProduct(opts installOptions, progress progressFunc) (string, error) 
     // this installation. Do not recreate it: all future updates use the
     // normal visible full-Setup workflow and an explicit user confirmation.
     recordSilentUpdateWarning(nil)
-    restartConfiguredTelegramBot()
     progress(100, "LinkVideo.Helper установлен")
     return appPath, nil
 }
@@ -576,7 +558,6 @@ func uninstallProduct(removeData bool, progress progressFunc) error {
     dest := defaultInstallDir()
     progress(8, "Остановка LinkVideo.Helper…")
     stopHelperProcesses()
-    removeTelegramBotTask()
     progress(18, "Удаление фонового updater…")
     removeSilentUpdateTask()
 
