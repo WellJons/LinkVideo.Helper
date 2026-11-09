@@ -24,7 +24,21 @@ class VPNServerBackupResult:
 
     @property
     def ok(self) -> bool:
-        return self.json_path is not None and self.json_path.exists()
+        # A JSON file is not a valid recovery point if required RouterOS
+        # sections could not be read. Block LV installation in that case.
+        critical = (
+            "/ppp/secret:", "/ppp/profile:", "/ip/firewall/nat:",
+            "/system/script:", "/system/scheduler:",
+            "/ip/pool:", "/interface/l2tp-server/server:",
+        )
+        return (
+            self.json_path is not None
+            and self.json_path.exists()
+            and not any(
+                str(error).lstrip().startswith(critical)
+                for error in self.errors
+            )
+        )
 
 
 @dataclass(slots=True)
