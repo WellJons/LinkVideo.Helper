@@ -30,6 +30,7 @@ class SettingsPage(QWidget):
     serversChanged = Signal()
     testReady = Signal(str, object, object)
     backgroundReady = Signal(bool, bool, str)
+    backgroundVerificationReady = Signal(bool, str)
 
     def __init__(
         self,
@@ -47,6 +48,7 @@ class SettingsPage(QWidget):
         self.credentials = credentials
         self.testReady.connect(self._on_test_ready)
         self.backgroundReady.connect(self._background_operation_complete)
+        self.backgroundVerificationReady.connect(self._background_verify_done)
         self._testing_host = ""
         self._background_busy = False
         self._build()
@@ -462,6 +464,10 @@ class SettingsPage(QWidget):
         self.bg_check = QPushButton("Проверить состояние")
         self.bg_check.clicked.connect(self._background_refresh_status)
         controls.addWidget(self.bg_check)
+        self.bg_admin_check = QPushButton("Проверить с правами администратора")
+        self.bg_admin_check.setProperty("role", "ghost")
+        self.bg_admin_check.clicked.connect(self._background_verify_admin)
+        controls.addWidget(self.bg_admin_check)
         form.addLayout(controls)
 
         self.bg_status = QLabel("")
@@ -621,6 +627,7 @@ class SettingsPage(QWidget):
         self._background_busy = True
         self.bg_enabled.setEnabled(False)
         self.bg_check.setEnabled(False)
+        self.bg_admin_check.setEnabled(False)
         self.bg_key_button.setEnabled(False)
         self.bg_interval.setEnabled(False)
         self.bg_apply_interval.setEnabled(False)
@@ -649,6 +656,7 @@ class SettingsPage(QWidget):
         self._background_busy = False
         self.bg_enabled.setEnabled(True)
         self.bg_check.setEnabled(True)
+        self.bg_admin_check.setEnabled(True)
         self.bg_key_button.setEnabled(True)
         self.bg_interval.setEnabled(True)
         self.bg_apply_interval.setEnabled(True)
@@ -665,13 +673,50 @@ class SettingsPage(QWidget):
             self._background_revert_toggle(task_registered())
             self.bg_status.setText("Настройка не выполнена: " + message)
 
+    def _background_verify_admin(self):
+        if self._background_busy:
+            return
+        self._background_busy = True
+        self.bg_admin_check.setEnabled(False)
+        self.bg_check.setEnabled(False)
+        self.bg_status.setText(
+            "Проверяю наличие задания с правами администратора… подтвердите UAC."
+        )
+
+        def worker():
+            try:
+                from linkvideo_vpn_helper.services.vpn_background_service import verify_task_as_administrator
+                verify_task_as_administrator()
+                self.backgroundVerificationReady.emit(True, "")
+            except Exception as exc:
+                self.backgroundVerificationReady.emit(False, str(exc))
+
+        threading.Thread(target=worker, daemon=True, name="vpn-task-verify").start()
+
+    def _background_verify_done(self, verified: bool, message: str):
+        self._background_busy = False
+        self.bg_admin_check.setEnabled(True)
+        self.bg_check.setEnabled(True)
+        self._background_refresh_status()
+        if not verified:
+            self.bg_status.setText(
+                "Не удалось проверить задание с правами администратора: " + message
+            )
+
     def _background_refresh_status(self):
-        from linkvideo_vpn_helper.services.vpn_background_service import task_registered, read_status
-        actual = task_registered()
+        from linkvideo_vpn_helper.services.vpn_background_service import (
+            read_status, task_inspection, read_task_receipt,
+        )
+        inspection = task_inspection()
+        actual = bool(inspection["installed"])
         self._background_revert_toggle(actual)
         self.bg_apply_interval.setEnabled(actual and not self._background_busy)
+        self.bg_admin_check.setVisible(not inspection["verified"])
         if not actual:
-            self.bg_status.setText("Выключен: задание фоновой синхронизации не зарегистрировано.")
+            self.bg_status.setText(
+                "Задание не найдено или скрыто правами Windows. "
+                "Нажмите «Проверить с правами администратора», чтобы различить эти случаи."
+            )
             return
         status = read_status()
         checked = status.get("checked_utc", "ещё не запускалась")
@@ -685,9 +730,17 @@ class SettingsPage(QWidget):
         elif state == "running":
             message = f"Сверка началась: {checked}."
         else:
-            message = "Задание установлено; результата первой сверки пока нет."
-        self.bg_status.setText("Включён · выбранный интервал: "
-                               + str(self.bg_interval.currentData()) + " ч. " + message)
+            message = "Задание зарегистрировано, но успешная выгрузка в Google Sheets пока не подтверждена."
+        receipt = read_task_receipt()
+        interval = receipt.get("interval_hours", self.bg_interval.currentData())
+        if inspection["verified"]:
+            prefix = "Задание найдено в планировщике Windows."
+        else:
+            prefix = (
+                "Регистрация подтверждена администратором, "
+                "но текущему пользователю недоступна прямая проверка планировщика."
+            )
+        self.bg_status.setText(f"{prefix} Интервал: {interval} ч. {message}")
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
