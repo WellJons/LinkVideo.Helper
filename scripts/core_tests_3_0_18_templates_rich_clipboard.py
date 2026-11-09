@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtWidgets import QApplication
 
@@ -99,5 +99,8 @@ with TemporaryDirectory() as root:
     )
     assert target.sizeHint().height() > 103, target.sizeHint().height()
     page.close()
+    page.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
 
 print("CORE TESTS 3.0.18 RICH REPLIES / DRAFT ATTACHMENTS / ADAPTIVE TILES OK")
