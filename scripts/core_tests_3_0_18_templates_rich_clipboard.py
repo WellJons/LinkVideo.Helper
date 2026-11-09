@@ -7,8 +7,8 @@ from tempfile import TemporaryDirectory
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QCoreApplication, QEvent, Qt
-from PySide6.QtGui import QColor, QImage
+from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QPointF, Qt
+from PySide6.QtGui import QColor, QImage, QWheelEvent
 from PySide6.QtWidgets import QApplication
 
 from linkvideo_vpn_helper.services.support_templates import TemplateStore
@@ -44,7 +44,7 @@ with TemporaryDirectory() as root:
     # Copy a draft answer and all images as HTML with embedded bytes.
     page._copy()
     clip = QApplication.clipboard().mimeData()
-    assert clip is not None and clip.hasText() and clip.hasHtml()
+    assert clip is not None and clip.hasText() and clip.hasHtml() and clip.hasImage()
     assert "Проверьте часовой пояс." in clip.text()
     assert 'data:image/png;base64,' in clip.html()
     assert clip.html().count("<img ") == 1
@@ -60,9 +60,15 @@ with TemporaryDirectory() as root:
 
     page._copy()
     clip = QApplication.clipboard().mimeData()
-    assert clip.hasHtml()
+    assert clip.hasHtml() and clip.hasImage()
     assert '<img ' in clip.html()
     assert "Здравствуйте!" in clip.text()
+
+    # Telegram/Bitrix fallback: selected photo copied using the native
+    # clipboard image format, not just an embedded HTML <img> tag.
+    page._copy_selected_image()
+    assert QApplication.clipboard().mimeData().hasImage()
+    assert not QApplication.clipboard().image().isNull()
 
     # Changing a saved answer uses explicit read/edit mode; removal commits
     # only on Save (no silent image loss while previewing).
@@ -88,6 +94,11 @@ with TemporaryDirectory() as root:
         "по проверке подключения, записи, времени и архивов"
     )
     store.save(lengthy, "Первый длинный пункт " * 26, "Диагностика")
+    for i in range(45):
+        store.save(
+            f"Ответ для проверок прокрутки № {i:02d}",
+            "Разбор ошибки видеокамеры. " * 9,
+            "Диагностика")
     page._new()
     page._refresh()
     app.processEvents()
@@ -98,6 +109,24 @@ with TemporaryDirectory() as root:
             Qt.ItemDataRole.UserRole)).title == lengthy
     )
     assert target.sizeHint().height() > 103, target.sizeHint().height()
+    from PySide6.QtWidgets import QAbstractItemView
+    assert (page.templates_list.verticalScrollMode()
+            == QAbstractItemView.ScrollMode.ScrollPerPixel)
+    scrollbar = page.templates_list.verticalScrollBar()
+    assert scrollbar.singleStep() <= 30
+    scrollbar.setValue(0)
+    app.processEvents()
+    viewport = page.templates_list.viewport()
+    pos = QPointF(10, 10)
+    global_pos = QPointF(viewport.mapToGlobal(QPoint(10, 10)))
+    wheel = QWheelEvent(
+        pos, global_pos, QPoint(0, 0), QPoint(0, -120),
+        Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
+        Qt.ScrollPhase.ScrollUpdate, False)
+    QApplication.sendEvent(viewport, wheel)
+    app.processEvents()
+    assert scrollbar.value() < max(1, scrollbar.maximum()), (
+        scrollbar.value(), scrollbar.maximum())
     page.close()
     page.deleteLater()
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
