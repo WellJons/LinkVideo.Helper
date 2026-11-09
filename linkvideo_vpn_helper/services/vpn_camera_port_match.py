@@ -109,7 +109,8 @@ def _endpoint(value: str) -> tuple[str, int] | None:
         if host and port is not None and 1 <= port <= 65535:
             return host, port
     except ValueError:
-        pass
+        # Malformed URL cannot prove a server/port pair.
+        return None
     return None
 
 
