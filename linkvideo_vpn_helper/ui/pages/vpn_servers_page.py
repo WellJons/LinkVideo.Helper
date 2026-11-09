@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt, QUrl, Signal, QTimer
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QGridLayout, QHeaderView, QHBoxLayout, QLabel, QPushButton, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget, QAbstractItemView,
+    QTableWidgetItem, QVBoxLayout, QWidget, QAbstractItemView, QSizePolicy,
 )
 
 from linkvideo_vpn_helper.services.errors import classify_exception
@@ -26,15 +26,28 @@ from linkvideo_vpn_helper.ui.dialogs import ConfirmDialog
 
 
 class ServerTableWidget(QTableWidget):
-    """Таблица со своей прокруткой, не передающая колесо внешней странице."""
+    """All server rows are visible; wheel scrolls the OUTER page only."""
+
     def wheelEvent(self, event):
-        bar = self.verticalScrollBar()
-        delta = event.angleDelta().y()
-        if delta:
-            steps = max(1, abs(delta) // 120)
-            direction = -1 if delta > 0 else 1
-            amount = max(36, bar.singleStep() * 3) * steps
-            bar.setValue(bar.value() + direction * amount)
+        outer = getattr(self, "outer_scroll", None)
+        if outer is None:
+            event.ignore()
+            return
+        bar = outer.verticalScrollBar()
+        pixel_delta = event.pixelDelta().y()
+        angle_delta = event.angleDelta().y()
+        if pixel_delta:
+            amount = pixel_delta
+        elif angle_delta:
+            amount = int((angle_delta / 120.0) * max(36, bar.singleStep() * 3))
+        else:
+            event.ignore()
+            return
+        destination = max(bar.minimum(), min(bar.maximum(), bar.value() - amount))
+        if destination == bar.value():
+            event.ignore()
+            return
+        bar.setValue(destination)
         event.accept()
 
 
@@ -211,6 +224,7 @@ class VPNServersPage(QWidget):
         tl.addLayout(table_head)
 
         self.table = ServerTableWidget(0, 8)
+        self.table.outer_scroll = self.page_scroll
         self.table.setHorizontalHeaderLabels([
             "VPN-сервер", "Страна", "Активные L2TP", "Учётки", "CPU", "RAM", "Порты онлайн / всего", "LV-автоматика"
         ])
@@ -224,11 +238,12 @@ class VPNServersPage(QWidget):
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for i in range(1, 8):
             hh.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
-        # Серверы прокручиваются внутри фиксированной области. Колесо мыши
-        # над таблицей больше не двигает всю страницу VPN-серверов.
-        self.table.setFixedHeight(360)
+        # Show ALL VPN servers in the table without a nested vertical scroll.
+        # The single wheel / scrollbar belongs to the page (PageScroll).
+        self.table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.table.setMinimumHeight(80)
         tl.addWidget(self.table)
         root.addWidget(table_card)
 
@@ -330,6 +345,7 @@ class VPNServersPage(QWidget):
         rows = sorted(rows, key=lambda item: order.get(item[0], 9999))
         previous = self._selected_host
         self.table.setRowCount(len(rows))
+        self._resize_servers_table()
         self._automation_by_host.clear()
         self._stats_by_host.clear()
         active_total = 0
@@ -402,6 +418,17 @@ class VPNServersPage(QWidget):
         elif not self._refresh_silent_mode:
             self.task.show(); self.task.done("VPN-серверы обновлены", f"Получена статистика {ok_count} серверов.")
         self._refresh_silent_mode = False
+
+    def _resize_servers_table(self):
+        """Fit all rows, including header and frame, even for custom row heights."""
+        header = self.table.horizontalHeader().height()
+        if header < 20:
+            header = self.table.horizontalHeader().sizeHint().height()
+        body = sum(
+            self.table.rowHeight(i) for i in range(self.table.rowCount())
+        )
+        # Qt consumes two frame edges plus a small viewport margin.
+        self.table.setFixedHeight(max(80, header + body + 8))
 
     def _table_selection_changed(self):
         rows = self.table.selectionModel().selectedRows() if self.table.selectionModel() else []
