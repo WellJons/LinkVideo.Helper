@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import re
+import sys
 import threading
+from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QBoxLayout, QCheckBox, QGridLayout, QHBoxLayout, QInputDialog, QLabel,
+    QBoxLayout, QCheckBox, QDialog, QFileDialog, QGridLayout, QHBoxLayout, QInputDialog, QLabel,
     QLineEdit, QPushButton, QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -27,6 +29,7 @@ class SettingsPage(QWidget):
     updateRequested = Signal()
     serversChanged = Signal()
     testReady = Signal(str, object, object)
+    backgroundReady = Signal(bool, bool, str)
 
     def __init__(
         self,
@@ -43,7 +46,9 @@ class SettingsPage(QWidget):
         self.service = service
         self.credentials = credentials
         self.testReady.connect(self._on_test_ready)
+        self.backgroundReady.connect(self._background_operation_complete)
         self._testing_host = ""
+        self._background_busy = False
         self._build()
 
     def _build(self):
@@ -317,6 +322,7 @@ class SettingsPage(QWidget):
         self._render_servers()
         self.servers_card = servers
         self.servers_layout.addWidget(servers)
+        self._build_background_mode()
         self.servers_layout.addStretch(1)
 
         about = Card(subtle=True)
@@ -376,6 +382,249 @@ class SettingsPage(QWidget):
         root.addStretch(1)
 
         self._sync_responsive_layout()
+
+    def _build_background_mode(self):
+        """Optional single-computer recovery mirror, never enabled by install."""
+        from linkvideo_vpn_helper.services.vpn_background_service import task_registered
+
+        card = Card()
+        form = QVBoxLayout(card)
+        form.setContentsMargins(20, 18, 20, 18)
+        form.setSpacing(10)
+        name = QLabel("Этот компьютер — сервер синхронизации VPN")
+        name.setObjectName("SectionTitle")
+        form.addWidget(name)
+
+        info = QLabel(
+            "После включения Windows будет самостоятельно сверять выбранные VPN-серверы "
+            "каждые 5 минут и обновлять существующую Google-таблицу. "
+            "LinkVideo.Helper можно закрыть — задача работает независимо от окна."
+        )
+        info.setWordWrap(True)
+        info.setObjectName("Muted")
+        form.addWidget(info)
+
+        warning = QLabel(
+            "Внимание: для аварийного восстановления в Google Sheets сохраняются "
+            "полные данные клиентов, включая пароли PPP, NAT-порты и снимки RouterOS. "
+            "Редакторы этой таблицы смогут прочитать пароли. Используйте только "
+            "ограниченную служебную таблицу с доступом уполномоченных администраторов."
+        )
+        warning.setObjectName("WarningText")
+        warning.setWordWrap(True)
+        form.addWidget(warning)
+
+        key_row = QHBoxLayout()
+        self.bg_key_name = QLabel("Google Service Account: не выбран")
+        self.bg_key_name.setObjectName("TinyMuted")
+        self.bg_key_name.setWordWrap(True)
+        self.bg_key_name.setMinimumWidth(0)
+        key_row.addWidget(self.bg_key_name, 1)
+        self.bg_key_button = QPushButton("Выбрать JSON")
+        self.bg_key_button.clicked.connect(self._background_pick_key)
+        key_row.addWidget(self.bg_key_button)
+        form.addLayout(key_row)
+
+        self.bg_targets = QLabel("")
+        self.bg_targets.setObjectName("TinyMuted")
+        self.bg_targets.setWordWrap(True)
+        form.addWidget(self.bg_targets)
+
+        controls = QHBoxLayout()
+        self.bg_enabled = QCheckBox("Включить этот компьютер как сервер VPN")
+        self.bg_enabled.setObjectName("VPNBackgroundEnabled")
+        self.bg_enabled.setChecked(False)
+        self.bg_enabled.toggled.connect(self._background_toggle)
+        controls.addWidget(self.bg_enabled)
+        controls.addStretch(1)
+        self.bg_check = QPushButton("Проверить состояние")
+        self.bg_check.clicked.connect(self._background_refresh_status)
+        controls.addWidget(self.bg_check)
+        form.addLayout(controls)
+
+        self.bg_status = QLabel("")
+        self.bg_status.setObjectName("TinyMuted")
+        self.bg_status.setWordWrap(True)
+        form.addWidget(self.bg_status)
+        self.servers_layout.addWidget(card)
+
+        self._background_refresh_key()
+        self._background_refresh_targets()
+        # The task, not QSettings, is authoritative. Default is OFF.
+        active = task_registered()
+        self.bg_enabled.blockSignals(True)
+        self.bg_enabled.setChecked(active)
+        self.bg_enabled.blockSignals(False)
+        self.bg_status.setText(
+            "Включён: планировщик Windows запускает полное резервирование каждые 5 минут."
+            if active else "Выключен: фоновая синхронизация и отправка паролей не выполняются."
+        )
+
+    def _background_refresh_key(self):
+        saved = str(self.settings.value("vpn_background/google_key_file", "", str) or "").strip()
+        if not saved:
+            saved = str(self.settings.value("sheets/service_account_file", "", str) or "").strip()
+        self.bg_key_name.setText(
+            f"Google Service Account: {Path(saved).name}"
+            if saved and Path(saved).is_file()
+            else "Google Service Account: ключ не выбран"
+        )
+
+    def _background_refresh_targets(self):
+        servers = self.registry.hosts()
+        self.bg_targets.setText(
+            f"Серверов для синхронизации: {len(servers)}. "
+            "Будут использованы все включённые VPN-серверы из списка выше."
+        )
+
+    def _background_pick_key(self):
+        source, _ = QFileDialog.getOpenFileName(
+            self, "Google Service Account для фонового резерва",
+            "", "JSON (*.json)"
+        )
+        if not source:
+            return
+        try:
+            from linkvideo_vpn_helper.ui.vpn_sheets_key_ui_compat import _valid_service_account
+            _valid_service_account(Path(source))
+        except Exception as exc:
+            self.bg_status.setText(f"Неверный файл Google Service Account: {exc}")
+            return
+        self.settings.setValue("vpn_background/google_key_file", source)
+        self.settings.sync()
+        self._background_refresh_key()
+        self.bg_status.setText("Ключ выбран. Фоновый режим пока не изменён.")
+
+    def _background_revert_toggle(self, enabled: bool):
+        self.bg_enabled.blockSignals(True)
+        self.bg_enabled.setChecked(enabled)
+        self.bg_enabled.blockSignals(False)
+
+    def _background_toggle(self, enable: bool):
+        if self._background_busy:
+            return
+        if enable:
+            if not sys.platform.startswith("win") or not getattr(sys, "frozen", False):
+                self.bg_status.setText(
+                    "Фоновый режим можно включить в установленной Windows-версии LinkVideo.Helper."
+                )
+                self._background_revert_toggle(False)
+                return
+            if self.credentials is None or not self.credentials.username or not self.credentials.password:
+                self.bg_status.setText("Нет подтверждённой авторизации RouterOS.")
+                self._background_revert_toggle(False)
+                return
+            servers = self.registry.hosts()
+            if not servers:
+                self.bg_status.setText("Сначала включите хотя бы один VPN-сервер.")
+                self._background_revert_toggle(False)
+                return
+            key_path = str(
+                self.settings.value("vpn_background/google_key_file", "", str)
+                or self.settings.value("sheets/service_account_file", "", str) or ""
+            ).strip()
+            try:
+                from linkvideo_vpn_helper.services.vpn_sheets_sync import (
+                    GoogleSheetsBackend, SPREADSHEET_ID,
+                )
+                from linkvideo_vpn_helper.ui.vpn_sheets_key_ui_compat import _valid_service_account
+                if key_path and Path(key_path).is_file():
+                    google = _valid_service_account(Path(key_path))
+                else:
+                    backend = GoogleSheetsBackend.from_settings(self.settings)
+                    if backend is None:
+                        raise ValueError(
+                            "Выберите Google Service Account JSON с доступом к таблице."
+                        )
+                    google = backend.service_account_info
+                spreadsheet_id = SPREADSHEET_ID
+            except Exception as exc:
+                self.bg_status.setText(str(exc))
+                self._background_revert_toggle(False)
+                return
+
+            confirm = ConfirmDialog(
+                "Включить полную синхронизацию?",
+                f"Компьютер начнёт каждые 5 минут резервировать {len(servers)} VPN-серверов "
+                "в Google Sheets, даже после закрытия Helper.\n\n"
+                "Будут передаваться PPP-пароли и полные RouterOS-снимки клиентов. "
+                "Любой редактор этой таблицы сможет видеть пароли. "
+                "Включайте только при ограниченном доступе к Google Sheets. "
+                "Windows запросит права администратора для планировщика.",
+                confirm_text="Включить с полным резервом", parent=self
+            )
+            if confirm.exec() != QDialog.DialogCode.Accepted:
+                self._background_revert_toggle(False)
+                return
+            try:
+                from linkvideo_vpn_helper.services.vpn_background_service import stage_configuration
+                staged = stage_configuration(self.credentials, google, servers, spreadsheet_id)
+            except Exception as exc:
+                self.bg_status.setText(f"Не удалось подготовить защищённую конфигурацию: {exc}")
+                self._background_revert_toggle(False)
+                return
+        else:
+            confirm = ConfirmDialog(
+                "Выключить фоновую синхронизацию?",
+                "Windows перестанет автоматически отправлять резервные данные VPN "
+                "в Google Sheets. Уже сохранённая информация в таблице не удалится.",
+                confirm_text="Отключить", parent=self
+            )
+            if confirm.exec() != QDialog.DialogCode.Accepted:
+                self._background_revert_toggle(True)
+                return
+            staged = None
+
+        self._background_busy = True
+        self.bg_enabled.setEnabled(False)
+        self.bg_check.setEnabled(False)
+        self.bg_key_button.setEnabled(False)
+        self.bg_status.setText(
+            "Настраиваю планировщик Windows… подтвердите запрос UAC."
+            if enable else "Отключаю фоновую задачу Windows…"
+        )
+
+        def worker():
+            try:
+                from linkvideo_vpn_helper.services.vpn_background_service import enable_task, disable_task
+                if enable:
+                    enable_task(staged)
+                else:
+                    disable_task()
+                self.backgroundReady.emit(enable, True, "")
+            except Exception as exc:
+                self.backgroundReady.emit(enable, False, str(exc))
+            finally:
+                if staged is not None:
+                    staged.unlink(missing_ok=True)
+
+        threading.Thread(target=worker, daemon=True, name="vpn-background-task").start()
+
+    def _background_operation_complete(self, enabled: bool, success: bool, message: str):
+        self._background_busy = False
+        self.bg_enabled.setEnabled(True)
+        self.bg_check.setEnabled(True)
+        self.bg_key_button.setEnabled(True)
+        if success:
+            self.settings.setValue("vpn_background/enabled", bool(enabled))
+            self.settings.sync()
+            self._background_revert_toggle(enabled)
+            self.bg_status.setText(
+                "Фоновая синхронизация включена. Windows выполняет полный резерв каждые 5 минут."
+                if enabled else "Фоновая задача отключена. Сохранённые в Google Sheets резервные данные не удалены."
+            )
+        else:
+            self._background_revert_toggle(not enabled)
+            self.bg_status.setText("Настройка не выполнена: " + message)
+
+    def _background_refresh_status(self):
+        from linkvideo_vpn_helper.services.vpn_background_service import task_registered
+        actual = task_registered()
+        self._background_revert_toggle(actual)
+        self.bg_status.setText(
+            "Включён: задание зарегистрировано в Windows. Проверка выполнения — через Планировщик задач."
+            if actual else "Выключен: задание фоновой синхронизации не зарегистрировано."
+        )
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
