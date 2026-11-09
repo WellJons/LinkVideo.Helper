@@ -9,7 +9,7 @@ second row instead of squeezing every value into one horizontal line.
 
 from PySide6.QtCore import QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QGuiApplication, QIcon, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QAbstractItemView, QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget
 
 
 _INSTALLED = False
@@ -84,8 +84,18 @@ def install_nat_counter_ui() -> None:
         confirmed_by_port = {
             int(link.port): link for link in (report.links if report is not None else ())
         }
+        grouped_by_port = {
+            int(port): tuple(links) for port, links in (
+                getattr(report, "grouped", ()) if report is not None else ())
+        }
+        client_key = (client.server, client.login)
+        if getattr(self, "_nvr_expanded_client_key", None) != client_key:
+            self._nvr_expanded_client_key = client_key
+            self._nvr_expanded_ports = set()
+        port_list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        port_list.verticalScrollBar().setSingleStep(28)
         port_list.setMinimumHeight(185)
-        port_list.setMaximumHeight(410)
+        port_list.setMaximumHeight(440)
 
         for index in range(port_list.count()):
             item = port_list.item(index)
@@ -189,6 +199,91 @@ def install_nat_counter_ui() -> None:
                 camera_row.addStretch(1)
                 outer.addLayout(camera_row)
 
+            camera_group = grouped_by_port.get(port) if not conflict_rows else None
+            group_extra = 0
+            if camera_group:
+                # Several channels of one NVR share an RTSP endpoint. They
+                # are verified by the SAME server + external port and shown
+                # only on explicit operator request, never mistaken for NAT
+                # collisions on this router.
+                toggle = QToolButton(row)
+                toggle.setObjectName("B2ONvrExpand")
+                toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+                toggle.setAutoRaise(True)
+                toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+                toggle.setStyleSheet(
+                    "QToolButton#B2ONvrExpand {"
+                    "background: transparent; border: 0; padding: 4px 0;"
+                    "text-align: left; font-weight: 650;"
+                    "}"
+                )
+                details = QWidget(row)
+                details.setObjectName("B2ONvrCameraList")
+                details_layout = QVBoxLayout(details)
+                details_layout.setContentsMargins(10, 2, 0, 3)
+                details_layout.setSpacing(5)
+
+                for link in camera_group:
+                    camera_row = QHBoxLayout()
+                    camera_row.setContentsMargins(0, 0, 0, 0)
+                    camera_row.setSpacing(5)
+                    camera_label = QLabel(
+                        f"{link.label} · ID камеры B2O: {link.camera_id}")
+                    camera_label.setObjectName("B2ONvrCameraId")
+                    camera_label.setTextInteractionFlags(
+                        Qt.TextInteractionFlag.TextSelectableByMouse)
+                    camera_label.setToolTip(
+                        f"Подтверждено: {client.server}:{port} · ID {link.camera_id}")
+                    camera_label.setMinimumWidth(0)
+                    camera_row.addWidget(camera_label, 1)
+                    copy = QToolButton(row)
+                    copy.setObjectName("B2OCopyNvrCameraId")
+                    copy.setText("⧉")
+                    copy.setFixedSize(24, 24)
+                    copy.setCursor(Qt.CursorShape.PointingHandCursor)
+                    copy.setStyleSheet(
+                        "QToolButton#B2OCopyNvrCameraId {"
+                        "background: transparent; border: none; "
+                        "font-size: 17px; padding: 0px; }"
+                    )
+                    copy.setToolTip("Скопировать ID камеры " + link.camera_id)
+                    copy.clicked.connect(
+                        lambda _checked=False, value=link.camera_id:
+                        QGuiApplication.clipboard().setText(value))
+                    camera_row.addWidget(copy)
+                    details_layout.addLayout(camera_row)
+                outer.addWidget(toggle)
+                outer.addWidget(details)
+                expanded = port in self._nvr_expanded_ports
+                details.setVisible(expanded)
+                group_extra = 28 + (len(camera_group) * 33 if expanded else 0)
+
+                def toggle_nvr(_checked=False, *,
+                               target=port, panel=details, button=toggle,
+                               list_item=item, list_widget=port_list,
+                               total=len(camera_group)):
+                    expanded_now = not panel.isVisible()
+                    panel.setVisible(expanded_now)
+                    if expanded_now:
+                        self._nvr_expanded_ports.add(target)
+                    else:
+                        self._nvr_expanded_ports.discard(target)
+                    button.setText(
+                        ("▾ Свернуть список камер" if expanded_now
+                         else f"▸ Раскрыть список найденных камер ({total})"))
+                    list_item.setSizeHint(QSize(
+                        0, 76 + 28 + (total * 33 if expanded_now else 0)))
+                    height = sum(
+                        list_widget.item(i).sizeHint().height()
+                        + list_widget.spacing()
+                        for i in range(list_widget.count())
+                    ) + 14
+                    list_widget.setFixedHeight(min(440, max(185, height)))
+                toggle.clicked.connect(toggle_nvr)
+                toggle.setText(
+                    "▾ Свернуть список камер" if expanded else
+                    f"▸ Раскрыть список найденных камер ({len(camera_group)})")
+
             detail_parts = ["TCP · dst-nat"]
             if conflict_rows:
                 owners: list[str] = []
@@ -213,7 +308,8 @@ def install_nat_counter_ui() -> None:
             bottom.addWidget(_counter(f"Пакеты: {_fmt_packets(rule_packets)}"), 0)
             outer.addLayout(bottom)
 
-            item.setSizeHint(QSize(0, 90 if camera_link is not None else 76))
+            item.setSizeHint(QSize(
+                0, (90 if camera_link is not None else 76) + group_extra))
             port_list.setItemWidget(item, row)
 
         # _render_client() initially sized the plain-text list too short.
@@ -223,7 +319,7 @@ def install_nat_counter_ui() -> None:
             port_list.item(i).sizeHint().height() + port_list.spacing()
             for i in range(port_list.count())
         ) + 14
-        port_list.setFixedHeight(min(410, max(185, required)))
+        port_list.setFixedHeight(min(440, max(185, required)))
 
     SearchManagePage._render_client = patched_render
     _INSTALLED = True
