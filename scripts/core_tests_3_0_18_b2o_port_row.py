@@ -94,6 +94,40 @@ with tempfile.TemporaryDirectory() as temp:
         assert QApplication.clipboard().text() == identifier
         assert page.port_list.height() >= 185
 
+    # Two NVR camera channels genuinely use one RTSP endpoint. They should
+    # be hidden behind a compact expandable list, with copy per camera ID.
+    page._camera_match_result = CameraPortReport(
+        login=client.login, links=(), ambiguous=(), unmatched=(10715,),
+        checked_cameras=2, stream_cameras=2,
+        grouped=((10714, (
+            CameraPortLink(10714, "299150", "Вход", "Россия", client.server),
+            CameraPortLink(10714, "299154", "Парковка", "Россия", client.server),
+        )),),
+    )
+    page._render_client()
+    app.processEvents()
+    row = next(
+        page.port_list.itemWidget(page.port_list.item(i))
+        for i in range(page.port_list.count())
+        if page.port_list.item(i).data(256) == 10714
+    )
+    expand = row.findChild(QToolButton, "B2ONvrExpand")
+    assert expand is not None and "2" in expand.text()
+    from PySide6.QtWidgets import QWidget
+    panel = row.findChild(QWidget, "B2ONvrCameraList")
+    assert panel is not None and panel.isHidden()
+    expand.click()
+    assert not panel.isHidden()
+    labels = [w.text() for w in panel.findChildren(QLabel)]
+    assert any("299150" in text for text in labels), labels
+    assert any("299154" in text for text in labels), labels
+    copies = panel.findChildren(QToolButton, "B2OCopyNvrCameraId")
+    assert len(copies) == 2
+    copies[1].click()
+    assert QApplication.clipboard().text() == "299154"
+    expand.click()
+    assert panel.isHidden()
+
     # A stale lookup must NOT expose a camera ID for another VPN account.
     page._camera_match_key = (
         client.server, "different-account", tuple(sorted(client.ports)), "other",
