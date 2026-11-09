@@ -737,6 +737,7 @@ class SupportTemplatesPage(QWidget):
                 item = self.templates_list.item(index)
                 if item.data(Qt.ItemDataRole.UserRole) == identifiers[0]:
                     self.templates_list.setCurrentItem(item)
+                    self._select(item)
                     break
             self.notice.setText(
                 f"✓ Из DOCX импортировано отдельных шаблонов: {len(identifiers)}.")
