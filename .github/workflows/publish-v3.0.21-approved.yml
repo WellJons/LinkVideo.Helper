@@ -1,0 +1,109 @@
+name: Publish verified LinkVideo.Helper 3.0.21 (single use)
+
+on:
+  push:
+    branches:
+      - release/publish-v3.0.21
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: approved-final-release-v3.0.21
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    if: github.repository == 'WellJons/LinkVideo.Helper'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact reviewed main commit
+        uses: actions/checkout@v4
+        with:
+          ref: fb5323eda9a6929542ddb2d5e7b7d847f64f2e8f
+
+      - name: Verify immutable release target
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expected = 'fb5323eda9a6929542ddb2d5e7b7d847f64f2e8f'
+          $actual = (& git rev-parse HEAD).Trim()
+          if ($actual -ne $expected) { throw "Wrong source commit $actual" }
+          $remoteLine = (& git ls-remote origin refs/heads/main)
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to resolve main' }
+          $currentMain = ($remoteLine -split '\s+')[0]
+          if ($currentMain -ne $expected) {
+            throw "Main moved: $currentMain != $expected; do not ship a stale build."
+          }
+          $version = (& python -c "from linkvideo_vpn_helper.version import APP_VERSION; print(APP_VERSION)").Trim()
+          if ($version -ne '3.0.21') { throw "Wrong release version: $version" }
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.x'
+          cache-dependency-path: |
+            installer_next/go.mod
+            patcher/go.mod
+            silent_updater/go.mod
+
+      - name: Rebuild and verify exact stable installer
+        shell: pwsh
+        run: ./scripts/verify_release.ps1
+
+      - name: Publish stable source Release only when verification matches
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $source = 'fb5323eda9a6929542ddb2d5e7b7d847f64f2e8f'
+          $tag = 'v3.0.21'
+          $verifyPath = 'release_candidate/verification.json'
+          $setup = 'installer_next/output/LinkVideo.Helper_Setup.exe'
+          $uninstall = 'installer_next/output/Uninstall.exe'
+          $payloadZip = 'release_payload/LinkVideo.Helper_Payload_3.0.21.zip'
+          $payloadJson = 'release_payload/LinkVideo.Helper_Payload_3.0.21.json'
+          $notes = 'RELEASE_3.0.21_RU.txt'
+          foreach ($path in @($verifyPath,$setup,$uninstall,$payloadZip,$payloadJson,$notes)) {
+            if (-not (Test-Path -LiteralPath $path)) { throw "Missing verified artifact $path" }
+          }
+          $evidence = Get-Content -Raw -LiteralPath $verifyPath | ConvertFrom-Json
+          $hash = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($evidence.source_commit -ne $source) { throw 'Verified SHA does not match stable source SHA' }
+          if ($evidence.version -ne '3.0.21') { throw 'Verification version mismatch' }
+          if ($evidence.setup_sha256 -ne $hash) { throw 'Setup SHA-256 verification failed' }
+          foreach ($field in @('exact_setup_self_test','python_release_preflight','ruff_critical','go_vet','patch_pipeline_compile')) {
+            if ($evidence.$field -ne 'passed') { throw "Unverified release requirement: $field" }
+          }
+          $remoteTag = (& git ls-remote --tags origin "refs/tags/$tag")
+          if ($LASTEXITCODE -ne 0) { throw 'Could not verify tag uniqueness' }
+          if ($remoteTag) { throw "Tag already exists: $tag; refusing to republish" }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a $tag $source -m 'Verified stable release LinkVideo.Helper 3.0.21'
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create stable git tag' }
+          git push origin "refs/tags/$tag"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not publish stable git tag' }
+          $assets = @($setup,$uninstall,$payloadZip,$payloadJson,$verifyPath)
+          gh release create $tag @assets --repo $env:GITHUB_REPOSITORY --verify-tag --title 'LinkVideo.Helper 3.0.21' --notes-file $notes --latest
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub source release creation failed; public update is not dispatched' }
+          Write-Host "Stable release created for $source with SHA-256 $hash"
+
+      - name: Dispatch existing guarded public-updates workflow
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          gh workflow run publish-public-update.yml --repo $env:GITHUB_REPOSITORY --ref main --field tag=v3.0.21
+          if ($LASTEXITCODE -ne 0) { throw 'Public update workflow dispatch failed' }
+          Write-Host 'Public update workflow dispatched; it will independently validate source Release, SHA-256, and manifest monotonicity.'
