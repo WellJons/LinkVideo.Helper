@@ -17,6 +17,7 @@ it, and reuses the cached executable afterwards.
 import hashlib
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -72,6 +73,119 @@ def ffmpeg_audio_args(ffmpeg: str, url: str, output: Path, *, headers: str = "")
         args.extend(["-rw_timeout", "30000000"])
     args.extend(["-i", url, "-c", "copy", str(output)])
     return args
+
+
+_PLAYER_HEADERS = (
+    "Origin: https://test-desktop-player-b2o.elct.ru\r\n"
+    "Referer: https://test-desktop-player-b2o.elct.ru/\r\n"
+    "User-Agent: LinkVideo.Helper/3.0\r\n"
+)
+
+# Operator-editable command. Input and output are supplied by Helper, never
+# by shell interpolation, so paths with spaces and signed URLs remain intact.
+MANUAL_FFMPEG_TEMPLATE = (
+    'ffmpeg -y -nostdin -hide_banner -loglevel error -progress pipe:1 '
+    '-rw_timeout 30000000 -i "{input}" -c copy "{output}"'
+)
+MANUAL_FFMPEG_NO_AUDIO_TEMPLATE = (
+    'ffmpeg -y -nostdin -hide_banner -loglevel error -progress pipe:1 '
+    '-rw_timeout 30000000 -i "{input}" -c:v copy -an "{output}"'
+)
+
+
+def _split_manual_command(text: str) -> list[str]:
+    """Parse text as argv, not shell syntax (including native Windows quotes)."""
+    if os.name != "nt":
+        return shlex.split(text)
+    import ctypes
+    from ctypes import wintypes
+    shell = ctypes.windll.shell32
+    shell.CommandLineToArgvW.argtypes = (wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int))
+    shell.CommandLineToArgvW.restype = ctypes.POINTER(ctypes.c_wchar_p)
+    count = ctypes.c_int(0)
+    ptr = shell.CommandLineToArgvW(text, ctypes.byref(count))
+    if not ptr:
+        raise ValueError("Не удалось разобрать команду FFmpeg.")
+    try:
+        return [ptr[i] for i in range(count.value)]
+    finally:
+        ctypes.windll.kernel32.LocalFree(ctypes.cast(ptr, ctypes.c_void_p))
+
+
+def validate_manual_ffmpeg_command(text: str) -> list[str]:
+    """Keep the executable, input and staged output under Helper control."""
+    if not isinstance(text, str) or len(text) > 4000:
+        raise ValueError("Команда FFmpeg слишком длинная.")
+    try:
+        args = _split_manual_command(text.strip())
+    except (ValueError, OSError) as exc:
+        raise ValueError("Неверный формат кавычек команды FFmpeg.") from exc
+    if not args or Path(args[0]).name.lower() not in {"ffmpeg", "ffmpeg.exe"}:
+        raise ValueError("Команда должна начинаться с ffmpeg.")
+    if args.count("-i") != 1 or args[args.index("-i") + 1:][:1] != ["{input}"]:
+        raise ValueError('Укажите один источник: -i "{input}".')
+    if args.count("{input}") != 1 or args.count("{output}") != 1 or args[-1] != "{output}":
+        raise ValueError('Используйте "{input}" и "{output}" как отдельные аргументы.')
+    if any(("{input}" in x and x != "{input}") or
+           ("{output}" in x and x != "{output}") for x in args):
+        raise ValueError("Переменные {input} и {output} нельзя объединять с другим текстом.")
+    return args
+
+
+def ffmpeg_manual_args(ffmpeg: str, url: str, output: Path, template: str,
+                       *, headers: str = _PLAYER_HEADERS) -> list[str]:
+    args = validate_manual_ffmpeg_command(template)
+    args = [str(ffmpeg)] + args[1:]
+    args = [str(url) if value == "{input}" else str(output) if value == "{output}"
+            else value for value in args]
+    input_index = args.index("-i")
+    if headers and str(url).lower().startswith(("http://", "https://")) and "-headers" not in args:
+        args[input_index:input_index] = ["-headers", headers]
+        input_index += 2
+    if "-progress" not in args:
+        args[input_index:input_index] = ["-progress", "pipe:1"]
+    return args
+
+
+def _ffmpeg_transport_args(self, ffmpeg: str, url: str, output: Path,
+                           *, no_audio: bool = False) -> list[str]:
+    manual = str(getattr(self, "_lv_archive_manual_command", "") or "").strip()
+    if manual:
+        return ffmpeg_manual_args(ffmpeg, url, output, manual)
+    builder = ffmpeg_no_audio_args if no_audio else ffmpeg_audio_args
+    return builder(ffmpeg, url, output, headers=_PLAYER_HEADERS)
+
+
+def _safe_hls_error(text: str) -> str:
+    """FFmpeg may echo signed playlist URLs; never forward tokens to the UI."""
+    line = next((item.strip() for item in reversed(str(text or "").splitlines())
+                 if item.strip()), "FFmpeg не смог обработать HLS")
+    line = re.sub(r'https?://[^\s"<>]+', "[HLS-URL]", line, flags=re.I)
+    line = re.sub(r"(?i)(wmsAuthSign|token|signature|auth)=([^&\s]+)",
+                  r"\1=[скрыто]", line)
+    return line[:350]
+
+
+def _ffmpeg_hls_attempts(cmd_factory, target: Path, *,
+                         base_done: float, item_duration: float, total: float,
+                         progress=None, cancel_event=None, retry_count: int = 2):
+    """Retry transient HLS transport failures without keeping corrupt output."""
+    last_text = ""
+    for attempt in range(retry_count):
+        _check_cancel(cancel_event)
+        target.unlink(missing_ok=True)
+        cmd = cmd_factory(attempt)
+        code, text = _run_ffmpeg_progress(
+            cmd, base_done=base_done, item_duration=item_duration, total=total,
+            progress=progress, cancel_event=cancel_event)
+        if code == 0 and _is_probable_mp4(target):
+            return True, ""
+        last_text = _safe_hls_error(text)
+        if attempt + 1 < retry_count and progress:
+            progress({"type": "stage", "title": "Повторяю получение HLS",
+                      "detail": f"Попытка {attempt + 2}/{retry_count} · " + last_text})
+    target.unlink(missing_ok=True)
+    return False, last_text
 
 
 def _cancelled(cancel_event) -> bool:
