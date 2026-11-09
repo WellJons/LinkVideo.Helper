@@ -357,6 +357,47 @@ def get_theme_style(key: str = "rose_milk") -> str:
     QListWidget::item:hover {{ background: {c['panel2']}; }}
     QListWidget::item:selected {{ background: {c['accent_soft']}; color: {c['text']}; }}
 
+    /* Support reply workbench — visual cards instead of raw multi-line rows. */
+    QListWidget#TemplateResultsList {{
+        background: transparent; padding: 0px; outline: none;
+    }}
+    QListWidget#TemplateResultsList::item {{
+        background: {c['panel']}; border: 1px solid {c['border']};
+        border-radius: 12px; padding: 0px; margin: 1px 0px;
+    }}
+    QListWidget#TemplateResultsList::item:hover {{
+        background: {c['panel2']}; border-color: {c['border2']};
+    }}
+    QListWidget#TemplateResultsList::item:selected {{
+        background: {c['accent_soft']}; border-color: {c['accent']};
+    }}
+    QFrame#TemplateReplyTile {{
+        background: transparent; border: none;
+    }}
+    QLabel#TemplateTileTitle {{
+        color: {c['text']}; background: transparent;
+        font-size: 13px; font-weight: 700;
+    }}
+    QLabel#TemplateTileMeta {{
+        color: {c['accent']}; background: transparent;
+        font-size: 11px; font-weight: 650;
+    }}
+    QLabel#TemplateTileExcerpt {{
+        color: {c['muted']}; background: transparent; font-size: 12px;
+    }}
+    QLabel#TemplateTileFavorite {{
+        color: {c['accent']}; background: transparent; font-size: 15px;
+    }}
+    QTextEdit#TemplateBodyInput {{
+        background: {c['panel']}; color: {c['text']};
+        padding: 13px; border: 1px solid {c['border']}; border-radius: 12px;
+        selection-background-color: {c['accent']};
+    }}
+    QTextEdit#TemplateBodyInput:focus {{
+        border-color: {c['accent']};
+    }}
+
+
     QTableWidget {{
         background: {c['panel']}; alternate-background-color: {c['panel2']};
         border: none; border-radius: 12px; gridline-color: transparent;
