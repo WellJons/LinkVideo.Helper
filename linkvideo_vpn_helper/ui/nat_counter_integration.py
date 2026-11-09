@@ -8,7 +8,8 @@ second row instead of squeezing every value into one horizontal line.
 """
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtGui import QGuiApplication
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 
 _INSTALLED = False
@@ -106,7 +107,8 @@ def install_nat_counter_ui() -> None:
 
             row = QWidget()
             row.setObjectName("NatPortRow")
-            row.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            # Buttons inside the port row must be clickable. The row itself
+            # ignores non-button mouse clicks so the list still handles selection.
             outer = QVBoxLayout(row)
             outer.setContentsMargins(14, 7, 14, 7)
             outer.setSpacing(3)
@@ -141,8 +143,28 @@ def install_nat_counter_ui() -> None:
                 camera_id.setToolTip(
                     "Камера B2O: " + str(camera_link.label) +
                     " · подтверждено по логину аккаунта и RTSP-порту")
-                camera_id.setMinimumHeight(19)
-                outer.addWidget(camera_id)
+                camera_id.setMinimumHeight(26)
+                camera_id.setStyleSheet("font-size: 14px; font-weight: 700;")
+                camera_row = QHBoxLayout()
+                camera_row.setContentsMargins(0, 0, 0, 0)
+                camera_row.setSpacing(8)
+                camera_row.addWidget(camera_id, 0)
+                copy_id = QPushButton("⧉")
+                copy_id.setObjectName("B2OCopyCameraId")
+                copy_id.setProperty("role", "soft")
+                copy_id.setFixedSize(28, 26)
+                copy_id.setToolTip("Скопировать ID камеры " + str(camera_link.camera_id))
+                copy_id.setAccessibleName("Скопировать ID камеры B2O")
+                def copy_camera_id(value, button):
+                    QGuiApplication.clipboard().setText(value)
+                    button.setText("✓")
+                    button.setToolTip("ID камеры скопирован")
+                copy_id.clicked.connect(
+                    lambda _checked=False, value=str(camera_link.camera_id), button=copy_id:
+                    copy_camera_id(value, button))
+                camera_row.addWidget(copy_id)
+                camera_row.addStretch(1)
+                outer.addLayout(camera_row)
 
             detail_parts = ["TCP · dst-nat"]
             if conflict_rows:
