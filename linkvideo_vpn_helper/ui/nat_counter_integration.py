@@ -72,7 +72,18 @@ def install_nat_counter_ui() -> None:
         recent = {int(value) for value in (getattr(self, "_recent_new_ports", set()) or set())}
 
         port_list.setSpacing(6)
-        port_list.setMinimumHeight(min(380, max(185, len(client.ports) * 80 + 10)))
+        report = getattr(self, "_camera_match_result", None)
+        match_key = getattr(self, "_camera_match_key", None)
+        current_key = (
+            client.server, client.login, tuple(sorted(client.ports))
+        )
+        # Do not show stale IDs after changing client, port list or B2O login.
+        if not match_key or match_key[:3] != current_key:
+            report = None
+        confirmed_by_port = {
+            int(link.port): link for link in (report.links if report is not None else ())
+        }
+        port_list.setMinimumHeight(185)
         port_list.setMaximumHeight(410)
 
         for index in range(port_list.count()):
@@ -118,6 +129,21 @@ def install_nat_counter_ui() -> None:
                 top.addWidget(StatusPill("Конфликт", "danger"))
             outer.addLayout(top)
 
+            # The regular page writes the ID to QListWidgetItem.text(), but
+            # this integration replaces that text with a custom QWidget.
+            # Draw the verified ID *inside the visible port card* instead.
+            camera_link = confirmed_by_port.get(port) if not conflict_rows else None
+            if camera_link is not None:
+                camera_id = QLabel("ID камеры B2O: " + str(camera_link.camera_id))
+                camera_id.setObjectName("B2OPortCameraId")
+                camera_id.setTextInteractionFlags(
+                    Qt.TextInteractionFlag.TextSelectableByMouse)
+                camera_id.setToolTip(
+                    "Камера B2O: " + str(camera_link.label) +
+                    " · подтверждено по логину аккаунта и RTSP-порту")
+                camera_id.setMinimumHeight(19)
+                outer.addWidget(camera_id)
+
             detail_parts = ["TCP · dst-nat"]
             if conflict_rows:
                 owners: list[str] = []
@@ -138,12 +164,21 @@ def install_nat_counter_ui() -> None:
             detail.setObjectName("TinyMuted")
             detail.setMinimumWidth(0)
             bottom.addWidget(detail, 1)
-            bottom.addWidget(_counter(f"NAT-трафик: {_fmt_bytes(rule_bytes)}"), 0)
+            bottom.addWidget(_counter(f"Трафик порта: {_fmt_bytes(rule_bytes)}"), 0)
             bottom.addWidget(_counter(f"Пакеты: {_fmt_packets(rule_packets)}"), 0)
             outer.addLayout(bottom)
 
-            item.setSizeHint(QSize(0, 76))
+            item.setSizeHint(QSize(0, 99 if camera_link is not None else 76))
             port_list.setItemWidget(item, row)
+
+        # _render_client() initially sized the plain-text list too short.
+        # After custom rows are attached, reserve space for the visible ID
+        # and the traffic line; keep scrolling for larger port inventories.
+        required = sum(
+            port_list.item(i).sizeHint().height() + port_list.spacing()
+            for i in range(port_list.count())
+        ) + 14
+        port_list.setFixedHeight(min(410, max(185, required)))
 
     SearchManagePage._render_client = patched_render
     _INSTALLED = True
