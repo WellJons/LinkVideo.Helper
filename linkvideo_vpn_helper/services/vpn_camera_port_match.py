@@ -4,7 +4,8 @@ from __future__ import annotations
 
 The B2O search can be fuzzy. A camera is shown beside a VPN port only when
 (1) account ownership is verified by existing exact-login search,
-(2) its B2O detail contains an EXPLICIT matching external/RTSP port,
+(2) its B2O detail or the documented camera-streams-urls endpoint has
+    an EXPLICIT matching RTSP port,
 (3) the port is not claimed by multiple B2O cameras.
 No inferred 554, invented matches, credential output or B2O writes.
 """
@@ -28,6 +29,7 @@ _URL_FIELDS = (
     "rtsp_url", "rtspUrl", "url_rtsp", "rtsp_uri", "rtspUri",
     "rtsp_link", "rtspLink", "camera_rtsp_url", "stream_rtsp_url",
     "main_stream_rtsp_url", "stream_url", "streamUrl",
+    "camera_stream_main", "camera_stream_sub",
 )
 _NESTED = ("rtsp", "connection", "camera", "device", "network",
            "connection_settings", "stream", "main_stream")
@@ -50,6 +52,8 @@ class CameraPortReport:
     unmatched: tuple[int, ...]
     checked_cameras: int
     incomplete: bool = False
+    stream_cameras: int = 0
+    stream_errors: int = 0
 
 
 def account_login(vpn_login: str) -> str:
@@ -101,26 +105,54 @@ def explicit_camera_ports(row: dict) -> set[int]:
     return result
 
 
-def _detail_for_camera(b2o: B2OService, choice, login: str) -> tuple[object, set[int]]:
+def _single_camera_record(payload) -> dict:
+    """Unwrap the verified B2O camera/stream response, without guessing."""
+    if not isinstance(payload, dict):
+        return {}
+    data = payload.get("data", payload)
+    if isinstance(data, list):
+        return data[0] if len(data) == 1 and isinstance(data[0], dict) else {}
+    return data if isinstance(data, dict) else {}
+
+
+def _detail_for_camera(
+    b2o: B2OService, choice, login: str
+) -> tuple[object, set[int], bool, bool]:
+    """Read BOTH camera metadata and its actual B2O RTSP URLs.
+
+    The camera detail endpoint commonly omits the external RTSP port.
+    An existing desktop feature already uses /camera-streams-urls.
+    Never infer port 554 for URLs with no explicit port, or expose RTSP
+    URLs (which may contain embedded credentials) to callers/logs.
+    """
     number, _ = b2o.normalize_camera_id(choice.camera_id, choice.operator_id)
+    token = b2o.token()
     payload = b2o.request_json(
         b2o.CAMERA_URL.format(operator=choice.operator_id, camera=number),
-        b2o.token(), timeout=12,
+        token, timeout=12,
     )
-    if not isinstance(payload, dict):
-        return choice, set()
-    row = payload.get("data", payload)
-    if isinstance(row, list):
-        row = row[0] if len(row) == 1 else {}
-    if not isinstance(row, dict):
-        return choice, set()
-    # A conflicting owner in an individual camera detail invalidates any
-    # earlier lookup hit. Never show an unrelated customer's camera.
+    row = _single_camera_record(payload)
+    if not row:
+        raise ValueError("B2O camera details unavailable")
+    # The inventory search already validated exact customer ownership.
+    # Reject a conflicting owner found in an individual camera detail.
     owners = [str(row[key]).strip() for key in _OWNER_FIELDS
               if isinstance(row.get(key), str) and row[key].strip()]
     if owners and any(owner.casefold() != login.casefold() for owner in owners):
-        return choice, set()
-    return choice, explicit_camera_ports(row)
+        return choice, set(), False, False
+    ports = explicit_camera_ports(row)
+    url = (
+        "https://api.b2o.goodline.info/ords/mobile/vc2/operators/"
+        f"{int(choice.operator_id)}/cameras/{number}/camera-streams-urls"
+    )
+    try:
+        streams = _single_camera_record(b2o.request_json(url, token, timeout=10))
+    except Exception:
+        # A partial response must not be interpreted as a confirmed
+        # absence of any competing camera/port match.
+        return choice, ports, False, True
+    rtsp_ports = explicit_camera_ports(streams)
+    return choice, ports | rtsp_ports, bool(rtsp_ports), False
 
 
 def match_vpn_ports(
@@ -149,14 +181,25 @@ def match_vpn_ports(
     incomplete = len(choices) > max_details
     owned: dict[int, list[CameraPortLink]] = {}
     failed = False
+    stream_cameras = 0
+    stream_errors = 0
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = [pool.submit(detail_reader, b2o, choice, login) for choice in candidates]
         for future in as_completed(futures):
             try:
-                choice, found = future.result()
+                observation = future.result()
+                choice, found = observation[:2]
             except Exception:
                 failed = True
+                stream_errors += 1
                 continue
+            # Legacy injectable readers can return two fields; real B2O
+            # reader also reports stream URL presence and request errors.
+            if len(observation) >= 3 and observation[2]:
+                stream_cameras += 1
+            if len(observation) >= 4 and observation[3]:
+                failed = True
+                stream_errors += 1
             for port in requested.intersection(found):
                 owned.setdefault(port, []).append(CameraPortLink(
                     port, str(choice.camera_id), str(choice.label)[:140], str(choice.country)))
@@ -165,4 +208,4 @@ def match_vpn_ports(
     ambiguous = tuple(sorted(port for port, entries in owned.items() if len(entries) > 1))
     unmatched = tuple(sorted(requested - {row.port for row in links} - set(ambiguous)))
     return CameraPortReport(login, links, ambiguous, unmatched, len(candidates),
-                            failed or incomplete)
+                            failed or incomplete, stream_cameras, stream_errors)
