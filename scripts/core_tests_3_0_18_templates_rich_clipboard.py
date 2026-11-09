@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtWidgets import QApplication
 
@@ -94,7 +95,7 @@ with TemporaryDirectory() as root:
         page.templates_list.item(i)
         for i in range(page.templates_list.count())
         if store.get(page.templates_list.item(i).data(
-            __import__("PySide6").QtCore.Qt.ItemDataRole.UserRole)).title == lengthy
+            Qt.ItemDataRole.UserRole)).title == lengthy
     )
     assert target.sizeHint().height() > 103, target.sizeHint().height()
     page.close()
