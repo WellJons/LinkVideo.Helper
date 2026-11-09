@@ -165,7 +165,26 @@ class B2OService:
                 "rb-agent-test-vcore01.video.goodline.info",
             ],
         },
+        # Opt-in operators reuse the SAME B2O APIs and archive pipeline.
+        # Their camera prefixes were not supplied: numeric IDs remain valid,
+        # and no fictitious vendor prefix is generated.
+        1442: {
+            "country": "Дополнительный", "camera_prefix": "",
+            "cluster": "operator-1442", "archive_servers": [],
+        },
+        621: {
+            "country": "Дополнительный", "camera_prefix": "",
+            "cluster": "provzor", "archive_servers": [],
+        },
     }
+
+    # Two labels lead to the exact same operator 1442. Keep independent UI
+    # toggles, but never pretend their API datasets or privileges differ.
+    EXTRA_CLUSTERS = (
+        ("zdravservice", "Здравсервис", 1442),
+        ("goodline", "Goodline", 1442),
+        ("provzor", "Провзор", 621),
+    )
 
     # Веб-страница/логи reserve-transfers отображают локальные даты в UTC+7.
     # Это НЕ часовой пояс камеры. Сравнение всегда делаем через epoch.
@@ -186,6 +205,25 @@ class B2OService:
 
     def login_name(self) -> str:
         return str(self.settings.value("b2o/login", "", str) or "").strip()
+
+    def extra_cluster_enabled(self, key: str) -> bool:
+        if key not in {entry[0] for entry in self.EXTRA_CLUSTERS}:
+            return False
+        return bool(self.settings.value(f"archive/extra_cluster_enabled/{key}", False, bool))
+
+    def set_extra_cluster_enabled(self, key: str, enabled: bool) -> None:
+        if key not in {entry[0] for entry in self.EXTRA_CLUSTERS}:
+            raise ValueError("Неизвестный кластер B2O")
+        self.settings.setValue(f"archive/extra_cluster_enabled/{key}", bool(enabled))
+
+    def active_extra_clusters(self) -> list[tuple[str, str, int]]:
+        return [entry for entry in self.EXTRA_CLUSTERS if self.extra_cluster_enabled(entry[0])]
+
+    def is_operator_enabled(self, operator_id: int) -> bool:
+        operator_id = int(operator_id)
+        if operator_id in (241, 1721, 1741):
+            return True
+        return any(op == operator_id for _, _, op in self.active_extra_clusters())
 
     def login(self, login: str, password: str) -> str:
         device = str(self.settings.value("b2o/device_id", "", str) or "").strip()
@@ -481,6 +519,8 @@ class B2OService:
 
     def camera(self, operator_id: int, camera_id: str) -> ArchiveCamera:
         operator_id = self.resolve_operator_id(camera_id, operator_id)
+        if not self.is_operator_enabled(operator_id):
+            raise ValueError("Дополнительный кластер выключен в настройках архива.")
         number, label = self.normalize_camera_id(camera_id, operator_id)
         token = self.token()
         if not token:
