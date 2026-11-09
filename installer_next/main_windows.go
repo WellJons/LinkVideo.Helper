@@ -479,7 +479,7 @@ func (w *wizard) createInstallPages() {
     w.pages[pageOptions] = []uintptr{pathLabel, w.installPath, w.desktop, hint}
     // During an upgrade the normal Install action atomically replaces the
     // prior runtime, preserving it for rollback until the new one is verified.
-    // Never offer "Удалить текущую версию" here: it used to switch the entire
+    // Never offer a separate uninstall button here: it used to switch the entire
     // wizard into uninstall mode and never install the downloaded version.
     // Explicit removal is still available through Apps & Features or --uninstall.
 
