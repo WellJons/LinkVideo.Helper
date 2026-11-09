@@ -411,6 +411,34 @@ def _admin_install(staged_path: Path) -> int:
     return 0
 
 
+def _admin_verify() -> int:
+    """Explicit UAC verification for tasks installed by 3.0.21/3.0.22.
+
+    Those versions did not leave a readable receipt, so the unprivileged UI
+    could report 'missing' even after schtasks /Create and /Run succeeded.
+    """
+    if not _is_elevated():
+        return 3
+    try:
+        result = _run_command(
+            ["schtasks.exe", "/Query", "/TN", TASK_NAME], tolerate_failure=True
+        )
+        if result.returncode != 0:
+            return 21
+        interval = DEFAULT_INTERVAL_HOURS
+        try:
+            settings = json.loads(_config_path().read_text(encoding="utf-8"))
+            payload = _unpack_settings(settings)
+            interval = int(payload.get("interval_hours", DEFAULT_INTERVAL_HOURS))
+        except (OSError, ValueError, KeyError, TypeError):
+            # Task existence is independent of access to its backup config.
+            interval = DEFAULT_INTERVAL_HOURS
+        _write_task_receipt(installed=True, interval_hours=interval)
+        return 0
+    except (OSError, subprocess.TimeoutExpired, UnicodeError):
+        return 22
+
+
 def _admin_remove() -> int:
     if not _is_elevated():
         return 3
@@ -521,6 +549,19 @@ def enable_task(staged_file: Path) -> None:
     # Do NOT produce a false installation error in that situation.
 
 
+def verify_task_as_administrator() -> None:
+    result = _elevate("--vpn-background-verify")
+    if result != 0:
+        if result == 21:
+            raise RuntimeError("Администратор не обнаружил задание VPN в планировщике.")
+        if result == 22:
+            raise RuntimeError("Не удалось проверить планировщик Windows с правами администратора.")
+        detail = INSTALL_ERROR_MESSAGES.get(result, f"код {result}")
+        raise RuntimeError(f"Проверка администратора не выполнена: {detail}")
+    if not read_task_receipt().get("installed"):
+        raise RuntimeError("Задание найдено, но обычный пользователь не видит подтверждение регистрации.")
+
+
 def disable_task() -> None:
     result = _elevate("--vpn-background-remove")
     if result != 0:
@@ -599,4 +640,6 @@ def dispatch_command(argv: list[str]) -> int | None:
         return _admin_install(Path(argv[position + 1]))
     if "--vpn-background-remove" in argv:
         return _admin_remove()
+    if "--vpn-background-verify" in argv:
+        return _admin_verify()
     return None
