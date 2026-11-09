@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QCoreApplication, QEvent, QSettings, Qt
 from PySide6.QtWidgets import QApplication, QLabel
 
 from linkvideo_vpn_helper.services.archive_service import ArchiveService
@@ -48,6 +48,7 @@ with TemporaryDirectory() as tmp:
     settings_page.extra_cluster_switches["provzor"].setChecked(True)
     assert all(b2o.extra_cluster_enabled(key) for key, _, _ in b2o.EXTRA_CLUSTERS)
     settings_page.close()
+    settings_page.deleteLater()
 
     assert b2o.valid_operator_id(1442) == 1442
     assert b2o.valid_operator_id(621) == 621
@@ -88,6 +89,7 @@ with TemporaryDirectory() as tmp:
         assert page._operator_id() == 241
         assert page.operator.isEnabled()
         page.close()
+        page.deleteLater()
 
     # Disable one of the aliases: the second operator-1442 alias stays active.
     settings_page = SettingsPage(settings, registry)
@@ -97,6 +99,7 @@ with TemporaryDirectory() as tmp:
     assert not b2o.is_operator_enabled(1442)
     assert b2o.is_operator_enabled(621)
     settings_page.close()
+    settings_page.deleteLater()
 
     store = TemplateStore(Path(tmp) / "templates")
     tid = store.save("Обрыв архива", "Проверьте качество сети и соединение камеры.",
@@ -112,5 +115,8 @@ with TemporaryDirectory() as tmp:
     page._copy()
     assert QApplication.clipboard().text().startswith("Проверьте качество")
     page.close()
+    page.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
 
 print("CORE TESTS 3.0.18 OPT-IN B2O CLUSTERS AND TEMPLATE TILES OK")
