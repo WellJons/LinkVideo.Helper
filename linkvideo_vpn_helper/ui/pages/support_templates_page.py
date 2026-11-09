@@ -42,6 +42,7 @@ class SupportTemplatesPage(QWidget):
         self._removed_image_ids: set[int] = set()
         self._draft_dir = TemporaryDirectory(prefix="lv_reply_images_")
         self._editing = False
+        self._closing = False
         self._build()
         self._refresh()
 
@@ -114,7 +115,8 @@ class SupportTemplatesPage(QWidget):
         self.templates_list.setUniformItemSizes(False)
         self.templates_list.setMinimumHeight(380)
         self.templates_list.currentItemChanged.connect(self._select)
-        self.templates_list.viewport().installEventFilter(self)
+        self._list_viewport = self.templates_list.viewport()
+        self._list_viewport.installEventFilter(self)
         ll.addWidget(self.templates_list, 1)
         self.empty_label = QLabel("Пока нет ответов.\nСоздайте шаблон или импортируйте DOCX.")
         self.empty_label.setObjectName("TinyMuted")
@@ -365,7 +367,9 @@ class SupportTemplatesPage(QWidget):
         """Re-measure every card on resize to prevent cropped text."""
         if not hasattr(self, "templates_list"):
             return
-        width = max(185, self.templates_list.viewport().width() - 54)
+        if self._closing:
+            return
+        width = max(160, self._list_viewport.width() - 96)
         for i in range(self.templates_list.count()):
             item = self.templates_list.item(i)
             tile = self.templates_list.itemWidget(item)
@@ -384,11 +388,17 @@ class SupportTemplatesPage(QWidget):
             item.setSizeHint(QSize(0, max(95, height)))
 
     def eventFilter(self, watched, event):
-        if (hasattr(self, "templates_list")
-                and watched is self.templates_list.viewport()
+        if (not self._closing and watched is getattr(self, "_list_viewport", None)
                 and event.type() == QEvent.Type.Resize):
             QTimer.singleShot(0, self._update_list_row_heights)
         return super().eventFilter(watched, event)
+
+    def closeEvent(self, event):
+        self._closing = True
+        viewport = getattr(self, "_list_viewport", None)
+        if viewport is not None:
+            viewport.removeEventFilter(self)
+        super().closeEvent(event)
 
     def _highlight_selected_tile(self):
         for i in range(self.templates_list.count()):
@@ -443,7 +453,7 @@ class SupportTemplatesPage(QWidget):
         self.view_title.setText(self.title_input.text() or "Новый ответ")
         self.view_category.setText(self.category_input.currentText())
         self.body_preview.setText(self.body_input.toPlainText().strip())
-        QTimer.singleShot(0, self._sync_preview_height)
+        self._sync_preview_height()
 
     def _set_editing(self, editing: bool):
         self._editing = bool(editing)
