@@ -471,7 +471,12 @@ class SettingsPage(QWidget):
         )
 
     def _background_refresh_targets(self):
-        servers = self.registry.hosts()
+        # Standalone UI smoke tests may pass a tiny registry fixture.
+        hosts = getattr(self.registry, "hosts", None)
+        servers = list(hosts()) if callable(hosts) else [
+            item.host for item in self.registry.all()
+            if getattr(item, "enabled", True)
+        ]
         self.bg_targets.setText(
             f"Серверов для синхронизации: {len(servers)}. "
             "Будут использованы все включённые VPN-серверы из списка выше."
