@@ -11,8 +11,8 @@ if str(ROOT) not in sys.path:
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QSettings
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QSettings, QTimer
+from PySide6.QtWidgets import QApplication, QDialog, QPlainTextEdit, QPushButton
 
 from linkvideo_vpn_helper.services.archive_service import ArchiveService
 from linkvideo_vpn_helper.services.archive_download_methods import install_archive_download_methods
@@ -45,10 +45,31 @@ def main() -> None:
             "ffmpeg_no_audio",
         ]
         assert combo.currentData() == "ffmpeg"
+        assert page.archive_command_button.objectName() == "ArchiveManualFFmpegButton"
+
+        def apply_manual():
+            dialog = QApplication.activeModalWidget()
+            assert isinstance(dialog, QDialog)
+            editor = dialog.findChild(QPlainTextEdit, "ArchiveManualFFmpegEditor")
+            assert editor is not None
+            assert "{input}" in editor.toPlainText()
+            assert "{output}" in editor.toPlainText()
+            editor.setPlainText(
+                'ffmpeg -y -nostdin -i "{input}" -c copy "{output}"')
+            save = next(button for button in dialog.findChildren(QPushButton)
+                        if button.text() == "Сохранить")
+            save.click()
+
+        QTimer.singleShot(0, apply_manual)
+        page.archive_command_button.click()
+        assert page._lv_archive_manual_command
+        assert "изменена" in page.archive_command_button.text()
+        assert page.service._lv_archive_manual_command == page._lv_archive_manual_command
 
         combo.setCurrentIndex(1)
         app.processEvents()
         assert settings.value("archive/download_method", "", str) == "curl"
+        assert not page._lv_archive_manual_command, "choosing standard method resets manual mode"
         page.deleteLater()
         app.processEvents()
 
