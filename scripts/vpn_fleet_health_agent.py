@@ -198,6 +198,9 @@ def main(argv=None):
             except Exception as exc:
                 logger.error("Google Sheets sync failed: %s", type(exc).__name__)
         if args.once:
+            if args.dry_run and failed:
+                logger.error("Read-only preflight failed: %d server(s) unavailable", failed)
+                return 2
             break
         while not STOP and time.monotonic() - start < config["interval_seconds"]:
             time.sleep(min(1.0, config["interval_seconds"] - (time.monotonic() - start)))
