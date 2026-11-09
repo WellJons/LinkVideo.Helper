@@ -970,7 +970,7 @@ class SearchManagePage(QWidget):
             ("Удалён", record.deleted_at or "—"),
             ("Remote Address", record.remote_address or "—"),
             ("Profile", record.profile or "—"),
-            ("NAT / Порты", record.ports or "—"),
+            ("Порты", record.ports or "—"),
             ("Пароль в резервной базе", "Сохранён" if record.password_saved else "НЕ СОХРАНЁН"),
         )
         for index, (label_text, value_text) in enumerate(values):
@@ -1158,6 +1158,7 @@ class SearchManagePage(QWidget):
             ("Сервер", c.server),
             ("Логин", c.login),
             ("VPN-адрес", c.remote_address or "—"),
+            ("IP источника туннеля", c.tunnel_source_ip if c.is_online and c.tunnel_source_ip else "—"),
         ):
             line = QHBoxLayout()
             line.setSpacing(8)
@@ -1172,30 +1173,18 @@ class SearchManagePage(QWidget):
             line.addWidget(detail, 1)
             dl.addLayout(line)
 
-        # Sensitive client credentials are concealed until the operator
-        # explicitly requests visibility; copying VPN configuration still works.
+        # Show the client PPP password directly to the authenticated operator.
+        # This is not the Helper login password and is already copyable as VPN config.
         password_row = QHBoxLayout()
         password_row.setSpacing(6)
         password_label = QLabel("Пароль:")
         password_label.setObjectName("TinyMuted")
         password_view = QLineEdit(c.password)
         password_view.setReadOnly(True)
-        password_view.setEchoMode(QLineEdit.EchoMode.Password)
-        password_view.setToolTip("Пароль скрыт. Для просмотра нажмите «Показать».")
-        password_toggle = QPushButton("Показать")
-        password_toggle.setCheckable(True)
-        password_toggle.setProperty("role", "soft")
-        password_toggle.toggled.connect(
-            lambda visible: (
-                password_view.setEchoMode(
-                    QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
-                ),
-                password_toggle.setText("Скрыть" if visible else "Показать")
-            )
-        )
+        password_view.setEchoMode(QLineEdit.EchoMode.Normal)
+        password_view.setToolTip("Пароль VPN-клиента. Можно выделить и скопировать.")
         password_row.addWidget(password_label)
         password_row.addWidget(password_view, 1)
-        password_row.addWidget(password_toggle)
         dl.addLayout(password_row)
 
         vpn = Card()
@@ -1329,7 +1318,7 @@ class SearchManagePage(QWidget):
                     self.port_list.setCurrentRow(i)
                     break
         else:
-            item = QListWidgetItem("NAT-порты не найдены")
+            item = QListWidgetItem("Порты не найдены")
             item.setFlags(Qt.ItemFlag.NoItemFlags)
             item.setSizeHint(QSize(0, 42))
             self.port_list.addItem(item)
@@ -1366,7 +1355,7 @@ class SearchManagePage(QWidget):
         grid.addWidget(refresh, 1, 1)
         grid.addWidget(monitor, 2, 0, 1, 2)
 
-        ports_title = QLabel("Управление NAT-портами")
+        ports_title = QLabel("Управление портами")
         ports_title.setObjectName("CardTitle")
         grid.addWidget(ports_title, 3, 0, 1, 2)
         self.add_count = CounterControl(1, 1, 14)
