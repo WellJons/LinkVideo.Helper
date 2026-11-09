@@ -12,7 +12,7 @@ from PySide6.QtCore import Qt, QSize, QRect
 from PySide6.QtGui import QIcon, QImageReader, QPixmap, QFontMetrics
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QListView, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
+    QAbstractItemView, QListView, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
     QScrollArea, QSplitter, QTextEdit, QVBoxLayout, QWidget,
 )
 
@@ -116,6 +116,11 @@ class SupportTemplatesPage(QWidget):
         self.templates_list.setWordWrap(True)
         self.templates_list.setSpacing(8)
         self.templates_list.setUniformItemSizes(False)
+        # QListWidget defaults to ScrollPerItem: one wheel tick can leap
+        # over a tall reply card or jump to the end on some mouse drivers.
+        self.templates_list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.templates_list.verticalScrollBar().setSingleStep(28)
+        self.templates_list.setProperty("lvWheelBoundaryLock", True)
         self.templates_list.setMinimumHeight(380)
         self.templates_list.currentItemChanged.connect(self._select)
 
@@ -416,6 +421,7 @@ class SupportTemplatesPage(QWidget):
         self._categories()
         records = self.store.list(
             self.search.text(), category or "", self.favorites_only.isChecked())
+        scroll_value = self.templates_list.verticalScrollBar().value()
         self.templates_list.blockSignals(True)
         self.templates_list.clear()
         for template in records:
@@ -429,6 +435,7 @@ class SupportTemplatesPage(QWidget):
                 self.templates_list.setCurrentItem(item)
         self.templates_list.blockSignals(False)
         self._update_list_row_heights()
+        self.templates_list.verticalScrollBar().setValue(scroll_value)
         self._highlight_selected_tile()
         self.library_count.setText(f"Найдено: {len(records)} / {len(self.store.list())}")
         self.empty_label.setVisible(not records)
