@@ -167,7 +167,8 @@ assert 'password_view = QLineEdit(c.password)' not in search_ui
 assert 'info_l.addLayout(info_nav)' not in search_ui
 assert '("Камеры B2O по портам")' not in search_ui
 assert 'ID камеры B2O: ' in search_ui
-assert "pl.addLayout(camera_lookup)" in search_ui
+assert "pl.addLayout(camera_lookup)" not in search_ui
+assert 'QPushButton("Сверить B2O")' not in search_ui
 assert "pl.addWidget(camera_status)" in search_ui
 assert 'Трафик порта:' in search_ui
 assert "self._start_camera_port_check()" in search_ui
