@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt, QUrl, Signal, QTimer
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QGridLayout, QHeaderView, QHBoxLayout, QLabel, QPushButton, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget, QAbstractItemView,
+    QTableWidgetItem, QVBoxLayout, QWidget, QAbstractItemView, QSizePolicy,
 )
 
 from linkvideo_vpn_helper.services.errors import classify_exception
@@ -26,15 +26,28 @@ from linkvideo_vpn_helper.ui.dialogs import ConfirmDialog
 
 
 class ServerTableWidget(QTableWidget):
-    """Таблица со своей прокруткой, не передающая колесо внешней странице."""
+    """All server rows are visible; wheel scrolls the OUTER page only."""
+
     def wheelEvent(self, event):
-        bar = self.verticalScrollBar()
-        delta = event.angleDelta().y()
-        if delta:
-            steps = max(1, abs(delta) // 120)
-            direction = -1 if delta > 0 else 1
-            amount = max(36, bar.singleStep() * 3) * steps
-            bar.setValue(bar.value() + direction * amount)
+        outer = getattr(self, "outer_scroll", None)
+        if outer is None:
+            event.ignore()
+            return
+        bar = outer.verticalScrollBar()
+        pixel_delta = event.pixelDelta().y()
+        angle_delta = event.angleDelta().y()
+        if pixel_delta:
+            amount = pixel_delta
+        elif angle_delta:
+            amount = int((angle_delta / 120.0) * max(36, bar.singleStep() * 3))
+        else:
+            event.ignore()
+            return
+        destination = max(bar.minimum(), min(bar.maximum(), bar.value() - amount))
+        if destination == bar.value():
+            event.ignore()
+            return
+        bar.setValue(destination)
         event.accept()
 
 
@@ -110,9 +123,10 @@ class VPNServersPage(QWidget):
         metrics.setSpacing(10)
         self.m_available = MetricCard("Доступно", "—")
         self.m_active = MetricCard("Активные L2TP", "—")
+        self.m_online_ports = MetricCard("Порты активных учёток", "—")
         self.m_installed = MetricCard("LV установлено", "—")
         self.m_quarantine = MetricCard("Карантин / архив", "—")
-        for item in (self.m_available, self.m_active, self.m_installed, self.m_quarantine):
+        for item in (self.m_available, self.m_active, self.m_online_ports, self.m_installed, self.m_quarantine):
             metrics.addWidget(item, 1)
         root.addLayout(metrics)
 
@@ -210,8 +224,9 @@ class VPNServersPage(QWidget):
         tl.addLayout(table_head)
 
         self.table = ServerTableWidget(0, 8)
+        self.table.outer_scroll = self.page_scroll
         self.table.setHorizontalHeaderLabels([
-            "VPN-сервер", "Страна", "Активные L2TP", "Учётки", "CPU", "RAM", "NAT", "LV-автоматика"
+            "VPN-сервер", "Страна", "Активные L2TP", "Учётки", "CPU", "RAM", "Порты онлайн / всего", "LV-автоматика"
         ])
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -223,11 +238,12 @@ class VPNServersPage(QWidget):
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for i in range(1, 8):
             hh.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
-        # Серверы прокручиваются внутри фиксированной области. Колесо мыши
-        # над таблицей больше не двигает всю страницу VPN-серверов.
-        self.table.setFixedHeight(360)
+        # Show ALL VPN servers in the table without a nested vertical scroll.
+        # The single wheel / scrollbar belongs to the page (PageScroll).
+        self.table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.table.setMinimumHeight(80)
         tl.addWidget(self.table)
         root.addWidget(table_card)
 
@@ -329,9 +345,11 @@ class VPNServersPage(QWidget):
         rows = sorted(rows, key=lambda item: order.get(item[0], 9999))
         previous = self._selected_host
         self.table.setRowCount(len(rows))
+        self._resize_servers_table()
         self._automation_by_host.clear()
         self._stats_by_host.clear()
         active_total = 0
+        online_ports_total = 0
         ok_count = 0
         quarantine_total = 0
         installed = 0
@@ -343,6 +361,7 @@ class VPNServersPage(QWidget):
             else:
                 active = int(stat.clients_online)
                 active_total += active
+                online_ports_total += int(stat.ports_active)
                 ok_count += 1
                 if isinstance(auto, AutomationStatus):
                     self._automation_by_host[host] = auto
@@ -357,7 +376,7 @@ class VPNServersPage(QWidget):
                     host, country, f"{active} / {VPN_L2TP_HARD_LIMIT}", str(stat.clients_total),
                     "—" if stat.cpu_load is None else f"{stat.cpu_load}%",
                     "—" if stat.memory_usage_percent is None else f"{stat.memory_usage_percent}%",
-                    str(stat.ports_total), auto_text,
+                    f"{stat.ports_active} / {stat.ports_total}", auto_text,
                 ]
             for c, value in enumerate(values):
                 item = QTableWidgetItem(value)
@@ -366,10 +385,16 @@ class VPNServersPage(QWidget):
                     item.setTextAlignment(int(Qt.AlignmentFlag.AlignCenter))
                 if error and c == 0:
                     item.setToolTip(error)
+                if c == 6:
+                    item.setToolTip(
+                        "Онлайн: включённые TCP-порты с однозначной связью с активной L2TP-учёткой. "
+                        "Это НЕ проверка камеры или доступности TCP/RTSP."
+                    )
                 self.table.setItem(r, c, item)
 
         self.m_available.setValue(f"{ok_count} / {len(rows)}")
         self.m_active.setValue(str(active_total))
+        self.m_online_ports.setValue(str(online_ports_total))
         self.m_installed.setValue(f"{installed} / {ok_count}")
         self.m_quarantine.setValue(str(quarantine_total))
         self.summary.setText(f"Обновлено серверов: {ok_count}/{len(rows)}")
@@ -393,6 +418,17 @@ class VPNServersPage(QWidget):
         elif not self._refresh_silent_mode:
             self.task.show(); self.task.done("VPN-серверы обновлены", f"Получена статистика {ok_count} серверов.")
         self._refresh_silent_mode = False
+
+    def _resize_servers_table(self):
+        """Fit all rows, including header and frame, even for custom row heights."""
+        header = self.table.horizontalHeader().height()
+        if header < 20:
+            header = self.table.horizontalHeader().sizeHint().height()
+        body = sum(
+            self.table.rowHeight(i) for i in range(self.table.rowCount())
+        )
+        # Qt consumes two frame edges plus a small viewport margin.
+        self.table.setFixedHeight(max(80, header + body + 8))
 
     def _table_selection_changed(self):
         rows = self.table.selectionModel().selectedRows() if self.table.selectionModel() else []
@@ -435,6 +471,15 @@ class VPNServersPage(QWidget):
             top.addWidget(StatusPill(state, kind))
         top.addWidget(StatusPill(auto.state_text if auto else "LV: нет данных", "success" if auto and auto.installed and not auto.paused else "neutral"))
         self.detail_layout.addLayout(top)
+        if stat is not None:
+            online_note = QLabel(
+                f"Порты учёток с активным VPN: {stat.ports_active} из {stat.ports_total}. "
+                "Оценивается по текущим L2TP-сессиям и включённым правилам. "
+                "Наличие связи с камерой не проверяется."
+            )
+            online_note.setObjectName("TinyMuted")
+            online_note.setWordWrap(True)
+            self.detail_layout.addWidget(online_note)
 
         counts = QHBoxLayout()
         counts.setSpacing(8)

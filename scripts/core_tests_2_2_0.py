@@ -35,8 +35,8 @@ for rel in (
     txt = (ROOT / 'linkvideo_vpn_helper/ui/pages' / rel).read_text(encoding='utf-8')
     assert 'build_page_scaffold' in txt, rel
 
-# VPN infrastructure navigation is deliberately at the bottom of the work list.
-assert main.index('(\"inactive\", \"⌛\", \"VPN-клиенты\"') < main.index('(\"vpn_servers\", \"▦\", \"VPN-серверы\"')
+# Both VPN sections belong to infrastructure, with servers followed by clients.
+assert main.index('(\"vpn_servers\", \"▦\", \"VPN-серверы\"') < main.index('(\"inactive\", \"⌛\", \"VPN-клиенты\"')
 
 # Search/client page must update itself after mutations and surface newly created ports.
 for token in (

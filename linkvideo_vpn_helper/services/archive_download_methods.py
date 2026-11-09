@@ -17,6 +17,7 @@ it, and reuses the cached executable afterwards.
 import hashlib
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -72,6 +73,132 @@ def ffmpeg_audio_args(ffmpeg: str, url: str, output: Path, *, headers: str = "")
         args.extend(["-rw_timeout", "30000000"])
     args.extend(["-i", url, "-c", "copy", str(output)])
     return args
+
+
+_PLAYER_HEADERS = (
+    "Origin: https://test-desktop-player-b2o.elct.ru\r\n"
+    "Referer: https://test-desktop-player-b2o.elct.ru/\r\n"
+    "User-Agent: LinkVideo.Helper/3.0\r\n"
+)
+
+# Operator-editable command. Input and output are supplied by Helper, never
+# by shell interpolation, so paths with spaces and signed URLs remain intact.
+MANUAL_FFMPEG_TEMPLATE = (
+    'ffmpeg -y -nostdin -hide_banner -loglevel error -progress pipe:1 '
+    '-rw_timeout 30000000 -i "{input}" -c copy "{output}"'
+)
+MANUAL_FFMPEG_NO_AUDIO_TEMPLATE = (
+    'ffmpeg -y -nostdin -hide_banner -loglevel error -progress pipe:1 '
+    '-rw_timeout 30000000 -i "{input}" -c:v copy -an "{output}"'
+)
+
+
+def _split_manual_command(text: str) -> list[str]:
+    """Parse text as argv, not shell syntax (including native Windows quotes)."""
+    if os.name != "nt":
+        return shlex.split(text)
+    import ctypes
+    from ctypes import wintypes
+    shell = ctypes.windll.shell32
+    shell.CommandLineToArgvW.argtypes = (wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int))
+    shell.CommandLineToArgvW.restype = ctypes.POINTER(ctypes.c_wchar_p)
+    count = ctypes.c_int(0)
+    ptr = shell.CommandLineToArgvW(text, ctypes.byref(count))
+    if not ptr:
+        raise ValueError("Не удалось разобрать команду FFmpeg.")
+    try:
+        return [ptr[i] for i in range(count.value)]
+    finally:
+        ctypes.windll.kernel32.LocalFree(ctypes.cast(ptr, ctypes.c_void_p))
+
+
+def validate_manual_ffmpeg_command(text: str) -> list[str]:
+    """Keep the executable, input and staged output under Helper control."""
+    if not isinstance(text, str) or len(text) > 4000:
+        raise ValueError("Команда FFmpeg слишком длинная.")
+    try:
+        args = _split_manual_command(text.strip())
+    except (ValueError, OSError) as exc:
+        raise ValueError("Неверный формат кавычек команды FFmpeg.") from exc
+    if not args or Path(args[0]).name.lower() not in {"ffmpeg", "ffmpeg.exe"}:
+        raise ValueError("Команда должна начинаться с ffmpeg.")
+    if args.count("-i") != 1 or args[args.index("-i") + 1:][:1] != ["{input}"]:
+        raise ValueError('Укажите один источник: -i "{input}".')
+    if args.count("{input}") != 1 or args.count("{output}") != 1 or args[-1] != "{output}":
+        raise ValueError('Используйте "{input}" и "{output}" как отдельные аргументы.')
+    if any(("{input}" in x and x != "{input}") or
+           ("{output}" in x and x != "{output}") for x in args):
+        raise ValueError("Переменные {input} и {output} нельзя объединять с другим текстом.")
+    return args
+
+
+def ffmpeg_manual_args(ffmpeg: str, url: str, output: Path, template: str,
+                       *, headers: str = _PLAYER_HEADERS) -> list[str]:
+    args = validate_manual_ffmpeg_command(template)
+    args = [str(ffmpeg)] + args[1:]
+    args = [str(url) if value == "{input}" else str(output) if value == "{output}"
+            else value for value in args]
+    input_index = args.index("-i")
+    if headers and str(url).lower().startswith(("http://", "https://")) and "-headers" not in args:
+        args[input_index:input_index] = ["-headers", headers]
+        input_index += 2
+    if "-progress" not in args:
+        args[input_index:input_index] = ["-progress", "pipe:1"]
+    return args
+
+
+def _ffmpeg_transport_args(self, ffmpeg: str, url: str, output: Path,
+                           *, no_audio: bool = False,
+                           transcode_audio: bool = False) -> list[str]:
+    manual = str(getattr(self, "_lv_archive_manual_command", "") or "").strip()
+    if manual:
+        return ffmpeg_manual_args(ffmpeg, url, output, manual)
+    builder = ffmpeg_no_audio_args if no_audio else ffmpeg_audio_args
+    args = builder(ffmpeg, url, output, headers=_PLAYER_HEADERS)
+    if transcode_audio and not no_audio:
+        # Some DVR cameras use G.711/PCM or other audio that an MP4
+        # container cannot stream-copy. On retry preserve video copy and
+        # convert only audio to AAC instead of silently dropping sound.
+        index = args.index("-c")
+        args[index:index + 2] = ["-c:v", "copy", "-c:a", "aac", "-b:a", "128k"]
+    return args
+
+
+def _safe_hls_error(text: str) -> str:
+    """FFmpeg may echo signed playlist URLs; never forward tokens to the UI."""
+    line = next((item.strip() for item in reversed(str(text or "").splitlines())
+                 if item.strip()), "FFmpeg не смог обработать HLS")
+    line = re.sub(r'https?://[^\s"<>]+', "[HLS-URL]", line, flags=re.I)
+    line = re.sub(r"(?i)(wmsAuthSign|token|signature|auth)=([^&\s]+)",
+                  r"\1=[скрыто]", line)
+    return line[:350]
+
+
+def _ffmpeg_hls_attempts(cmd_factory, target: Path, *,
+                         base_done: float, item_duration: float, total: float,
+                         progress=None, cancel_event=None, retry_count: int = 2):
+    """Retry transient HLS transport failures without keeping corrupt output."""
+    last_text = ""
+    for attempt in range(retry_count):
+        _check_cancel(cancel_event)
+        target.unlink(missing_ok=True)
+        cmd = cmd_factory(attempt)
+        try:
+            code, text = _run_ffmpeg_progress(
+                cmd, base_done=base_done, item_duration=item_duration, total=total,
+                progress=progress, cancel_event=cancel_event)
+        except subprocess.TimeoutExpired:
+            # The process guard already terminated FFmpeg. A stale HLS socket
+            # should trigger the same bounded retry as HTTP 404/403.
+            code, text = 124, "Превышено время ожидания HLS-сервера"
+        if code == 0 and _is_probable_mp4(target):
+            return True, ""
+        last_text = _safe_hls_error(text)
+        if attempt + 1 < retry_count and progress:
+            progress({"type": "stage", "title": "Повторяю получение HLS",
+                      "detail": f"Попытка {attempt + 2}/{retry_count} · " + last_text})
+    target.unlink(missing_ok=True)
+    return False, last_text
 
 
 def _cancelled(cancel_event) -> bool:
@@ -425,11 +552,6 @@ def _download_with_ffmpeg_audio(self, discovery, output: Path, progress=None, ca
         cancel_event,
     )
     total = max(1.0, float(discovery.covered_duration or discovery.requested_duration or 1.0))
-    header_value = (
-        "Origin: https://test-desktop-player-b2o.elct.ru\r\n"
-        "Referer: https://test-desktop-player-b2o.elct.ru/\r\n"
-        "User-Agent: LinkVideo.Helper/3.0\r\n"
-    )
     # Do not create anything in the user's destination directory until FFmpeg
     # has been found/downloaded and all local preconditions are ready.  A failed
     # first-use FFmpeg setup must not leave an empty .download.mp4 behind.
@@ -441,18 +563,30 @@ def _download_with_ffmpeg_audio(self, discovery, output: Path, progress=None, ca
         ):
             if progress:
                 progress({"type": "stage", "title": "Скачиваю через FFmpeg", "detail": "Плейлист плеера · со звуком"})
-            cmd = ffmpeg_audio_args(ffmpeg, str(discovery.hls_fallback_url), staged_output, headers=header_value)
-            code, text = _run_ffmpeg_progress(
-                cmd,
-                base_done=0.0,
-                item_duration=total,
-                total=total,
-                progress=progress,
-                cancel_event=cancel_event,
-            )
-            if code != 0 or not staged_output.exists() or staged_output.stat().st_size <= 0:
-                reason = (text or "").strip().splitlines()
-                detail = reason[-1] if reason else "FFmpeg не получил архив со звуком"
+            def command_for_attempt(attempt: int):
+                url = str(discovery.hls_fallback_url)
+                if attempt:
+                    # Long-running searches sometimes leave an expiring signed
+                    # HLS URL. Re-read the documented player playlist once.
+                    try:
+                        fresh, _ = self._probe_hls_host(
+                            discovery.hls_fallback_host or discovery.camera.server,
+                            discovery.camera, discovery.requested_start,
+                            discovery.requested_end, 8)
+                        if fresh and fresh.get("url"):
+                            url = str(fresh["url"])
+                    except Exception:
+                        # Keep the original signed URL as a bounded fallback;
+                        # never expose it in diagnostics or event logs.
+                        url = str(discovery.hls_fallback_url)
+                return _ffmpeg_transport_args(
+                    self, ffmpeg, url, staged_output, transcode_audio=bool(attempt))
+
+            success, detail = _ffmpeg_hls_attempts(
+                command_for_attempt, staged_output,
+                base_done=0.0, item_duration=total, total=total,
+                progress=progress, cancel_event=cancel_event)
+            if not success:
                 raise RuntimeError(detail + ". Попробуйте метод «Без звука».")
             _commit_staged_output(staged_output, output)
             if progress:
@@ -482,21 +616,18 @@ def _download_with_ffmpeg_audio(self, discovery, output: Path, progress=None, ca
                             "detail": f"Участок {idx}/{len(slices)} · {sl.host}",
                         }
                     )
-                code, text = _run_ffmpeg_progress(
-                    ffmpeg_audio_args(ffmpeg, url, target),
-                    base_done=completed,
-                    item_duration=sl.duration,
-                    total=total,
-                    progress=progress,
-                    cancel_event=cancel_event,
+                success, detail = _ffmpeg_hls_attempts(
+                    lambda attempt: _ffmpeg_transport_args(
+                        self, ffmpeg, url, target, transcode_audio=bool(attempt)),
+                    target, base_done=completed, item_duration=sl.duration,
+                    total=total, progress=progress, cancel_event=cancel_event,
                 )
-                if code == 0 and target.exists() and target.stat().st_size > 0:
+                if success:
                     parts.append(target)
                     downloaded.append(sl)
                 else:
                     failed.append(sl)
-                    reason = (text or "").strip().splitlines()
-                    errors.append(f"{sl.host}: {reason[-1] if reason else 'FFmpeg не получил участок'}")
+                    errors.append(f"{sl.host}: {detail or 'FFmpeg не получил участок'}")
                     target.unlink(missing_ok=True)
                 completed += sl.duration
 
@@ -527,11 +658,6 @@ def _download_no_audio(self, discovery, output: Path, progress=None, cancel_even
         cancel_event,
     )
     total = max(1.0, float(discovery.covered_duration or discovery.requested_duration or 1.0))
-    header_value = (
-        "Origin: https://test-desktop-player-b2o.elct.ru\r\n"
-        "Referer: https://test-desktop-player-b2o.elct.ru/\r\n"
-        "User-Agent: LinkVideo.Helper/3.0\r\n"
-    )
     staged_output = _create_staged_output(output)
 
     try:
@@ -540,18 +666,27 @@ def _download_no_audio(self, discovery, output: Path, progress=None, cancel_even
         ):
             if progress:
                 progress({"type": "stage", "title": "Скачиваю без звука", "detail": "Плейлист плеера · аудио отключено"})
-            cmd = ffmpeg_no_audio_args(ffmpeg, str(discovery.hls_fallback_url), staged_output, headers=header_value)
-            code, text = _run_ffmpeg_progress(
-                cmd,
-                base_done=0.0,
-                item_duration=total,
-                total=total,
-                progress=progress,
-                cancel_event=cancel_event,
-            )
-            if code != 0 or not staged_output.exists() or staged_output.stat().st_size <= 0:
-                reason = (text or "").strip().splitlines()
-                raise RuntimeError(reason[-1] if reason else "FFmpeg не получил архив без аудио")
+            def command_for_attempt(attempt: int):
+                url = str(discovery.hls_fallback_url)
+                if attempt:
+                    try:
+                        fresh, _ = self._probe_hls_host(
+                            discovery.hls_fallback_host or discovery.camera.server,
+                            discovery.camera, discovery.requested_start,
+                            discovery.requested_end, 8)
+                        if fresh and fresh.get("url"):
+                            url = str(fresh["url"])
+                    except Exception:
+                        url = str(discovery.hls_fallback_url)
+                return _ffmpeg_transport_args(
+                    self, ffmpeg, url, staged_output, no_audio=True)
+
+            success, detail = _ffmpeg_hls_attempts(
+                command_for_attempt, staged_output,
+                base_done=0.0, item_duration=total, total=total,
+                progress=progress, cancel_event=cancel_event)
+            if not success:
+                raise RuntimeError(detail or "FFmpeg не получил архив без аудио")
             _commit_staged_output(staged_output, output)
             if progress:
                 progress({"type": "progress", "value": 100, "done": total, "total": total})
@@ -580,22 +715,18 @@ def _download_no_audio(self, discovery, output: Path, progress=None, cancel_even
                             "detail": f"Участок {idx}/{len(slices)} · {sl.host}",
                         }
                     )
-                cmd = ffmpeg_no_audio_args(ffmpeg, url, target)
-                code, text = _run_ffmpeg_progress(
-                    cmd,
-                    base_done=completed,
-                    item_duration=sl.duration,
-                    total=total,
-                    progress=progress,
-                    cancel_event=cancel_event,
+                success, detail = _ffmpeg_hls_attempts(
+                    lambda _attempt: _ffmpeg_transport_args(
+                        self, ffmpeg, url, target, no_audio=True),
+                    target, base_done=completed, item_duration=sl.duration,
+                    total=total, progress=progress, cancel_event=cancel_event,
                 )
-                if code == 0 and target.exists() and target.stat().st_size > 0:
+                if success:
                     parts.append(target)
                     downloaded.append(sl)
                 else:
                     failed.append(sl)
-                    reason = (text or "").strip().splitlines()
-                    errors.append(f"{sl.host}: {reason[-1] if reason else 'FFmpeg не получил участок'}")
+                    errors.append(f"{sl.host}: {detail or 'FFmpeg не получил участок'}")
                     target.unlink(missing_ok=True)
                 completed += sl.duration
 
@@ -738,13 +869,174 @@ def install_archive_download_methods() -> None:
     if _INSTALLED:
         return
 
-    from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import (
+        QComboBox, QDialog, QHBoxLayout, QLabel, QMessageBox,
+        QPlainTextEdit, QPushButton, QVBoxLayout,
+    )
     from linkvideo_vpn_helper.ui.pages.archive_download_page import ArchiveDownloadPage
 
     original_build = ArchiveDownloadPage._build
     original_page_download = ArchiveDownloadPage._download
     original_page_update = ArchiveDownloadPage._on_download_update
     original_page_cancel = ArchiveDownloadPage.cancel_current_action
+
+    def _open_manual_ffmpeg_dialog(page):
+        from PySide6.QtGui import QFont
+        from linkvideo_vpn_helper.theme import colors
+
+        dialog = QDialog(page)
+        dialog.setProperty("helperModal", True)
+        dialog.setWindowTitle("Настройка FFmpeg · HLS")
+        dialog.resize(880, 440)
+        dialog.setMinimumSize(680, 390)
+        content = QVBoxLayout(dialog)
+        content.setContentsMargins(22, 20, 22, 20)
+        content.setSpacing(12)
+
+        heading = QLabel("Ручная команда FFmpeg")
+        heading.setObjectName("SectionTitle")
+        content.addWidget(heading)
+
+        explanation = QLabel(
+            "Задайте параметры обработки HLS-архива. "
+            "Адрес плейлиста и путь сохранения подставляются автоматически — "
+            "вставлять реальную ссылку или токен не требуется."
+        )
+        explanation.setObjectName("Muted")
+        explanation.setWordWrap(True)
+        content.addWidget(explanation)
+
+        preset_row = QHBoxLayout()
+        preset_row.setSpacing(8)
+        preset_title = QLabel("БЫСТРЫЕ НАСТРОЙКИ")
+        preset_title.setObjectName("TinyMuted")
+        preset_row.addWidget(preset_title)
+        preset_row.addStretch(1)
+        with_audio = QPushButton("С сохранением звука")
+        no_audio = QPushButton("Без звука")
+        with_audio.setProperty("role", "soft")
+        no_audio.setProperty("role", "soft")
+        preset_row.addWidget(with_audio)
+        preset_row.addWidget(no_audio)
+        content.addLayout(preset_row)
+
+        code_label = QLabel("Команда запуска")
+        code_label.setObjectName("CardTitle")
+        content.addWidget(code_label)
+
+        edit = QPlainTextEdit(dialog)
+        edit.setObjectName("ArchiveManualFFmpegEditor")
+        edit.setFont(QFont("Consolas", 10))
+        edit.setMinimumHeight(106)
+        edit.setMaximumHeight(156)
+        edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        palette = colors(str(page.settings.value(
+            "ui/theme_v2", "linkvideo_2026", str) or "linkvideo_2026"))
+        edit.setStyleSheet(
+            "QPlainTextEdit {"
+            f"background: {palette['panel']}; color: {palette['text']};"
+            f"border: 1px solid {palette['border']}; border-radius: 10px;"
+            "padding: 12px; selection-background-color: "
+            f"{palette['accent']};"
+            "}"
+        )
+        method = str(page.archive_method_combo.currentData() or "ffmpeg")
+        default = (MANUAL_FFMPEG_NO_AUDIO_TEMPLATE if method == "ffmpeg_no_audio"
+                   else MANUAL_FFMPEG_TEMPLATE)
+        saved = str(page.settings.value("archive/manual_ffmpeg_template", default, str)
+                    or default)
+        edit.setPlainText(str(getattr(page, "_lv_archive_manual_command", "")
+                              or saved))
+        content.addWidget(edit, 1)
+        with_audio.clicked.connect(lambda: edit.setPlainText(MANUAL_FFMPEG_TEMPLATE))
+        no_audio.clicked.connect(lambda: edit.setPlainText(MANUAL_FFMPEG_NO_AUDIO_TEMPLATE))
+
+        placeholders = QLabel(
+            '{input} — ссылка на HLS-плейлист   ·   {output} — временный MP4'
+        )
+        placeholders.setObjectName("TinyMuted")
+        content.addWidget(placeholders)
+
+        status = QLabel()
+        status.setObjectName("TinyMuted")
+        status.setWordWrap(True)
+        status.setMinimumHeight(22)
+        content.addWidget(status)
+
+        note = QLabel(
+            "Команда запускается напрямую, без оболочки Windows. HTTP-заголовки "
+            "плеера добавляются автоматически. Секретные ссылки не сохраняются."
+        )
+        note.setObjectName("TinyMuted")
+        note.setWordWrap(True)
+        content.addWidget(note)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        reset = QPushButton("Сбросить")
+        cancel = QPushButton("Отмена")
+        save = QPushButton("Сохранить")
+        run = QPushButton("Сохранить и скачать")
+        run.setProperty("role", "primary")
+        actions.addWidget(reset)
+        actions.addStretch(1)
+        actions.addWidget(cancel)
+        actions.addWidget(save)
+        actions.addWidget(run)
+        content.addLayout(actions)
+
+        def update_validation():
+            try:
+                validate_manual_ffmpeg_command(edit.toPlainText().strip())
+            except ValueError as exc:
+                status.setText("⚠ " + str(exc))
+                status.setStyleSheet(f"color: {palette['danger']};")
+                save.setEnabled(False)
+                run.setEnabled(False)
+                return
+            status.setText("✓ Команда корректна, можно сохранить.")
+            status.setStyleSheet(f"color: {palette['success']};")
+            save.setEnabled(True)
+            downloadable = bool(
+                page.discovery and page.discovery.has_downloadable_archive)
+            run.setEnabled(downloadable and getattr(page, "_cancel_event", None) is None)
+            run.setToolTip(
+                "Сначала найдите архив за нужный период" if not downloadable
+                else "Начать загрузку с выбранной командой")
+
+        edit.textChanged.connect(update_validation)
+        reset.clicked.connect(lambda: edit.setPlainText(default))
+        cancel.clicked.connect(dialog.reject)
+
+        def apply_command(download: bool = False):
+            try:
+                template = edit.toPlainText().strip()
+                validate_manual_ffmpeg_command(template)
+                if download and not (page.discovery and page.discovery.has_downloadable_archive):
+                    raise ValueError("Сначала найдите архив за выбранный период.")
+                if getattr(page, "_cancel_event", None) is not None:
+                    raise ValueError("Дождитесь завершения текущей операции.")
+            except ValueError as exc:
+                status.setText("⚠ " + str(exc))
+                status.setStyleSheet(f"color: {palette['danger']};")
+                return
+            page.settings.setValue("archive/manual_ffmpeg_template", template)
+            # Method selection clears old custom state, then restores this one.
+            if page.archive_method_combo.currentData() != "ffmpeg":
+                index = page.archive_method_combo.findData("ffmpeg")
+                page.archive_method_combo.setCurrentIndex(index)
+            page._lv_archive_manual_command = template
+            page.service._lv_archive_manual_command = template
+            page.archive_command_button.setText("✎ Команда FFmpeg · изменена")
+            dialog.accept()
+            if download:
+                QTimer.singleShot(0, page._download)
+
+        save.clicked.connect(lambda: apply_command(False))
+        run.clicked.connect(lambda: apply_command(True))
+        update_validation()
+        dialog.exec()
 
     def page_build(self):
         original_build(self)
@@ -764,12 +1056,18 @@ def install_archive_download_methods() -> None:
         index = self.archive_method_combo.findData(saved)
         self.archive_method_combo.setCurrentIndex(index if index >= 0 else 0)
         self.archive_method_combo.setMinimumHeight(38)
-        self.archive_method_combo.currentIndexChanged.connect(
-            lambda *_: self.settings.setValue(
+        def update_method(*_):
+            self.settings.setValue(
                 "archive/download_method",
                 str(self.archive_method_combo.currentData() or DEFAULT_ARCHIVE_DOWNLOAD_METHOD),
             )
-        )
+            self._lv_archive_manual_command = ""
+            self.service._lv_archive_manual_command = ""
+            button = getattr(self, "archive_command_button", None)
+            if button is not None:
+                button.setText("✎ Команда FFmpeg…")
+
+        self.archive_method_combo.currentIndexChanged.connect(update_method)
         method_row.addWidget(method_label)
         method_row.addWidget(self.archive_method_combo, 1)
         button_index = layout.indexOf(self.btn_find)
@@ -778,6 +1076,28 @@ def install_archive_download_methods() -> None:
         else:
             layout.insertLayout(button_index, method_row)
 
+        self._lv_archive_manual_command = ""
+        self.service._lv_archive_manual_command = ""
+        self.archive_command_button = QPushButton("✎ Команда FFmpeg…")
+        self.archive_command_button.setObjectName("ArchiveManualFFmpegButton")
+        self.archive_command_button.setProperty("role", "soft")
+        self.archive_command_button.setMinimumHeight(40)
+        self.archive_command_button.setToolTip(
+            "Редактировать аргументы FFmpeg и запустить вручную на найденном HLS.")
+        self.archive_command_button.clicked.connect(
+            lambda: _open_manual_ffmpeg_dialog(self))
+        summary_layout = self.summary.layout()
+        inserted = False
+        for row in range(summary_layout.count()):
+            sublayout = summary_layout.itemAt(row).layout()
+            if sublayout is not None and sublayout.indexOf(self.btn_download) >= 0:
+                sublayout.insertWidget(sublayout.indexOf(self.btn_download),
+                                       self.archive_command_button)
+                inserted = True
+                break
+        if not inserted:
+            summary_layout.addWidget(self.archive_command_button)
+
     def page_download(self):
         combo = getattr(self, "archive_method_combo", None)
         method = str(combo.currentData() if combo is not None else DEFAULT_ARCHIVE_DOWNLOAD_METHOD)
@@ -785,6 +1105,12 @@ def install_archive_download_methods() -> None:
             method = DEFAULT_ARCHIVE_DOWNLOAD_METHOD
         self.settings.setValue("archive/download_method", method)
         self.service._lv_archive_download_method = method
+        self.service._lv_archive_manual_command = str(
+            getattr(self, "_lv_archive_manual_command", "") or "")
+        if self.service._lv_archive_manual_command:
+            # The operator explicitly opted into an editable FFmpeg command,
+            # not the Curl exporter.
+            self.service._lv_archive_download_method = "ffmpeg"
         if combo is not None:
             combo.setEnabled(False)
         try:

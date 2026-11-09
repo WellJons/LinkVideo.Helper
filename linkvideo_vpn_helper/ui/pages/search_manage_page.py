@@ -9,7 +9,7 @@ from PySide6.QtCore import QSettings, QEasingCurve, QPointF, QPropertyAnimation,
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
     QBoxLayout, QDialog, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
+    QListWidgetItem, QPushButton, QScrollArea, QSizePolicy, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from linkvideo_vpn_helper.services.errors import classify_exception
@@ -21,6 +21,9 @@ from linkvideo_vpn_helper.ui.components import (
     ServerPicker, StatusPill, TaskStatus, button_feedback, build_page_scaffold,
 )
 from linkvideo_vpn_helper.ui.dialogs import AddServerDialog, ConfirmDialog, PasswordDialog
+from linkvideo_vpn_helper.ui.camera_diagnostics_panel import CameraDiagnosticsPanel
+from linkvideo_vpn_helper.services.archive_service_core import B2OService
+from linkvideo_vpn_helper.services.vpn_camera_port_match import account_login, match_vpn_ports
 
 
 class TrafficGraph(QWidget):
@@ -235,15 +238,17 @@ class SearchManagePage(QWidget):
     progressReady = Signal(int, int, str)
     actionReady = Signal(object, object, str)
     liveReady = Signal(object)
+    cameraPortsReady = Signal(int, object, object, str)
 
     MAX_CONTENT_WIDTH = 1280
 
-    def __init__(self, service: VPNService, search: FastSearchService, credentials: SessionCredentials, registry: ServerRegistry, parent=None):
+    def __init__(self, service: VPNService, search: FastSearchService, credentials: SessionCredentials, registry: ServerRegistry, parent=None, *, work_account=None):
         super().__init__(parent)
         self.service = service
         self.search = search
         self.credentials = credentials
         self.registry = registry
+        self.work_account = work_account
         self.current: ClientRecord | None = None
         self._deleted_current = None
         self._deleted_lookup_query = ""
@@ -256,6 +261,13 @@ class SearchManagePage(QWidget):
         self._action_busy = False
         self._recent_new_ports: set[int] = set()
         self._pending_old_ports: set[int] = set()
+        self._camera_match_generation = 0
+        self._camera_match_key = None
+        self._camera_match_result = None
+        self._camera_match_message = "Камеры пока не проверены."
+        self._camera_lookup_override = ""
+        self._camera_lookup_draft = ""
+        self.cameraPortsReady.connect(self._on_camera_ports)
         self.searchReady.connect(self._on_search)
         self.progressReady.connect(self._on_progress)
         self.actionReady.connect(self._on_action)
@@ -383,14 +395,8 @@ class SearchManagePage(QWidget):
         info_l = QVBoxLayout(self.client_info_card)
         info_l.setContentsMargins(14, 14, 14, 14)
         info_l.setSpacing(8)
-        info_nav = QHBoxLayout()
-        self.info_back = QPushButton("← К результатам")
-        self.info_back.setObjectName("SearchClientInfoBack")
-        self.info_back.setProperty("role", "ghost")
-        self.info_back.clicked.connect(self._close_client_view)
-        info_nav.addWidget(self.info_back)
-        info_nav.addStretch(1)
-        info_l.addLayout(info_nav)
+        # The page header already has «К поиску»; avoid a redundant row
+        # that pushes the left client card below the right actions panel.
         identity_row = QHBoxLayout()
         self.info_title = QLabel("Данные клиента")
         self.info_title.setObjectName("SectionTitle")
@@ -463,12 +469,50 @@ class SearchManagePage(QWidget):
         workspace_l.addWidget(self.detail_panel, 12)
 
         self.workspace.setMinimumHeight(545)
+        # The sibling camera tab must not stretch VPN results into enormous
+        # blank columns. Keep both profile and action cards within the VPN
+        # workspace viewport (their own QScrollAreas handle overflow).
+        self.workspace.setMaximumHeight(820)
         self.workspace.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
         self.page_scroll.verticalScrollBar().setSingleStep(26)
         self.page_layout.addWidget(self.workspace, 1)
+        # Two task-focused workspaces: VPN operations and camera diagnostics.
+        # Moving existing widgets preserves all search/management controls and
+        # avoids adding a tab that would be accessible only after VPN lookup.
+        self.main_tabs = QTabWidget(self)
+        self.main_tabs.setObjectName("SettingsTabs")
+        self.main_tabs.setDocumentMode(True)
+        self.vpn_workspace_tab = QWidget()
+        vpn_content = QVBoxLayout(self.vpn_workspace_tab)
+        vpn_content.setContentsMargins(0, 12, 0, 0)
+        vpn_content.setSpacing(12)
+        for widget in (self.search_form, self.compact_search, self.workspace):
+            self.page_layout.removeWidget(widget)
+            vpn_content.addWidget(widget, 1 if widget is self.workspace else 0)
+        self.main_tabs.addTab(self.vpn_workspace_tab, "VPN · поиск и управление")
+        self.camera_diagnostics = CameraDiagnosticsPanel(
+            self.registry.settings, self, work_account=self.work_account
+        )
+        self.main_tabs.addTab(self.camera_diagnostics, "Информация по камере")
+        # Camera results are a full workspace, not an embedded 200px list.
+        # When many cameras are returned, scroll the existing page canvas.
+        self.main_tabs.currentChanged.connect(self._camera_tab_resized)
+        self.page_layout.addWidget(self.main_tabs, 1)
+        self._camera_tab_resized(self.main_tabs.currentIndex())
         self._panel_anim = None
+
+    def _camera_tab_resized(self, index: int):
+        # The QTabWidget contains two independent workspaces. Size it to the
+        # selected page instead of inheriting the camera result count as a
+        # permanent minimum height for the VPN search page.
+        camera = index == self.main_tabs.indexOf(self.camera_diagnostics)
+        self.main_tabs.setMinimumHeight(760 if camera else 720)
+        self.main_tabs.setMaximumHeight(850 if camera else 900)
+        if not camera:
+            self.workspace.setMaximumHeight(820)
+        self.main_tabs.updateGeometry()
 
     def _return_to_search(self):
         self._close_client_view()
@@ -525,6 +569,7 @@ class SearchManagePage(QWidget):
         self.client_info_card.show()
         self.detail_panel.show()
         self._render_client()
+        self._start_camera_port_check()
         QTimer.singleShot(0, lambda: self.page_scroll.verticalScrollBar().setValue(0))
 
     def _close_client_view(self, checked=False, immediate: bool = False):
@@ -889,6 +934,11 @@ class SearchManagePage(QWidget):
         self.current = client
         if changed_client:
             self._recent_new_ports.clear()
+            self._camera_match_generation += 1
+            self._camera_match_key = None
+            self._camera_match_result = None
+            self._camera_lookup_override = ""
+            self._camera_lookup_draft = ""
         self._selected_port = client.ports[0] if client.ports else None
         self._open_client_view()
 
@@ -930,7 +980,7 @@ class SearchManagePage(QWidget):
             ("Удалён", record.deleted_at or "—"),
             ("Remote Address", record.remote_address or "—"),
             ("Profile", record.profile or "—"),
-            ("NAT / Порты", record.ports or "—"),
+            ("Порты", record.ports or "—"),
             ("Пароль в резервной базе", "Сохранён" if record.password_saved else "НЕ СОХРАНЁН"),
         )
         for index, (label_text, value_text) in enumerate(values):
@@ -1118,12 +1168,13 @@ class SearchManagePage(QWidget):
             ("Сервер", c.server),
             ("Логин", c.login),
             ("VPN-адрес", c.remote_address or "—"),
+            ("IP источника туннеля", c.tunnel_source_ip if c.is_online and c.tunnel_source_ip else "—"),
         ):
             line = QHBoxLayout()
             line.setSpacing(8)
             caption = QLabel(field)
             caption.setObjectName("Muted")
-            caption.setFixedWidth(104)
+            caption.setFixedWidth(157)
             detail = QLabel(str(value))
             detail.setObjectName("Value")
             detail.setWordWrap(True)
@@ -1132,30 +1183,20 @@ class SearchManagePage(QWidget):
             line.addWidget(detail, 1)
             dl.addLayout(line)
 
-        # Sensitive client credentials are concealed until the operator
-        # explicitly requests visibility; copying VPN configuration still works.
+        # PPP password is a normal selectable value, same layout and
+        # typography as Server/Login/VPN address. No framed input.
         password_row = QHBoxLayout()
-        password_row.setSpacing(6)
-        password_label = QLabel("Пароль:")
-        password_label.setObjectName("TinyMuted")
-        password_view = QLineEdit(c.password)
-        password_view.setReadOnly(True)
-        password_view.setEchoMode(QLineEdit.EchoMode.Password)
-        password_view.setToolTip("Пароль скрыт. Для просмотра нажмите «Показать».")
-        password_toggle = QPushButton("Показать")
-        password_toggle.setCheckable(True)
-        password_toggle.setProperty("role", "soft")
-        password_toggle.toggled.connect(
-            lambda visible: (
-                password_view.setEchoMode(
-                    QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
-                ),
-                password_toggle.setText("Скрыть" if visible else "Показать")
-            )
-        )
+        password_row.setSpacing(8)
+        password_label = QLabel("Пароль")
+        password_label.setObjectName("Muted")
+        password_label.setFixedWidth(157)
+        password_value = QLabel(c.password)
+        password_value.setObjectName("Value")
+        password_value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        password_value.setWordWrap(True)
+        password_value.setToolTip("Пароль VPN-клиента: выделите текст для копирования.")
         password_row.addWidget(password_label)
-        password_row.addWidget(password_view, 1)
-        password_row.addWidget(password_toggle)
+        password_row.addWidget(password_value, 1)
         dl.addLayout(password_row)
 
         vpn = Card()
@@ -1235,12 +1276,26 @@ class SearchManagePage(QWidget):
         port_head.addStretch(1)
         port_head.addWidget(self.selected_port_pill)
         pl.addLayout(port_head)
+        # Связь с B2O проверяется автоматически при открытии карточки.
+        camera_status = QLabel(self._camera_match_message)
+        camera_status.setObjectName("TinyMuted")
+        camera_status.setWordWrap(True)
+        camera_status.setToolTip(
+            "ID показывается только при совпадении номера порта и "
+            "подтверждённой принадлежности камеры учётке B2O.")
+        pl.addWidget(camera_status)
         self.port_list = QListWidget()
         self.port_list.setObjectName("PortList")
         self.port_list.setProperty("lvWheelBoundaryLock", True)
         self.port_list.setMinimumHeight(118)
-        self.port_list.setMaximumHeight(275)
-        self.port_list.setFixedHeight(min(272, max(118, len(c.ports) * 60 + 16)))
+        self.port_list.setMaximumHeight(310)
+        verified_ports = {
+            row.port for row in self._camera_match_result.links
+        } if self._camera_match_result is not None and self._camera_match_key and (
+            self._camera_match_key[:3] == (c.server, c.login, tuple(sorted(c.ports)))
+        ) else set()
+        self.port_list.setFixedHeight(
+            min(310, max(118, len(c.ports) * 60 + len(verified_ports) * 24 + 16)))
         self.port_list.setWordWrap(True)
         self.port_list.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.port_list.setSpacing(4)
@@ -1275,13 +1330,39 @@ class SearchManagePage(QWidget):
                     connections = c.port_connections.get(current_port)
                     details = [status]
                     if byte_value is not None:
-                        details.append(f"NAT: {self._fmt_bytes(byte_value)}")
+                        details.append(f"Трафик порта: {self._fmt_bytes(byte_value)}")
                     if connections is not None:
                         details.append(f"Пакеты/соединения: {connections}")
                     if current_port in self._recent_new_ports:
                         details.append("Новый")
                     item.setText(f"Порт {port}  ·  {status}\n" + "  ·  ".join(details[1:]))
-                item.setSizeHint(QSize(0, 57))
+                matching = (self._camera_match_result
+                            if self._camera_match_result is not None
+                            and self._camera_match_key
+                            and self._camera_match_key[:3] ==
+                                (c.server, c.login, tuple(sorted(c.ports)))
+                            else None)
+                camera_link = next(
+                    (link for link in matching.links if link.port == int(port)),
+                    None,
+                ) if matching is not None and not conflict_rows else None
+                if camera_link is not None:
+                    original_lines = item.text().split("\n", 1)
+                    # Camera ID belongs ABOVE the traffic line, directly in
+                    # the selected port card, not below the port list.
+                    item.setText(
+                        original_lines[0] + "\nID камеры B2O: " + camera_link.camera_id +
+                        ("\n" + original_lines[1] if len(original_lines) > 1 else "")
+                    )
+                    item.setToolTip(
+                        "Камера: " + camera_link.label + " · ID " + camera_link.camera_id +
+                        " · Проверено по B2O RTSP-порту и логину аккаунта"
+                    )
+                    item.setSizeHint(QSize(0, 82))
+                else:
+                    if matching is not None and int(port) in matching.ambiguous:
+                        item.setToolTip("Несколько камер B2O используют этот порт — ID не подтверждён.")
+                    item.setSizeHint(QSize(0, 57))
                 self.port_list.addItem(item)
             desired = self._selected_port if self._selected_port in c.ports else c.ports[0]
             for i in range(self.port_list.count()):
@@ -1289,7 +1370,7 @@ class SearchManagePage(QWidget):
                     self.port_list.setCurrentRow(i)
                     break
         else:
-            item = QListWidgetItem("NAT-порты не найдены")
+            item = QListWidgetItem("Порты не найдены")
             item.setFlags(Qt.ItemFlag.NoItemFlags)
             item.setSizeHint(QSize(0, 42))
             self.port_list.addItem(item)
@@ -1302,7 +1383,7 @@ class SearchManagePage(QWidget):
         cl = QVBoxLayout(control)
         cl.setContentsMargins(4, 2, 4, 6)
         cl.setSpacing(8)
-        ct = QLabel("Управление")
+        ct = QLabel("Действия с клиентом")
         ct.setObjectName("SectionTitle")
         cl.addWidget(ct)
 
@@ -1311,6 +1392,10 @@ class SearchManagePage(QWidget):
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(8)
 
+        quick_title = QLabel("Основное")
+        quick_title.setObjectName("CardTitle")
+        grid.addWidget(quick_title, 0, 0, 1, 2)
+
         self.copy_data_button = QPushButton("Копировать данные")
         self.copy_data_button.setProperty("role", "primary")
         self.copy_data_button.clicked.connect(self._copy)
@@ -1318,39 +1403,45 @@ class SearchManagePage(QWidget):
         refresh.clicked.connect(self._refresh)
         monitor = QPushButton("Открыть мониторинг")
         monitor.clicked.connect(self._monitor)
-        grid.addWidget(self.copy_data_button, 0, 0)
-        grid.addWidget(refresh, 0, 1)
-        grid.addWidget(monitor, 1, 0, 1, 2)
+        grid.addWidget(self.copy_data_button, 1, 0)
+        grid.addWidget(refresh, 1, 1)
+        grid.addWidget(monitor, 2, 0, 1, 2)
 
+        ports_title = QLabel("Управление портами")
+        ports_title.setObjectName("CardTitle")
+        grid.addWidget(ports_title, 3, 0, 1, 2)
         self.add_count = CounterControl(1, 1, 14)
         add = QPushButton("Добавить порты")
         add.setProperty("role", "primary")
         add.clicked.connect(self._add_ports)
-        grid.addWidget(self.add_count, 2, 0)
-        grid.addWidget(add, 2, 1)
+        grid.addWidget(self.add_count, 4, 0)
+        grid.addWidget(add, 4, 1)
 
         self.toggle_port_button = QPushButton("Выберите порт")
         self.toggle_port_button.clicked.connect(self._toggle_selected_port)
         self.remove_port_button = QPushButton("Удалить порт")
         self.remove_port_button.clicked.connect(self._remove_selected_port)
-        grid.addWidget(self.toggle_port_button, 3, 0)
-        grid.addWidget(self.remove_port_button, 3, 1)
+        grid.addWidget(self.toggle_port_button, 5, 0)
+        grid.addWidget(self.remove_port_button, 5, 1)
 
+        account_title = QLabel("Учётная запись")
+        account_title.setObjectName("CardTitle")
+        grid.addWidget(account_title, 6, 0, 1, 2)
         self.password_edit = QLineEdit()
         self.password_edit.setPlaceholderText("Новый пароль или пусто для генерации")
         self.password_edit.setMinimumWidth(0)
         change = QPushButton("Сменить пароль")
         change.clicked.connect(self._password_inline)
-        grid.addWidget(self.password_edit, 4, 0)
-        grid.addWidget(change, 4, 1)
+        grid.addWidget(self.password_edit, 7, 0)
+        grid.addWidget(change, 7, 1)
 
         account_toggle = QPushButton("Вкл./выкл. учётку")
         account_toggle.clicked.connect(self._toggle_account)
         delete = QPushButton("Удалить клиента")
         delete.setProperty("role", "danger")
         delete.clicked.connect(self._delete)
-        grid.addWidget(account_toggle, 5, 0)
-        grid.addWidget(delete, 5, 1)
+        grid.addWidget(account_toggle, 8, 0)
+        grid.addWidget(delete, 8, 1)
 
         # Two balanced columns fit into the account workspace. Three columns
         # previously pushed the last buttons past the card's right edge.
@@ -1572,6 +1663,9 @@ class SearchManagePage(QWidget):
             elif name == "remove_port":
                 self._recent_new_ports.intersection_update(int(x) for x in result.ports)
             self.current = result
+            if name in {"add_ports", "remove_port", "port_toggle"}:
+                self._camera_match_key = None
+                self._camera_match_result = None
             if self._selected_port not in self.current.ports:
                 self._selected_port = self.current.ports[0] if self.current.ports else None
             self._sync_result_record(self.current)
@@ -1587,10 +1681,90 @@ class SearchManagePage(QWidget):
         action_task.show()
         action_task.done("Готово", messages.get(name, "Состояние клиента обновлено"))
         self._render_client()
+        if name in {"add_ports", "remove_port", "port_toggle"}:
+            self._start_camera_port_check()
         # RouterOS может обновить динамические поля с небольшой задержкой.
         # Дополнительная тихая синхронизация убирает необходимость вручную
         # нажимать «Обновить» после добавления/удаления/переключения портов.
         QTimer.singleShot(700, self._silent_refresh)
+
+    def _start_camera_port_check(self, override_login: str = "", *, force: bool = False):
+        client = self.current
+        if client is None or not getattr(client, "ports", None):
+            return
+        login = override_login or self._camera_lookup_override or account_login(client.login)
+        self._camera_lookup_override = login if override_login else self._camera_lookup_override
+        if override_login:
+            self._camera_lookup_draft = login
+        key = (client.server, client.login, tuple(sorted(client.ports)), login)
+        if key == self._camera_match_key and not force:
+            return
+        self._camera_match_key = key
+        self._camera_match_result = None
+        self._camera_match_generation += 1
+        generation = self._camera_match_generation
+        account = self.work_account
+        settings = self.registry.settings
+        b2o = B2OService(settings)
+        if not b2o.token() or account is None or not account.has_credentials:
+            self._camera_match_key = None  # Re-check must work after login.
+            self._camera_match_message = (
+                "Войдите в учётную запись «Админка» для проверки камер. "
+                "Подключение MikroTik не предоставляет доступ к B2O."
+            )
+            self._render_client()
+            return
+        creds = account.credentials
+        try:
+            country = self.registry.get(client.server).country
+        except Exception:
+            country = ""
+        self._camera_match_message = "Проверяю камеры аккаунта B2O…"
+        self._render_client()
+        def worker():
+            try:
+                result = match_vpn_ports(client.login, tuple(client.ports), b2o, creds,
+                                         vpn_server=client.server,
+                                         override_login=login, country=country)
+                self.cameraPortsReady.emit(generation, key, result, "")
+            except Exception:
+                # Never echo arbitrary URL or API response (may include credentials).
+                self.cameraPortsReady.emit(generation, key, None,
+                    "Не удалось сверить камеры. Проверьте вход в Админку и доступ B2O.")
+        threading.Thread(target=worker, daemon=True,
+                         name="vpn-b2o-camera-port-read").start()
+
+    def _on_camera_ports(self, generation: int, key, report, error: str):
+        if generation != self._camera_match_generation or key != self._camera_match_key:
+            return
+        if (self.current is None
+                or (self.current.server, self.current.login, tuple(sorted(self.current.ports)))
+                   != key[:3]):
+            return
+        self._camera_match_result = report
+        if error:
+            self._camera_match_key = None  # Let an operator retry without refreshing the page.
+            self._camera_match_message = error
+        elif report is not None:
+            self._camera_match_message = (
+                f"B2O: {report.checked_cameras} камер · "
+                f"RTSP-ссылок с портом: {report.stream_cameras} · "
+                f"подтверждено камер: {report.matched_camera_count}."
+            )
+            if report.grouped:
+                self._camera_match_message += (
+                    f" Портов с несколькими каналами: {len(report.grouped)}."
+                )
+            if report.incomplete:
+                self._camera_match_message += (
+                    f" Неполный ответ B2O ({report.stream_errors} ошибок), "
+                    "ID не подтверждены."
+                )
+            elif report.ambiguous:
+                self._camera_match_message += " Есть неоднозначные порты."
+            elif not (report.links or report.grouped):
+                self._camera_match_message += " Совпадающих портов не найдено."
+        self._render_client()
 
     def _copy_new_ports(self, value: str, button: QPushButton):
         QGuiApplication.clipboard().setText(value)

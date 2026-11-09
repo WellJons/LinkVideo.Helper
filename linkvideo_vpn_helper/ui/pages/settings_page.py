@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import re
 import threading
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QBoxLayout, QCheckBox, QGridLayout, QHBoxLayout, QLabel, QPushButton, QTabWidget, QVBoxLayout, QWidget,
+    QBoxLayout, QCheckBox, QGridLayout, QHBoxLayout, QInputDialog, QLabel,
+    QLineEdit, QPushButton, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from linkvideo_vpn_helper.services.errors import classify_exception
+from linkvideo_vpn_helper.services.archive_service_core import B2OService
+from linkvideo_vpn_helper.release_notes import RELEASE_HISTORY, release_notes
 from linkvideo_vpn_helper.services.server_registry import ServerRegistry
 from linkvideo_vpn_helper.services.vpn_service import SessionCredentials, VPNService
 from linkvideo_vpn_helper.ui.components import (
@@ -35,6 +39,7 @@ class SettingsPage(QWidget):
         super().__init__(parent)
         self.settings = settings
         self.registry = registry
+        self.archive_b2o = B2OService(settings)
         self.service = service
         self.credentials = credentials
         self.testReady.connect(self._on_test_ready)
@@ -54,7 +59,7 @@ class SettingsPage(QWidget):
         # рабочая область с умеренными полями по краям.
         self.header = PageHeader(
             "Настройки",
-            "Внешний вид, список VPN-серверов и параметры архива. Пользовательские серверы сохраняются после обновления Helper.",
+            "Внешний вид, VPN-серверы, архивные кластеры и история изменений программы.",
         )
         root.addWidget(self.header)
 
@@ -134,33 +139,104 @@ class SettingsPage(QWidget):
         ar = QVBoxLayout(archive)
         ar.setContentsMargins(20, 18, 20, 18)
         ar.setSpacing(11)
-        at = QLabel("Архив")
+        at = QLabel("Архивные кластеры")
         at.setObjectName("SectionTitle")
-        ah = QLabel("Для архива достаточно выбрать страну. Внутренние ID B2O Helper использует сам и в интерфейсе не показывает.")
+        ah = QLabel(
+            "Для поиска архива Helper использует профиль оператора B2O, "
+            "данные камеры и HLS-плейлисты. К существующим кластерам можно "
+            "добавить отдельные DVR/vcore-серверы для резервной проверки."
+        )
         ah.setObjectName("Muted")
         ah.setWordWrap(True)
         ar.addWidget(at)
         ar.addWidget(ah)
 
-        for country, prefix, cluster in (
-            ("Россия", "linkvideo_", "linkvideo"),
-            ("Казахстан", "linkvideokz_", "linkvideokz"),
-            ("Беларусь", "linkvideoby_", "linkvideoby"),
+        self.archive_host_rows: dict[int, QVBoxLayout] = {}
+        for operator_id, country, prefix, cluster in (
+            (241, "Россия", "linkvideo_", "linkvideo"),
+            (1721, "Казахстан", "linkvideokz_", "linkvideokz"),
+            (1741, "Беларусь", "linkvideoby_", "linkvideoby"),
         ):
-            row = QHBoxLayout()
-            row.setSpacing(12)
-            left = QLabel(country)
-            left.setObjectName("Value")
-            middle = QLabel(f"Камеры {prefix}*")
-            middle.setObjectName("Muted")
-            right = QLabel(f"Кластер {cluster}")
-            right.setObjectName("TinyMuted")
-            right.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            row.addWidget(left)
-            row.addWidget(middle)
-            row.addStretch(1)
-            row.addWidget(right)
-            ar.addLayout(row)
+            section = Card(subtle=True)
+            group = QVBoxLayout(section)
+            group.setContentsMargins(13, 11, 13, 11)
+            group.setSpacing(6)
+            country_row = QHBoxLayout()
+            country_title = QLabel(f"{country} · {cluster}")
+            country_title.setObjectName("Value")
+            country_row.addWidget(country_title, 1)
+            add_host = QPushButton("＋ Сервер")
+            add_host.setProperty("role", "soft")
+            add_host.setToolTip("Добавить DVR/vcore в резервный поиск этого кластера")
+            add_host.clicked.connect(
+                lambda checked=False, op=operator_id: self._add_archive_host(op))
+            country_row.addWidget(add_host)
+            group.addLayout(country_row)
+            camera_prefix = QLabel(f"Камеры: {prefix}*")
+            camera_prefix.setObjectName("TinyMuted")
+            group.addWidget(camera_prefix)
+            items = QVBoxLayout()
+            items.setSpacing(5)
+            group.addLayout(items)
+            self.archive_host_rows[operator_id] = items
+            self._render_archive_hosts(operator_id)
+            ar.addWidget(section)
+
+        extra_title = QLabel("Дополнительные кластеры B2O")
+        extra_title.setObjectName("SectionTitle")
+        ar.addWidget(extra_title)
+        explanation = QLabel(
+            "Новые профили выключены по умолчанию. Включите нужный оператор, "
+            "после чего он появится в «Скачать архив» и «Диагностика архива». "
+            "Авторизация остаётся общей через подключённую «Админку»."
+        )
+        explanation.setObjectName("Muted")
+        explanation.setWordWrap(True)
+        ar.addWidget(explanation)
+
+        self.extra_cluster_switches: dict[str, Switch] = {}
+        for cluster_key, display_name, operator_id in self.archive_b2o.EXTRA_CLUSTERS:
+            cluster_card = Card(subtle=True)
+            cluster_row = QHBoxLayout(cluster_card)
+            cluster_row.setContentsMargins(13, 11, 13, 11)
+            cluster_row.setSpacing(12)
+            label_column = QVBoxLayout()
+            label_column.setSpacing(3)
+            headline = QLabel(f"{display_name} · оператор {operator_id}")
+            headline.setObjectName("Value")
+            label_column.addWidget(headline)
+            desc = QLabel(
+                f"B2O API: /operators/{operator_id}/cameras"
+                + (" · Общий оператор с другим названием" if operator_id == 1442 else "")
+            )
+            desc.setObjectName("TinyMuted")
+            desc.setWordWrap(True)
+            label_column.addWidget(desc)
+            cluster_row.addLayout(label_column, 1)
+            state = QLabel()
+            state.setObjectName("TinyMuted")
+            cluster_row.addWidget(state)
+            toggle = Switch(self.archive_b2o.extra_cluster_enabled(cluster_key))
+            toggle.setToolTip(f"Разрешить выбор кластера {display_name} в архиве")
+            self.extra_cluster_switches[cluster_key] = toggle
+
+            def state_changed(enabled, *, key=cluster_key, status=state):
+                self.archive_b2o.set_extra_cluster_enabled(key, enabled)
+                status.setText("Включён" if enabled else "Выключен")
+
+            toggle.toggled.connect(state_changed)
+            state.setText("Включён" if toggle.isChecked() else "Выключен")
+            cluster_row.addWidget(toggle)
+            ar.addWidget(cluster_card)
+
+        extra_note = QLabel(
+            "Важно: «Здравсервис» и Goodline имеют одинаковый operator ID 1442 "
+            "и открывают один и тот же список камер. Для разных данных потребуется "
+            "ещё один идентификатор оператора или другое различие в API."
+        )
+        extra_note.setObjectName("TinyMuted")
+        extra_note.setWordWrap(True)
+        ar.addWidget(extra_note)
 
         archive_note = QLabel("Время запроса архива вводится во времени камеры. Переезды reserve-transfers сопоставляются через UTC+7 автоматически.")
         archive_note.setObjectName("TinyMuted")
@@ -210,6 +286,7 @@ class SettingsPage(QWidget):
         self.archive_layout.addWidget(archive)
         self.archive_layout.addStretch(1)
 
+
         # Список внутренних DVR/vcore намеренно не показываем сотруднику.
         # В 3.0.3 он обновляется фоново из B2O только как аварийный fallback;
         # основное определение архива идёт по player playlist выбранного периода.
@@ -248,7 +325,7 @@ class SettingsPage(QWidget):
         about_text = QVBoxLayout()
         bt = QLabel("LinkVideo.Helper")
         bt.setObjectName("SectionTitle")
-        ver = QLabel(f"Версия {APP_VERSION}")
+        ver = QLabel(f"Установленная версия: {APP_VERSION}")
         ver.setObjectName("Muted")
         about_text.addWidget(bt)
         about_text.addWidget(ver)
@@ -257,6 +334,40 @@ class SettingsPage(QWidget):
         bl.addLayout(about_text, 1)
         bl.addWidget(upd)
         self.about_layout.addWidget(about)
+
+        current = Card()
+        current_layout = QVBoxLayout(current)
+        current_layout.setContentsMargins(20, 17, 20, 18)
+        current_layout.setSpacing(10)
+        current_title = QLabel(f"Что нового в {APP_VERSION}")
+        current_title.setObjectName("SectionTitle")
+        current_layout.addWidget(current_title)
+        for line in release_notes(APP_VERSION):
+            entry = QLabel("•  " + line)
+            entry.setWordWrap(True)
+            entry.setObjectName("Muted")
+            current_layout.addWidget(entry)
+        self.about_layout.addWidget(current)
+
+        history_title = QLabel("История изменений")
+        history_title.setObjectName("SectionTitle")
+        self.about_layout.addWidget(history_title)
+        for number, notes in RELEASE_HISTORY:
+            if number == APP_VERSION:
+                continue
+            previous = Card(subtle=True)
+            previous_layout = QVBoxLayout(previous)
+            previous_layout.setContentsMargins(18, 13, 18, 13)
+            previous_layout.setSpacing(6)
+            heading = QLabel(f"Версия {number}")
+            heading.setObjectName("Value")
+            previous_layout.addWidget(heading)
+            for note in notes:
+                item = QLabel("•  " + note)
+                item.setWordWrap(True)
+                item.setObjectName("TinyMuted")
+                previous_layout.addWidget(item)
+            self.about_layout.addWidget(previous)
         self.about_layout.addStretch(1)
 
         self.task = TaskStatus()
@@ -308,6 +419,66 @@ class SettingsPage(QWidget):
                 widget.deleteLater()
             elif item.layout():
                 self._clear(item.layout())
+
+    def _render_archive_hosts(self, operator_id: int) -> None:
+        """Show operator-scoped additions; never reveal account tokens."""
+        rows = self.archive_host_rows[operator_id]
+        self._clear(rows)
+        hosts = self.archive_b2o.custom_archive_servers(operator_id)
+        if not hosts:
+            hint = QLabel("Дополнительных серверов пока нет")
+            hint.setObjectName("TinyMuted")
+            rows.addWidget(hint)
+            return
+        for host in hosts:
+            line = QHBoxLayout()
+            label = QLabel(host)
+            label.setObjectName("Muted")
+            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            label.setWordWrap(True)
+            line.addWidget(label, 1)
+            remove = QPushButton("×")
+            remove.setProperty("role", "icon")
+            remove.setToolTip(f"Убрать сервер {host} из резервного поиска")
+            remove.clicked.connect(
+                lambda checked=False, op=operator_id, h=host:
+                self._remove_archive_host(op, h))
+            line.addWidget(remove)
+            rows.addLayout(line)
+
+    def _add_archive_host(self, operator_id: int) -> None:
+        country = self.archive_b2o.operator_country(operator_id)
+        value, accepted = QInputDialog.getText(
+            self, f"Добавить DVR-сервер · {country}",
+            "Домен сервера (без ссылки и токена):",
+            QLineEdit.EchoMode.Normal, "")
+        if not accepted or not value.strip():
+            return
+        try:
+            clean = self.archive_b2o.normalize_vcore_host(value)
+            if not re.fullmatch(r"[a-z0-9][a-z0-9.-]*\.video\.goodline\.info", clean):
+                raise ValueError(
+                    "Нужен адрес DVR/vcore в домене video.goodline.info, "
+                    "без путей, параметров и токенов.")
+            self.archive_b2o.add_custom_archive_server(operator_id, clean)
+        except ValueError as exc:
+            self.task.show()
+            self.task.warning("Сервер не добавлен", str(exc))
+            return
+        self._render_archive_hosts(operator_id)
+        self.task.show()
+        self.task.done("Сервер сохранён", "Он будет учитываться при резервном поиске архива.")
+
+    def _remove_archive_host(self, operator_id: int, host: str) -> None:
+        dialog = ConfirmDialog(
+            "Убрать архивный сервер",
+            f"Убрать {host} из пользовательского списка? "
+            "Встроенные серверы и история найденных записей не изменятся.",
+            "Убрать", True, self)
+        if not dialog.exec():
+            return
+        self.archive_b2o.remove_custom_archive_server(operator_id, host)
+        self._render_archive_hosts(operator_id)
 
     def _render_servers(self):
         """Перерисовать список VPN-серверов в настройках.

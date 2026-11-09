@@ -37,9 +37,9 @@ def _install_no_console_process_guard() -> None:
     startf_showwindow = int(getattr(subprocess, "STARTF_USESHOWWINDOW", 0x00000001))
     sw_hide = int(getattr(subprocess, "SW_HIDE", 0))
 
-    # Startup-only telemetry to distinguish Helper children from third-party
-    # windows. Never log command arguments, paths, tokens or credentials.
-    start = time.monotonic()
+    # Record console-helper process names throughout the session, including
+    # the first opening of lazily constructed tabs. Never log arguments,
+    # paths, tokens or passwords. This helps isolate native CMD flashes.
     recorded = 0
 
     class HiddenPopen(original):
@@ -74,7 +74,7 @@ def _install_no_console_process_guard() -> None:
                 info.wShowWindow = sw_hide
                 kwargs["startupinfo"] = info
 
-            if recorded < 40 and time.monotonic() - start < 60:
+            if recorded < 160:
                 if name and name.replace("_", "").replace("-", "").replace(".", "").isalnum():
                     logger = logging.getLogger("linkvideo.helper")
                     if logger.handlers:

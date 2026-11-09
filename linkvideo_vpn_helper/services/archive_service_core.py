@@ -165,7 +165,26 @@ class B2OService:
                 "rb-agent-test-vcore01.video.goodline.info",
             ],
         },
+        # Opt-in operators reuse the SAME B2O APIs and archive pipeline.
+        # Their camera prefixes were not supplied: numeric IDs remain valid,
+        # and no fictitious vendor prefix is generated.
+        1442: {
+            "country": "Дополнительный", "camera_prefix": "",
+            "cluster": "operator-1442", "archive_servers": [],
+        },
+        621: {
+            "country": "Дополнительный", "camera_prefix": "",
+            "cluster": "provzor", "archive_servers": [],
+        },
     }
+
+    # Two labels lead to the exact same operator 1442. Keep independent UI
+    # toggles, but never pretend their API datasets or privileges differ.
+    EXTRA_CLUSTERS = (
+        ("zdravservice", "Здравсервис", 1442),
+        ("goodline", "Goodline", 1442),
+        ("provzor", "Провзор", 621),
+    )
 
     # Веб-страница/логи reserve-transfers отображают локальные даты в UTC+7.
     # Это НЕ часовой пояс камеры. Сравнение всегда делаем через epoch.
@@ -186,6 +205,25 @@ class B2OService:
 
     def login_name(self) -> str:
         return str(self.settings.value("b2o/login", "", str) or "").strip()
+
+    def extra_cluster_enabled(self, key: str) -> bool:
+        if key not in {entry[0] for entry in self.EXTRA_CLUSTERS}:
+            return False
+        return bool(self.settings.value(f"archive/extra_cluster_enabled/{key}", False, bool))
+
+    def set_extra_cluster_enabled(self, key: str, enabled: bool) -> None:
+        if key not in {entry[0] for entry in self.EXTRA_CLUSTERS}:
+            raise ValueError("Неизвестный кластер B2O")
+        self.settings.setValue(f"archive/extra_cluster_enabled/{key}", bool(enabled))
+
+    def active_extra_clusters(self) -> list[tuple[str, str, int]]:
+        return [entry for entry in self.EXTRA_CLUSTERS if self.extra_cluster_enabled(entry[0])]
+
+    def is_operator_enabled(self, operator_id: int) -> bool:
+        operator_id = int(operator_id)
+        if operator_id in (241, 1721, 1741):
+            return True
+        return any(op == operator_id for _, _, op in self.active_extra_clusters())
 
     def login(self, login: str, password: str) -> str:
         device = str(self.settings.value("b2o/device_id", "", str) or "").strip()
@@ -481,6 +519,8 @@ class B2OService:
 
     def camera(self, operator_id: int, camera_id: str) -> ArchiveCamera:
         operator_id = self.resolve_operator_id(camera_id, operator_id)
+        if not self.is_operator_enabled(operator_id):
+            raise ValueError("Дополнительный кластер выключен в настройках архива.")
         number, label = self.normalize_camera_id(camera_id, operator_id)
         token = self.token()
         if not token:
@@ -517,7 +557,11 @@ class B2OService:
                 candidates.append(host)
         if server not in candidates:
             candidates.insert(0, server)
-        return ArchiveCamera(number, label, server, stream, signature, tz, dict(data), candidates)
+        camera_payload = dict(data)
+        # Numeric camera IDs have no vendor prefix. Preserve the selected
+        # B2O operator so deep fallback never silently switches back to RU.
+        camera_payload["_lv_operator_id"] = int(operator_id)
+        return ArchiveCamera(number, label, server, stream, signature, tz, camera_payload, candidates)
 
     def cameras_on_server(self, operator_id: int, server_name: str, limit: int = 15) -> tuple[list[dict], dict]:
         """Возвращает онлайн-камеры текущего B2O vcore для массового сравнения.
@@ -907,12 +951,35 @@ class ArchiveService:
         return len(durations), sum(durations)
 
     @staticmethod
-    def _first_nested_playlist(raw: str, base_url: str) -> str:
-        for line in str(raw or "").splitlines():
-            value = line.strip()
-            if value and not value.startswith("#") and ".m3u8" in value.lower():
-                return urllib.parse.urljoin(base_url, value)
-        return ""
+    def _nested_playlist_urls(raw: str, base_url: str) -> list[str]:
+        """Resolve HLS variants even when URIs have no .m3u8 suffix.
+
+        A master playlist has #EXT-X-STREAM-INF followed by a URI; a media
+        playlist has #EXTINF followed by a segment URI. Never mistake segments
+        for nested playlists.
+        """
+        urls: list[str] = []
+        expect_variant = False
+        is_media = "#EXTINF:" in str(raw or "").upper()
+        for source_line in str(raw or "").splitlines():
+            value = source_line.strip()
+            upper = value.upper()
+            if upper.startswith("#EXT-X-STREAM-INF:"):
+                expect_variant = True
+                continue
+            if not value or value.startswith("#"):
+                continue
+            if expect_variant or (not is_media and ".m3u8" in value.lower()):
+                resolved = urllib.parse.urljoin(base_url, value)
+                if resolved not in urls and urllib.parse.urlsplit(resolved).scheme in ("https", "http"):
+                    urls.append(resolved)
+            expect_variant = False
+        return urls[:4]
+
+    @classmethod
+    def _first_nested_playlist(cls, raw: str, base_url: str) -> str:
+        urls = cls._nested_playlist_urls(raw, base_url)
+        return urls[0] if urls else ""
 
     @staticmethod
     def _parse_playlist_datetime(value: str) -> float | None:
@@ -935,6 +1002,7 @@ class ArchiveService:
         segments: list[dict] = []
         pending_duration: float | None = None
         pending_program_time: float | None = None
+        pending_gap = False
         cursor = float(assumed_start)
         base_host = (urllib.parse.urlparse(playlist_url).hostname or "").lower()
         for raw_line in str(raw or "").splitlines():
@@ -951,6 +1019,9 @@ class ArchiveService:
             if line.upper().startswith("#EXT-X-PROGRAM-DATE-TIME:"):
                 pending_program_time = cls._parse_playlist_datetime(line.split(":", 1)[1])
                 continue
+            if line.upper().startswith("#EXT-X-GAP"):
+                pending_gap = True
+                continue
             if line.startswith("#"):
                 continue
             # master playlist URI — это не медиасегмент
@@ -962,10 +1033,13 @@ class ArchiveService:
             host = (urllib.parse.urlparse(url).hostname or base_host or "").lower()
             start = float(pending_program_time if pending_program_time is not None else cursor)
             end = start + max(0.0, float(pending_duration or 0.0))
-            segments.append({"url": url, "host": host, "start": start, "end": end, "duration": max(0.0, end-start)})
-            cursor = end
+            if not pending_gap and end > start:
+                segments.append({"url": url, "host": host, "start": start, "end": end,
+                                 "duration": max(0.0, end-start)})
+            cursor = end  # Gaps still advance the timeline.
             pending_program_time = None
             pending_duration = None
+            pending_gap = False
         return segments
 
     @staticmethod
@@ -996,22 +1070,41 @@ class ArchiveService:
             master_url = self.playlist_url(fake)
             try:
                 master = self._http_hls_text(master_url, timeout)
-                selected_raw = master
-                selected_url = master_url
-                method = "player playlist"
-                nested_url = self._first_nested_playlist(master, master_url)
-                if nested_url:
-                    nested = self._http_hls_text(nested_url, timeout)
-                    m_count, m_total = self._parse_hls_duration(master)
-                    n_count, n_total = self._parse_hls_duration(nested)
-                    if n_count >= m_count and n_total >= m_total:
-                        selected_raw = nested
-                        selected_url = nested_url
-                        method = "player playlist → chunks"
-                segments = self._parse_hls_segments(selected_raw, selected_url, start_ts)
-                if not segments:
-                    errors.append(f"{clean}: player playlist пуст для {app}/{stream}")
+                candidates = [(master_url, master, "player playlist")]
+                # A master can expose several alternatives. Choose the media
+                # playlist with the greatest verified overlap instead of
+                # assuming the first nested playlist is always correct.
+                for nested_url in self._nested_playlist_urls(master, master_url):
+                    try:
+                        nested = self._http_hls_text(nested_url, timeout)
+                        candidates.append((nested_url, nested, "player playlist → chunks"))
+                    except Exception as nested_error:
+                        errors.append(f"{clean}: вложенный HLS недоступен: "
+                                      f"{type(nested_error).__name__}")
+                selection = None
+                for candidate_url, candidate_raw, candidate_method in candidates:
+                    parsed = self._parse_hls_segments(candidate_raw, candidate_url, start_ts)
+                    # Respect absolute PROGRAM-DATE-TIME, exclude segments
+                    # outside the requested range, and clip edge segments.
+                    overlaps: list[dict] = []
+                    for seg in parsed:
+                        overlap_start = max(start_ts, float(seg["start"]))
+                        overlap_end = min(end_ts, float(seg["end"]))
+                        if overlap_end <= overlap_start:
+                            continue
+                        overlaps.append({
+                            **seg, "start": overlap_start, "end": overlap_end,
+                            "duration": overlap_end - overlap_start,
+                        })
+                    duration = sum(segment["duration"] for segment in overlaps)
+                    if overlaps and (selection is None or
+                                     duration > selection[0] + 0.01):
+                        selection = (duration, candidate_url, candidate_method, overlaps)
+                if selection is None:
+                    errors.append(f"{clean}: нет HLS-сегментов за выбранный период "
+                                  f"для {app}/{stream}")
                     continue
+                _, selected_url, method, segments = selection
                 slices = self._slices_from_hls_segments(segments, app, stream, camera.signature, "player")
                 hosts_count: dict[str, int] = {}
                 for seg in segments:
@@ -1020,7 +1113,17 @@ class ArchiveService:
                         hosts_count[h] = hosts_count.get(h, 0) + 1
                 hosts = [h for h, _count in sorted(hosts_count.items(), key=lambda item: (-item[1], item[0]))]
                 dominant = hosts[0] if hosts else clean
-                total = sum(float(seg.get("duration") or 0.0) for seg in segments)
+                # Overlap of segments (not their raw EXTINF sum) is the
+                # truthful available duration. Repeated/overlapping segments
+                # must not inflate the coverage to more than requested.
+                ordered = sorted(segments, key=lambda seg: (seg["start"], seg["end"]))
+                covered = 0.0
+                covered_until = start_ts
+                for seg in ordered:
+                    covered += max(0.0, float(seg["end"]) -
+                                   max(covered_until, float(seg["start"])))
+                    covered_until = max(covered_until, float(seg["end"]))
+                total = min(float(end_ts - start_ts), covered)
                 return {
                     "host": dominant,
                     "hosts": hosts,
@@ -1095,7 +1198,7 @@ class ArchiveService:
             if clean and clean not in seen:
                 seen.add(clean)
                 candidates.append(clean)
-        for host in self._deep_candidate_hosts(camera.server, self.b2o.resolve_operator_id(camera.label, 241), camera.label):
+        for host in self._deep_candidate_hosts(camera.server, int(camera.raw.get("_lv_operator_id") or self.b2o.resolve_operator_id(camera.label, 241)), camera.label):
             clean = self.b2o.normalize_vcore_host(host)
             if clean and clean not in seen:
                 seen.add(clean)
@@ -1131,7 +1234,7 @@ class ArchiveService:
                     found.extend(info.get("slices") or [])
                     learned = list(info.get("hosts") or [])
                     if learned:
-                        self._remember_global_hosts(self.b2o.resolve_operator_id(camera.label, 241), learned)
+                        self._remember_global_hosts(int(camera.raw.get("_lv_operator_id") or self.b2o.resolve_operator_id(camera.label, 241)), learned)
                 current_plan = self._build_plan(list(known_slices) + found, start_ts, end_ts)
                 if current_plan and not self._gaps(current_plan, start_ts, end_ts):
                     for item in futures:

@@ -7,8 +7,9 @@ rule. They are useful diagnostics, so keep them visible, but place them on a
 second row instead of squeezing every value into one horizontal line.
 """
 
-from PySide6.QtCore import QSize, Qt
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtCore import QRect, QRectF, QSize, Qt
+from PySide6.QtGui import QColor, QFontMetrics, QGuiApplication, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtWidgets import QAbstractItemView, QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget
 
 
 _INSTALLED = False
@@ -72,8 +73,29 @@ def install_nat_counter_ui() -> None:
         recent = {int(value) for value in (getattr(self, "_recent_new_ports", set()) or set())}
 
         port_list.setSpacing(6)
-        port_list.setMinimumHeight(min(380, max(185, len(client.ports) * 80 + 10)))
-        port_list.setMaximumHeight(410)
+        report = getattr(self, "_camera_match_result", None)
+        match_key = getattr(self, "_camera_match_key", None)
+        current_key = (
+            client.server, client.login, tuple(sorted(client.ports))
+        )
+        # Do not show stale IDs after changing client, port list or B2O login.
+        if not match_key or match_key[:3] != current_key:
+            report = None
+        confirmed_by_port = {
+            int(link.port): link for link in (report.links if report is not None else ())
+        }
+        grouped_by_port = {
+            int(port): tuple(links) for port, links in (
+                getattr(report, "grouped", ()) if report is not None else ())
+        }
+        client_key = (client.server, client.login)
+        if getattr(self, "_nvr_expanded_client_key", None) != client_key:
+            self._nvr_expanded_client_key = client_key
+            self._nvr_expanded_ports = set()
+        port_list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        port_list.verticalScrollBar().setSingleStep(28)
+        port_list.setMinimumHeight(185)
+        port_list.setMaximumHeight(680)
 
         for index in range(port_list.count()):
             item = port_list.item(index)
@@ -95,7 +117,8 @@ def install_nat_counter_ui() -> None:
 
             row = QWidget()
             row.setObjectName("NatPortRow")
-            row.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            # Buttons inside the port row must be clickable. The row itself
+            # ignores non-button mouse clicks so the list still handles selection.
             outer = QVBoxLayout(row)
             outer.setContentsMargins(14, 7, 14, 7)
             outer.setSpacing(3)
@@ -117,6 +140,183 @@ def install_nat_counter_ui() -> None:
             if conflict_rows:
                 top.addWidget(StatusPill("Конфликт", "danger"))
             outer.addLayout(top)
+
+            # The regular page writes the ID to QListWidgetItem.text(), but
+            # this integration replaces that text with a custom QWidget.
+            # Draw the verified ID *inside the visible port card* instead.
+            camera_link = confirmed_by_port.get(port) if not conflict_rows else None
+            if camera_link is not None:
+                camera_id = QLabel("ID камеры B2O: " + str(camera_link.camera_id))
+                camera_id.setObjectName("B2OPortCameraId")
+                camera_id.setTextInteractionFlags(
+                    Qt.TextInteractionFlag.TextSelectableByMouse)
+                camera_id.setToolTip(
+                    "Камера B2O: " + str(camera_link.label) +
+                    " · подтверждено по логину аккаунта и RTSP-порту")
+                camera_id.setMinimumHeight(22)
+                camera_id.setStyleSheet("font-size: 14px; font-weight: 700;")
+                camera_row = QHBoxLayout()
+                camera_row.setContentsMargins(0, 0, 0, 0)
+                camera_row.setSpacing(4)
+                camera_row.addWidget(camera_id, 0)
+
+                # Native QPushButton styles have a 40px min-height, so they
+                # clip the glyph and look like a giant orange smudge. Draw a
+                # 15px two-sheet copy pictogram into a transparent tool button.
+                picture = QPixmap(16, 16)
+                picture.fill(Qt.GlobalColor.transparent)
+                painter = QPainter(picture)
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                tone = camera_id.palette().color(camera_id.foregroundRole())
+                painter.setPen(QPen(QColor(tone), 1.5))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(QRectF(5, 4, 9, 10), 1.4, 1.4)
+                painter.drawLine(3, 11, 3, 3)
+                painter.drawLine(3, 3, 11, 3)
+                painter.end()
+                copy_id = QToolButton(row)
+                copy_id.setObjectName("B2OCopyCameraId")
+                copy_id.setIcon(QIcon(picture))
+                copy_id.setIconSize(QSize(16, 16))
+                copy_id.setFixedSize(20, 20)
+                copy_id.setStyleSheet(
+                    "QToolButton#B2OCopyCameraId {"
+                    "background: transparent; border: 0; padding: 0; margin: 0;"
+                    "}"
+                )
+                copy_id.setCursor(Qt.CursorShape.PointingHandCursor)
+                copy_id.setToolTip("Скопировать ID камеры " + str(camera_link.camera_id))
+                copy_id.setAccessibleName("Скопировать ID камеры B2O")
+
+                def copy_camera_id(value, button):
+                    QGuiApplication.clipboard().setText(value)
+                    button.setToolTip("ID камеры скопирован: " + value)
+
+                copy_id.clicked.connect(
+                    lambda _checked=False, value=str(camera_link.camera_id), button=copy_id:
+                    copy_camera_id(value, button))
+                camera_row.addWidget(copy_id, 0, Qt.AlignmentFlag.AlignVCenter)
+                camera_row.addStretch(1)
+                outer.addLayout(camera_row)
+
+            camera_group = grouped_by_port.get(port) if not conflict_rows else None
+            group_extra = 0
+            if camera_group:
+                # Several channels of one NVR share an RTSP endpoint. They
+                # are verified by the SAME server + external port and shown
+                # only on explicit operator request, never mistaken for NAT
+                # collisions on this router.
+                toggle = QToolButton(row)
+                toggle.setObjectName("B2ONvrExpand")
+                toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+                toggle.setAutoRaise(True)
+                toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+                toggle.setStyleSheet(
+                    "QToolButton#B2ONvrExpand {"
+                    "background: transparent; border: 0; padding: 4px 0;"
+                    "text-align: left; font-weight: 650;"
+                    "}"
+                )
+                details = QWidget(row)
+                details.setObjectName("B2ONvrCameraList")
+                details_layout = QVBoxLayout(details)
+                details_layout.setContentsMargins(10, 2, 0, 3)
+                details_layout.setSpacing(5)
+
+                camera_heights: list[int] = []
+                for link in camera_group:
+                    # A camera name and its ID are two separate lines. The
+                    # previous one-line label clipped IDs in narrow cards.
+                    entry = QWidget(details)
+                    entry.setObjectName("B2ONvrCameraEntry")
+                    entry_layout = QVBoxLayout(entry)
+                    entry_layout.setContentsMargins(0, 3, 0, 4)
+                    entry_layout.setSpacing(2)
+
+                    name = QLabel(str(link.label))
+                    name.setObjectName("B2ONvrCameraName")
+                    name.setTextFormat(Qt.TextFormat.PlainText)
+                    name.setWordWrap(True)
+                    name.setMinimumWidth(0)
+                    name.setTextInteractionFlags(
+                        Qt.TextInteractionFlag.TextSelectableByMouse)
+                    name.setToolTip(str(link.label))
+                    entry_layout.addWidget(name)
+
+                    id_row = QHBoxLayout()
+                    id_row.setContentsMargins(0, 0, 0, 0)
+                    id_row.setSpacing(5)
+                    camera_id = QLabel(f"ID камеры B2O: {link.camera_id}")
+                    camera_id.setObjectName("B2ONvrCameraId")
+                    camera_id.setTextFormat(Qt.TextFormat.PlainText)
+                    camera_id.setStyleSheet("font-weight: 700;")
+                    camera_id.setTextInteractionFlags(
+                        Qt.TextInteractionFlag.TextSelectableByMouse)
+                    camera_id.setMinimumWidth(0)
+                    camera_id.setToolTip(
+                        f"Подтверждено: {client.server}:{port} · ID {link.camera_id}")
+                    id_row.addWidget(camera_id, 0)
+                    copy = QToolButton(entry)
+                    copy.setObjectName("B2OCopyNvrCameraId")
+                    copy.setText("⧉")
+                    copy.setFixedSize(22, 22)
+                    copy.setCursor(Qt.CursorShape.PointingHandCursor)
+                    copy.setStyleSheet(
+                        "QToolButton#B2OCopyNvrCameraId {"
+                        "background: transparent; border: none; "
+                        "font-size: 16px; padding: 0px; }"
+                    )
+                    copy.setToolTip("Скопировать ID камеры " + str(link.camera_id))
+                    copy.clicked.connect(
+                        lambda _checked=False, value=str(link.camera_id):
+                        QGuiApplication.clipboard().setText(value))
+                    id_row.addWidget(copy, 0)
+                    id_row.addStretch(1)
+                    entry_layout.addLayout(id_row)
+                    details_layout.addWidget(entry)
+
+                    # Calculate height using the REAL available port-card width.
+                    # Wrapping may require 2+ lines for customer camera names.
+                    text_width = max(145, port_list.viewport().width() - 100)
+                    metrics = QFontMetrics(name.font())
+                    name_height = metrics.boundingRect(
+                        QRect(0, 0, text_width, 3000),
+                        int(Qt.TextFlag.TextWordWrap), name.text()
+                    ).height()
+                    camera_heights.append(max(18, name_height) + 34)
+
+                outer.addWidget(toggle)
+                outer.addWidget(details)
+                expanded = port in self._nvr_expanded_ports
+                details.setVisible(expanded)
+                group_detail_height = (sum(camera_heights) + 5 * max(0, len(camera_heights) - 1) + 8)
+                group_extra = 30 + (group_detail_height if expanded else 0)
+
+                def toggle_nvr(_checked=False, *,
+                               target=port, panel=details, button=toggle,
+                               list_item=item, list_widget=port_list,
+                               total=len(camera_group), content_height=group_detail_height):
+                    expanded_now = panel.isHidden()
+                    panel.setVisible(expanded_now)
+                    if expanded_now:
+                        self._nvr_expanded_ports.add(target)
+                    else:
+                        self._nvr_expanded_ports.discard(target)
+                    button.setText(
+                        ("▾ Свернуть список камер" if expanded_now
+                         else f"▸ Раскрыть список найденных камер ({total})"))
+                    list_item.setSizeHint(QSize(
+                        0, 76 + 30 + (content_height if expanded_now else 0)))
+                    height = sum(
+                        list_widget.item(i).sizeHint().height()
+                        + list_widget.spacing()
+                        for i in range(list_widget.count())
+                    ) + 14
+                    list_widget.setFixedHeight(min(680, max(185, height)))
+                toggle.clicked.connect(toggle_nvr)
+                toggle.setText(
+                    "▾ Свернуть список камер" if expanded else
+                    f"▸ Раскрыть список найденных камер ({len(camera_group)})")
 
             detail_parts = ["TCP · dst-nat"]
             if conflict_rows:
@@ -142,8 +342,18 @@ def install_nat_counter_ui() -> None:
             bottom.addWidget(_counter(f"Пакеты: {_fmt_packets(rule_packets)}"), 0)
             outer.addLayout(bottom)
 
-            item.setSizeHint(QSize(0, 76))
+            item.setSizeHint(QSize(
+                0, (90 if camera_link is not None else 76) + group_extra))
             port_list.setItemWidget(item, row)
+
+        # _render_client() initially sized the plain-text list too short.
+        # After custom rows are attached, reserve space for the visible ID
+        # and the traffic line; keep scrolling for larger port inventories.
+        required = sum(
+            port_list.item(i).sizeHint().height() + port_list.spacing()
+            for i in range(port_list.count())
+        ) + 14
+        port_list.setFixedHeight(min(680, max(185, required)))
 
     SearchManagePage._render_client = patched_render
     _INSTALLED = True

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+import ipaddress
 import shutil
 import socket
 import subprocess
@@ -78,6 +79,7 @@ class ClientRecord:
     is_enabled: bool = True
     last_logged_out: str = ""
     uptime: str = ""
+    tunnel_source_ip: str = ""
     port_connections: dict[int, int] = field(default_factory=dict)
     port_bytes: dict[int, int] = field(default_factory=dict)
     # Внешний TCP-порт должен принадлежать только одной LinkVideo-учётке на сервере.
@@ -111,6 +113,70 @@ class InactiveClientRecord:
     lifecycle_state: str = "U"
     is_online: bool = False
     lifecycle_source: str = "routeros"
+
+
+def _observed_tunnel_ip(value: object) -> str:
+    """RouterOS /ppp/active caller-id is the source as seen by the VPN server.
+
+    Some RouterOS services put phone numbers, MACs or interface names here.
+    Display only an actual IP address; don't confuse it with assigned VPN IP.
+    """
+    raw = str(value or "").strip()
+    try:
+        return str(ipaddress.ip_address(raw))
+    except ValueError:
+        return ""
+
+
+def count_online_account_ports(actives: List[dict], nat_rules: List[dict]) -> int:
+    """Conservative estimate of enabled TCP forwards belonging to online L2TP.
+
+    No conntrack and no claim about live RTSP/TCP reachability. Duplicate
+    external ports are ambiguous and skipped even if one rule is offline.
+    """
+    online_addresses: dict[str, set[str]] = {}
+    active_users: dict[str, str] = {}
+    for row in actives:
+        if str(row.get("service") or "").strip().lower() != "l2tp":
+            continue
+        name = str(row.get("name") or "").strip()
+        address = str(row.get("address") or "").strip()
+        if not name or not _observed_tunnel_ip(address):
+            continue
+        active_users[name] = address
+        online_addresses.setdefault(address, set()).add(name)
+    port_rules: dict[int, list[dict]] = {}
+    for row in nat_rules:
+        if str(row.get("chain") or "").strip().lower() != "dstnat":
+            continue
+        if str(row.get("action") or "").strip().lower() != "dst-nat":
+            continue
+        if str(row.get("protocol") or "").strip().lower() != "tcp":
+            continue
+        if str(row.get("disabled") or "false").strip().lower() in ("yes","true","1"):
+            continue
+        port_text = str(row.get("dst-port") or "").strip()
+        if not port_text.isascii() or not port_text.isdecimal():
+            continue  # no ranges/port lists: cannot attribute reliably
+        port = int(port_text)
+        if not 1 <= port <= 65535:
+            continue
+        port_rules.setdefault(port, []).append(row)
+    count = 0
+    for rules in port_rules.values():
+        if len(rules) != 1:
+            continue
+        rule = rules[0]
+        target = str(rule.get("to-addresses") or "").strip()
+        if not _observed_tunnel_ip(target):
+            continue
+        comment = str(rule.get("comment") or "").strip()
+        if comment in active_users:
+            if active_users[comment] == target:
+                count += 1
+        elif len(online_addresses.get(target, ())) == 1:
+            count += 1
+    return count
 
 
 @dataclass
@@ -232,8 +298,10 @@ class VPNService:
         with RouterOSAPIClient(server, creds.username, creds.password, port=creds.port, timeout=creds.timeout) as api:
             resources = api.print("/system/resource")
             secrets = api.print("/ppp/secret", {".proplist": ".id,name"})
-            actives = api.print("/ppp/active", {".proplist": ".id,name,service"})
-            nat_rules = api.print("/ip/firewall/nat", {".proplist": ".id,dst-port,to-ports"})
+            actives = api.print("/ppp/active", {".proplist": ".id,name,address,service"})
+            nat_rules = api.print("/ip/firewall/nat", {
+                ".proplist": ".id,chain,action,protocol,disabled,dst-port,to-ports,to-addresses,comment"
+            })
         resource = resources[0] if resources else {}
         total_memory = self._parse_optional_int(resource.get("total-memory"))
         free_memory = self._parse_optional_int(resource.get("free-memory"))
@@ -252,7 +320,7 @@ class VPNService:
             clients_total=len(secrets),
             clients_online=sum(1 for row in actives if str(row.get("service", "") or "").strip().lower() == "l2tp"),
             ports_total=ports_total,
-            ports_active=0,
+            ports_active=count_online_account_ports(actives,nat_rules),
         )
 
     def pick_best_server_parallel(self, servers: List[str], creds: SessionCredentials, max_workers: int = 6, cancel_event=None) -> str:
@@ -1295,6 +1363,7 @@ class VPNService:
                 is_enabled=(str(disabled_flag).strip().lower() not in ("yes", "true", "1", "disabled", "disable", "on")),
                 last_logged_out=str(secret.get("last-logged-out", "") or secret.get("last_logged_out", "")).strip(),
                 uptime=str((active or {}).get("uptime", "") or "").strip(),
+                tunnel_source_ip=_observed_tunnel_ip((active or {}).get("caller-id")),
                 port_connections=port_connections,
                 port_bytes=port_bytes,
             ))

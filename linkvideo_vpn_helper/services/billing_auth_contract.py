@@ -6,9 +6,11 @@ Network evidence confirms POST https://api-billing-global.linkvideo.ru/auth/logi
 with JSON keys "login" and "password". It does NOT establish the response
 schema, session/token mechanism, refresh protocol, or permission model.
 
-Never automatically reuse credentials from RouterOS or QSettings. A future
-authorized transport must obtain the employee's approved billing credentials
-explicitly, handle secrets outside logs, and check server-side permissions.
+The active RouterOS-authenticated employee session is the only credential
+source in the desktop Helper workflow. CRM independently validates those same
+values against its own HTTPS endpoint and returns a distinct bearer token.
+Do not copy RouterOS credentials to another storage key or reuse RouterOS
+session tokens as billing tokens. Never include secrets in logs.
 """
 
 from dataclasses import dataclass, field
@@ -24,7 +26,7 @@ BILLING_LOGIN_CONTENT_TYPE = "application/json"
 
 @dataclass(frozen=True, repr=False)
 class BillingLoginRequest:
-    """Explicit CRM credentials, kept separate from RouterOS credentials."""
+    """Ephemeral CRM login payload from the verified Helper employee session."""
 
     login: str
     password: str = field(repr=False)

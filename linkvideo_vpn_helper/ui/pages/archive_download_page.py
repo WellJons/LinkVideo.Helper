@@ -19,6 +19,7 @@ from linkvideo_vpn_helper.ui.components import (
     Card, DateTimePickerButton, MetricCard, PageHeader, SegmentedControl, StatusPill, TaskStatus, WorkflowStep, button_feedback, build_page_scaffold,
 )
 from linkvideo_vpn_helper.ui.dialogs import B2OLoginDialog
+from linkvideo_vpn_helper.ui.archive_extra_cluster_picker import ArchiveExtraClusterPicker
 
 
 class ArchiveDownloadPage(QWidget):
@@ -26,16 +27,19 @@ class ArchiveDownloadPage(QWidget):
     authReady = Signal(object)
     downloadUpdate = Signal(object)
 
-    def __init__(self, service: ArchiveService, settings, parent=None):
+    def __init__(self, service: ArchiveService, settings, parent=None, *, work_account=None):
         super().__init__(parent)
         self.service = service
         self.settings = settings
+        self.work_account = work_account
         self.discovery: ArchiveDiscovery | None = None
         self._last_output: Path | None = None
         self._retry_action = None
         self._cancel_event = None
         self.discoveryReady.connect(self._on_discovery)
         self.authReady.connect(self._on_auth)
+        if self.work_account is not None:
+            self.work_account.b2oChanged.connect(self._on_work_account_b2o)
         self.downloadUpdate.connect(self._on_download_update)
         self._build()
 
@@ -97,6 +101,10 @@ class ArchiveDownloadPage(QWidget):
         self.auth_user.setObjectName("Muted")
         self.btn_auth = QPushButton("Войти в B2O")
         self.btn_auth.clicked.connect(self._authorize)
+        if self.work_account is not None:
+            # The only visible authentication controls are under the
+            # MikroTik user card. Archive pages show status, not login forms.
+            self.btn_auth.hide()
         auth.addWidget(self.auth_pill)
         auth.addWidget(self.auth_user)
         auth.addStretch(1)
@@ -124,6 +132,9 @@ class ArchiveDownloadPage(QWidget):
         operator_row.addWidget(operator_label)
         operator_row.addWidget(self.operator, 1)
         params.insertLayout(1, operator_row)
+        self.extra_clusters = ArchiveExtraClusterPicker(self.service.b2o, self)
+        self.extra_clusters.changed.connect(self._extra_operator_changed)
+        params.insertWidget(2, self.extra_clusters)
         self._operator_changed(saved_operator)
 
         self.btn_find = QPushButton("Найти архив")
@@ -235,6 +246,7 @@ class ArchiveDownloadPage(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         if hasattr(self, "operator"):
+            self.extra_clusters.refresh()
             saved = str(self.settings.value("archive/operator_id", "241", str) or "241")
             if saved not in {"241", "1721", "1741"}:
                 saved = "241"
@@ -285,13 +297,27 @@ class ArchiveDownloadPage(QWidget):
         if token:
             self.auth_pill.set_status("B2O подключён", "success")
             self.auth_user.setText(login)
-            self.btn_auth.setText("Сменить вход")
+            self.btn_auth.setText("Проверить доступ" if self.work_account else "Сменить вход")
         else:
-            self.auth_pill.set_status("Нужен вход B2O", "warning")
-            self.auth_user.setText("")
-            self.btn_auth.setText("Войти в B2O")
+            self.auth_pill.set_status("Нужен вход в админку" if self.work_account else "Нужен вход B2O", "warning")
+            self.auth_user.setText(self.work_account.username if self.work_account else "")
+            self.btn_auth.setText("Войти в админку" if self.work_account else "Войти в B2O")
 
     def _authorize(self):
+        if self.work_account is not None:
+            if not self.work_account.has_credentials:
+                self.task.show()
+                self.task.warning("Нужен вход в админку",
+                                  "Введите данные админки в едином окне авторизации.")
+                self.work_account.loginRequested.emit()
+                return
+            if self.work_account.b2o_busy:
+                return
+            self.btn_auth.setEnabled(False)
+            self.task.show()
+            self.task.busy("Авторизация B2O", "Подключаю рабочую учётную запись…")
+            self.work_account.ensure_b2o(force=True)
+            return
         dialog = B2OLoginDialog(self.service.b2o.login_name(), self)
         if not dialog.exec():
             return
@@ -308,6 +334,9 @@ class ArchiveDownloadPage(QWidget):
                 self.authReady.emit(exc)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _on_work_account_b2o(self, ok, message):
+        self._on_auth(None if ok else RuntimeError(message))
 
     def _on_auth(self, error):
         self.btn_auth.setEnabled(True)
@@ -330,13 +359,25 @@ class ArchiveDownloadPage(QWidget):
         return datetime(d.year(), d.month(), d.day(), t.hour(), t.minute(), t.second())
 
     def _operator_id(self) -> int:
+        extra = self.extra_clusters.selected_operator()
+        if extra is not None:
+            return extra
         try:
             return int(self.operator.current())
         except Exception:
             return 241
 
+    def _extra_operator_changed(self, operator_id):
+        self.operator.setEnabled(operator_id is None)
+        if operator_id is not None:
+            self.camera.setPlaceholderText("ID камеры дополнительного оператора, например: 100046")
+        else:
+            self._operator_changed(self.operator.current())
+
     def _operator_changed(self, value: str):
         operator_id = self.service.b2o.valid_operator_id(value)
+        if self.extra_clusters.selected_operator() is not None:
+            return
         self.settings.setValue("archive/operator_id", str(operator_id))
         prefix = self.service.b2o.operator_prefix(operator_id)
         self.camera.setPlaceholderText(f"Например: 268527 или {prefix}268527")
@@ -348,6 +389,7 @@ class ArchiveDownloadPage(QWidget):
         detected = self.service.b2o.detect_operator_id(raw, self._operator_id())
         # Числовой ID сам по себе не меняет выбор оператора. Префикс камеры — меняет.
         if raw.startswith(("linkvideo_", "linkvideokz_", "linkvideoby_")):
+            self.extra_clusters.clear_selection()
             self.operator.setCurrent(str(detected))
 
     def _find(self):
@@ -361,8 +403,9 @@ class ArchiveDownloadPage(QWidget):
             self._authorize()
             return
         operator = self.service.b2o.resolve_operator_id(camera_id, self._operator_id())
-        self.operator.setCurrent(str(operator))
-        self.settings.setValue("archive/operator_id", str(operator))
+        if operator in (241, 1721, 1741):
+            self.operator.setCurrent(str(operator))
+            self.settings.setValue("archive/operator_id", str(operator))
         start = self._py(self.start.value())
         end = self._py(self.end.value())
         if end <= start:
