@@ -15,7 +15,7 @@ import linkvideo_vpn_helper.mikrotik.api_ssl_client as api_module
 
 
 created_ns = time.time_ns() - 250 * policy.DAY_NS
-original_comment = policy.compose_extended_comment("operator note", "U", 0, created_ns, "never_active_tracking")
+original_comment = policy.compose_extended_comment("operator note", "U", 0, created_ns, "created")
 
 
 class FakeAPI:
