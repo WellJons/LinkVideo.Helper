@@ -882,47 +882,99 @@ def install_archive_download_methods() -> None:
     original_page_cancel = ArchiveDownloadPage.cancel_current_action
 
     def _open_manual_ffmpeg_dialog(page):
+        from PySide6.QtGui import QFont
+        from linkvideo_vpn_helper.theme import colors
+
         dialog = QDialog(page)
-        dialog.setWindowTitle("Команда FFmpeg — ручной режим")
-        dialog.resize(810, 340)
-        dialog.setMinimumWidth(600)
+        dialog.setProperty("helperModal", True)
+        dialog.setWindowTitle("Настройка FFmpeg · HLS")
+        dialog.resize(880, 440)
+        dialog.setMinimumSize(680, 390)
         content = QVBoxLayout(dialog)
-        content.setContentsMargins(18, 18, 18, 18)
+        content.setContentsMargins(22, 20, 22, 20)
         content.setSpacing(12)
 
+        heading = QLabel("Ручная команда FFmpeg")
+        heading.setObjectName("SectionTitle")
+        content.addWidget(heading)
+
         explanation = QLabel(
-            "Отредактируйте команду FFmpeg для скачивания HLS-архива. "
-            "{input} — найденный плейлист или участок; {output} — временный MP4. "
-            "Эти значения подставляет Helper. Команда запускается без cmd.exe "
-            "или PowerShell. HTTP-заголовки плеера добавляются автоматически."
+            "Задайте параметры обработки HLS-архива. "
+            "Адрес плейлиста и путь сохранения подставляются автоматически — "
+            "вставлять реальную ссылку или токен не требуется."
         )
+        explanation.setObjectName("Muted")
         explanation.setWordWrap(True)
         content.addWidget(explanation)
 
+        preset_row = QHBoxLayout()
+        preset_row.setSpacing(8)
+        preset_title = QLabel("БЫСТРЫЕ НАСТРОЙКИ")
+        preset_title.setObjectName("TinyMuted")
+        preset_row.addWidget(preset_title)
+        preset_row.addStretch(1)
+        with_audio = QPushButton("С сохранением звука")
+        no_audio = QPushButton("Без звука")
+        with_audio.setProperty("role", "soft")
+        no_audio.setProperty("role", "soft")
+        preset_row.addWidget(with_audio)
+        preset_row.addWidget(no_audio)
+        content.addLayout(preset_row)
+
+        code_label = QLabel("Команда запуска")
+        code_label.setObjectName("CardTitle")
+        content.addWidget(code_label)
+
         edit = QPlainTextEdit(dialog)
         edit.setObjectName("ArchiveManualFFmpegEditor")
-        method = str(getattr(page.archive_method_combo, "currentData")() or "ffmpeg")
+        edit.setFont(QFont("Consolas", 10))
+        edit.setMinimumHeight(106)
+        edit.setMaximumHeight(156)
+        edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        palette = colors(str(page.settings.value(
+            "ui/theme_v2", "linkvideo_2026", str) or "linkvideo_2026"))
+        edit.setStyleSheet(
+            "QPlainTextEdit {"
+            f"background: {palette['panel']}; color: {palette['text']};"
+            f"border: 1px solid {palette['border']}; border-radius: 10px;"
+            "padding: 12px; selection-background-color: "
+            f"{palette['accent']};"
+            "}"
+        )
+        method = str(page.archive_method_combo.currentData() or "ffmpeg")
         default = (MANUAL_FFMPEG_NO_AUDIO_TEMPLATE if method == "ffmpeg_no_audio"
                    else MANUAL_FFMPEG_TEMPLATE)
         saved = str(page.settings.value("archive/manual_ffmpeg_template", default, str)
                     or default)
         edit.setPlainText(str(getattr(page, "_lv_archive_manual_command", "")
                               or saved))
-        edit.setMinimumHeight(105)
-        edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
-        content.addWidget(edit)
+        content.addWidget(edit, 1)
+        with_audio.clicked.connect(lambda: edit.setPlainText(MANUAL_FFMPEG_TEMPLATE))
+        no_audio.clicked.connect(lambda: edit.setPlainText(MANUAL_FFMPEG_NO_AUDIO_TEMPLATE))
 
-        privacy = QLabel(
-            "Подписанные HLS-адреса и ключи доступа не записываются в шаблон. "
-            "Ручная команда применится к каждому участку архива. "
-            "Чтобы вернуться к стандартному режиму, выберите метод скачивания заново."
+        placeholders = QLabel(
+            '{input} — ссылка на HLS-плейлист   ·   {output} — временный MP4'
         )
-        privacy.setObjectName("TinyMuted")
-        privacy.setWordWrap(True)
-        content.addWidget(privacy)
+        placeholders.setObjectName("TinyMuted")
+        content.addWidget(placeholders)
+
+        status = QLabel()
+        status.setObjectName("TinyMuted")
+        status.setWordWrap(True)
+        status.setMinimumHeight(22)
+        content.addWidget(status)
+
+        note = QLabel(
+            "Команда запускается напрямую, без оболочки Windows. HTTP-заголовки "
+            "плеера добавляются автоматически. Секретные ссылки не сохраняются."
+        )
+        note.setObjectName("TinyMuted")
+        note.setWordWrap(True)
+        content.addWidget(note)
 
         actions = QHBoxLayout()
-        reset = QPushButton("По умолчанию")
+        actions.setSpacing(8)
+        reset = QPushButton("Сбросить")
         cancel = QPushButton("Отмена")
         save = QPushButton("Сохранить")
         run = QPushButton("Сохранить и скачать")
@@ -934,6 +986,26 @@ def install_archive_download_methods() -> None:
         actions.addWidget(run)
         content.addLayout(actions)
 
+        def update_validation():
+            try:
+                validate_manual_ffmpeg_command(edit.toPlainText().strip())
+            except ValueError as exc:
+                status.setText("⚠ " + str(exc))
+                status.setStyleSheet(f"color: {palette['danger']};")
+                save.setEnabled(False)
+                run.setEnabled(False)
+                return
+            status.setText("✓ Команда корректна, можно сохранить.")
+            status.setStyleSheet(f"color: {palette['success']};")
+            save.setEnabled(True)
+            downloadable = bool(
+                page.discovery and page.discovery.has_downloadable_archive)
+            run.setEnabled(downloadable and getattr(page, "_cancel_event", None) is None)
+            run.setToolTip(
+                "Сначала найдите архив за нужный период" if not downloadable
+                else "Начать загрузку с выбранной командой")
+
+        edit.textChanged.connect(update_validation)
         reset.clicked.connect(lambda: edit.setPlainText(default))
         cancel.clicked.connect(dialog.reject)
 
@@ -946,11 +1018,11 @@ def install_archive_download_methods() -> None:
                 if getattr(page, "_cancel_event", None) is not None:
                     raise ValueError("Дождитесь завершения текущей операции.")
             except ValueError as exc:
-                QMessageBox.warning(dialog, "Проверьте команду", str(exc))
+                status.setText("⚠ " + str(exc))
+                status.setStyleSheet(f"color: {palette['danger']};")
                 return
             page.settings.setValue("archive/manual_ffmpeg_template", template)
-            # Switch method first: the method change clears previous manual
-            # state. This run then explicitly enables the edited template.
+            # Method selection clears old custom state, then restores this one.
             if page.archive_method_combo.currentData() != "ffmpeg":
                 index = page.archive_method_combo.findData("ffmpeg")
                 page.archive_method_combo.setCurrentIndex(index)
@@ -963,6 +1035,7 @@ def install_archive_download_methods() -> None:
 
         save.clicked.connect(lambda: apply_command(False))
         run.clicked.connect(lambda: apply_command(True))
+        update_validation()
         dialog.exec()
 
     def page_build(self):
