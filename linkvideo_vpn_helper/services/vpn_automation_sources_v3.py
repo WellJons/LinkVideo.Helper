@@ -24,7 +24,9 @@ META_READ = r'''
     :local p1 [:find $c "|LV1|"]
     :local p $p2
     :if ($p = nil) do={ :set p $p1 } else={
-        :if (($p1 != nil) && ($p1 < $p)) do={ :set p $p1 }
+        :if ($p1 != nil) do={
+            :if ($p1 < $p) do={ :set p $p1 }
+        }
     }
     :local base $c
     :if ($p != nil) do={ :set base [:pick $c 0 $p] }
@@ -63,11 +65,13 @@ META_READ = r'''
             :local le [:find $lr "|"]
             :if ($le != nil) do={
                 :local n [:tonum [:pick $lr 0 $le]]
-                :if ($n > 0) do={
-                    :if ($legacyNs) do={
-                        :set lastDay ($n / $dayNs)
-                    } else={
-                        :set lastDay $n
+                :if ([:typeof $n] = "num") do={
+                    :if ($n > 0) do={
+                        :if ($legacyNs) do={
+                            :set lastDay ($n / $dayNs)
+                        } else={
+                            :set lastDay $n
+                        }
                     }
                 }
             }
