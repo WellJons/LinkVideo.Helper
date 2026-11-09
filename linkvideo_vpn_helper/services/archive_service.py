@@ -312,7 +312,7 @@ class ArchiveService(_CoreArchiveService):
 
         for host in list(camera.candidate_hosts or []):
             add(host)
-        resolved_operator = self.b2o.resolve_operator_id(camera.label, 241)
+        resolved_operator = int(camera.raw.get("_lv_operator_id") or self.b2o.resolve_operator_id(camera.label, 241))
         for host in self._deep_candidate_hosts(camera.server, resolved_operator, camera.label):
             add(host)
 
