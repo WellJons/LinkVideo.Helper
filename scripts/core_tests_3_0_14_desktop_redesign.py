@@ -57,8 +57,9 @@ assert "create_clients_batch(" in create
 
 assert 'self.page_layout.addWidget(self.search_form)' in search
 assert 'self.search_form.hide()' not in search
-assert 'password_view.setEchoMode(QLineEdit.EchoMode.Normal)' in search
-assert 'password_view.setEchoMode(QLineEdit.EchoMode.Password)' not in search
+assert 'password_value = QLabel(c.password)' in search
+assert 'password_view = QLineEdit(c.password)' not in search
+assert 'info_l.addLayout(info_nav)' not in search
 assert "self._run_action(" in search
 assert "self._render_client()" in search
 assert "self._sync_selected_port_controls()" in search
