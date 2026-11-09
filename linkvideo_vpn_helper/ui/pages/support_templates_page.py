@@ -7,7 +7,7 @@ import shutil
 import uuid
 import zipfile
 
-from PySide6.QtCore import QEvent, Qt, QSize, QRect, QTimer
+from PySide6.QtCore import Qt, QSize, QRect
 from PySide6.QtGui import QIcon, QImageReader, QPixmap, QFontMetrics
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
@@ -42,7 +42,6 @@ class SupportTemplatesPage(QWidget):
         self._removed_image_ids: set[int] = set()
         self._draft_dir = TemporaryDirectory(prefix="lv_reply_images_")
         self._editing = False
-        self._closing = False
         self._build()
         self._refresh()
 
@@ -71,6 +70,7 @@ class SupportTemplatesPage(QWidget):
         columns.setChildrenCollapsible(False)
         columns.setHandleWidth(14)
         columns.setMinimumHeight(600)
+        columns.splitterMoved.connect(lambda *_: self._update_list_row_heights())
 
         left = Card()
         left.setMinimumWidth(350)
@@ -115,8 +115,7 @@ class SupportTemplatesPage(QWidget):
         self.templates_list.setUniformItemSizes(False)
         self.templates_list.setMinimumHeight(380)
         self.templates_list.currentItemChanged.connect(self._select)
-        self._list_viewport = self.templates_list.viewport()
-        self._list_viewport.installEventFilter(self)
+
         ll.addWidget(self.templates_list, 1)
         self.empty_label = QLabel("Пока нет ответов.\nСоздайте шаблон или импортируйте DOCX.")
         self.empty_label.setObjectName("TinyMuted")
@@ -367,9 +366,7 @@ class SupportTemplatesPage(QWidget):
         """Re-measure every card on resize to prevent cropped text."""
         if not hasattr(self, "templates_list"):
             return
-        if self._closing:
-            return
-        width = max(160, self._list_viewport.width() - 96)
+        width = max(160, self.templates_list.viewport().width() - 96)
         for i in range(self.templates_list.count()):
             item = self.templates_list.item(i)
             tile = self.templates_list.itemWidget(item)
@@ -387,18 +384,10 @@ class SupportTemplatesPage(QWidget):
             )
             item.setSizeHint(QSize(0, max(95, height)))
 
-    def eventFilter(self, watched, event):
-        if (not self._closing and watched is getattr(self, "_list_viewport", None)
-                and event.type() == QEvent.Type.Resize):
-            QTimer.singleShot(0, self._update_list_row_heights)
-        return super().eventFilter(watched, event)
-
-    def closeEvent(self, event):
-        self._closing = True
-        viewport = getattr(self, "_list_viewport", None)
-        if viewport is not None:
-            viewport.removeEventFilter(self)
-        super().closeEvent(event)
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "templates_list"):
+            self._update_list_row_heights()
 
     def _highlight_selected_tile(self):
         for i in range(self.templates_list.count()):
