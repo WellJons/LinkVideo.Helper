@@ -1332,7 +1332,8 @@ class SearchManagePage(QWidget):
         self.port_list = ClientPortsList()
         self.port_list.outer_scroll = self.info_scroll
         self.port_list.setObjectName("PortList")
-        self.port_list.setProperty("lvWheelBoundaryLock", True)
+        # Always forward wheel input to the existing left-panel scrollbar.
+        self.port_list.setProperty("lvWheelToParent", True)
         self.port_list.setMinimumHeight(118)
         # No maximum height here: the parent scroll handles even 100+ ports.
         verified_ports = {
