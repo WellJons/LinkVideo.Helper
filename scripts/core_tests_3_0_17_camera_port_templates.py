@@ -9,7 +9,7 @@ import sqlite3
 
 from linkvideo_vpn_helper.services.camera_lookup import CameraChoice
 from linkvideo_vpn_helper.services.vpn_camera_port_match import (
-    account_login, explicit_camera_ports, match_vpn_ports,
+    account_login, explicit_camera_ports, match_vpn_ports, _detail_for_camera,
 )
 from linkvideo_vpn_helper.services.support_templates import TemplateStore
 
@@ -22,6 +22,10 @@ assert explicit_camera_ports({"rtsp_url": "rtsp://admin:secret@host.example:1169
 assert explicit_camera_ports({"rtsp_url": "rtsp://host.example/live"}) == set()
 assert explicit_camera_ports({"network":{"external_rtsp_port":"11691"}}) == {11691}
 assert explicit_camera_ports({"port":"maybe 11690", "rtsp_url":"http://host:11690/"}) == set()
+assert explicit_camera_ports({"camera_stream_main":
+    "rtsp://admin:super-secret@vpn02.linkvideo.ru:11690/live"}) == {11690}
+assert explicit_camera_ports({"camera_stream_main":
+    "rtsp://vpn02.linkvideo.ru/live"}) == set()  # Never infer default port
 
 class FakeB2O:
     def token(self):
@@ -69,6 +73,56 @@ report = match_vpn_ports("89950639067_3",[11690],b2o,creds,country="Россия
 assert report.incomplete and not report.links
 assert match_vpn_ports("client_3",[],b2o,creds).links == ()
 
+# Regression: B2O list and camera details can find FIVE cameras but have NO
+# RTSP ports. The actual external ports live in /camera-streams-urls.
+class StreamB2O:
+    CAMERA_URL = "https://api.b2o.goodline.info/ords/mobile/vc2/operators/{operator}/cameras/{camera}"
+    def __init__(self):
+        self.routes = []
+        self.fail_stream = False
+    def token(self):
+        return "session-token"
+    def normalize_camera_id(self,camera_id,operator_id):
+        return str(camera_id), str(camera_id)
+    def request_json(self,url,token,timeout=12):
+        assert token == "session-token"
+        self.routes.append(url)
+        camera_id = url.split("/cameras/")[1].split("/")[0]
+        if url.endswith("/camera-streams-urls"):
+            if self.fail_stream:
+                raise TimeoutError("B2O stream endpoint unavailable")
+            return {"data":{"camera_stream_main": "rtsp://operator:secret@vpn02.linkvideo.ru:" +
+                    {"999":"11690","1000":"11691","1001":"11692"}.get(camera_id,"11693") + "/live"}}
+        return {"data":{"id_camera":camera_id,"account_login":"89950639067",
+                        "camera_status":"online"}}
+
+actual_b2o=StreamB2O()
+five = tuple(CameraChoice(str(999+i),241,"Россия",f"Камера {i}",
+                          customer_login="89950639067") for i in range(5))
+actual = match_vpn_ports("89950639067_3",[11690,11691,11692],actual_b2o,creds,
+                         country="Россия", lookup=lambda *_: five)
+assert {(x.port,x.camera_id) for x in actual.links} == {
+    (11690,"999"),(11691,"1000"),(11692,"1001")}
+assert actual.stream_cameras == 5
+assert actual.checked_cameras == 5
+assert len([url for url in actual_b2o.routes if url.endswith("/camera-streams-urls")]) == 5
+assert not actual.incomplete
+
+actual_b2o.fail_stream=True
+partial = match_vpn_ports("89950639067_3",[11690],actual_b2o,creds,
+                          country="Россия", lookup=lambda *_: five)
+assert partial.incomplete and not partial.links and partial.stream_errors == 5
+
+# If camera detail reports a conflicting owner, do not fetch or link it.
+wrong=StreamB2O()
+def conflicting(url, token, timeout=12):
+    wrong.routes.append(url)
+    return {"data":{"id_camera":"999", "account_login":"another_customer"}}
+wrong.request_json=conflicting
+assert _detail_for_camera(wrong,first,"89950639067")[1] == set()
+assert not any(u.endswith("/camera-streams-urls") for u in wrong.routes)
+
+
 with TemporaryDirectory() as temp:
     root=Path(temp)
     store=TemplateStore(root)
@@ -111,7 +165,11 @@ main_ui=(project/"linkvideo_vpn_helper/ui/main_window.py").read_text(encoding="u
 assert 'password_value = QLabel(c.password)' in search_ui
 assert 'password_view = QLineEdit(c.password)' not in search_ui
 assert 'info_l.addLayout(info_nav)' not in search_ui
-assert '("Камеры B2O по портам")' in search_ui
+assert '("Камеры B2O по портам")' not in search_ui
+assert 'ID камеры B2O: ' in search_ui
+assert "pl.addLayout(camera_lookup)" in search_ui
+assert "pl.addWidget(camera_status)" in search_ui
+assert 'Трафик порта:' in search_ui
 assert "self._start_camera_port_check()" in search_ui
 assert '"templates", "▤", "Шаблоны ответов"' in main_ui
 assert 'SupportTemplatesPage(self)' in main_ui
