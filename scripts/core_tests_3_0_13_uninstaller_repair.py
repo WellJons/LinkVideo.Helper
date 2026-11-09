@@ -11,9 +11,9 @@ BACKEND = (ROOT / "installer_next" / "backend_windows.go").read_text(encoding="u
 MAIN = (ROOT / "installer_next" / "main_windows.go").read_text(encoding="utf-8")
 SELFTEST = (ROOT / "installer_next" / "selftest_windows.go").read_text(encoding="utf-8")
 
-assert 'hasArg("--uninstall")' in MAIN, "Setup must offer removal even when Uninstall.exe is missing"
-assert "idRemoveInstalled" in MAIN
-assert '"Удалить текущую версию"' in MAIN
+assert 'hasArg("--uninstall")' in MAIN, "Uninstall remains available even if Uninstall.exe is missing"
+assert "idRemoveInstalled" not in MAIN, "Upgrade wizard must never switch to uninstall-only mode"
+assert '"Удалить текущую версию"' not in MAIN, "Misleading destructive action returned"
 assert "w.createUninstallPages()" in MAIN
 
 register = BACKEND.split("func registerUninstall", 1)[1].split("func installProduct", 1)[0]
