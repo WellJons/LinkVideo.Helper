@@ -262,7 +262,7 @@ def install_nat_counter_ui() -> None:
                                target=port, panel=details, button=toggle,
                                list_item=item, list_widget=port_list,
                                total=len(camera_group)):
-                    expanded_now = not panel.isVisible()
+                    expanded_now = panel.isHidden()
                     panel.setVisible(expanded_now)
                     if expanded_now:
                         self._nvr_expanded_ports.add(target)
