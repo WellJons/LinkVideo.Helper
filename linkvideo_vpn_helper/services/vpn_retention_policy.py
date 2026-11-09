@@ -331,14 +331,37 @@ def _ensure_tracking_for_server(server, creds) -> int:
 
 
 def _remove_client_objects(api, secret: dict, profiles: list[dict], nat_rules: list[dict]) -> tuple[int, bool]:
+    """Delete only resources unambiguously belonging to one expired PPP account.
+
+    IP-only matching is forbidden when another PPP Secret can use that remote IP.
+    A shared PPP profile is never deleted; NAT with a foreign target is protected.
+    """
     rid = str(secret.get(".id", "") or "").strip()
     login = str(secret.get("name", "") or "").strip()
     profile_name = str(secret.get("profile", "") or "").strip()
-    remote = str(secret.get("remote-address", "") or secret.get("remote_address", "") or "").strip()
-    if not remote and profile_name:
-        profile = next((row for row in profiles if str(row.get("name", "") or "").strip() == profile_name), None)
-        if profile:
-            remote = str(profile.get("remote-address", "") or profile.get("remote_address", "") or "").strip()
+    profiles_by_name = {
+        str(row.get("name", "") or "").strip(): row for row in profiles
+    }
+
+    def effective_remote(row: dict) -> str:
+        remote = str(row.get("remote-address", "") or row.get("remote_address", "") or "").strip()
+        if remote:
+            return remote
+        name = str(row.get("profile", "") or "").strip()
+        p = profiles_by_name.get(name, {})
+        return str(p.get("remote-address", "") or p.get("remote_address", "") or "").strip()
+
+    remote = effective_remote(secret)
+    all_secrets = api.print("/ppp/secret")
+    others = [
+        row for row in all_secrets
+        if str(row.get(".id", "") or "").strip() != rid
+    ]
+    shared_remote = bool(remote and any(effective_remote(row) == remote for row in others))
+    profile_uses = sum(
+        1 for row in all_secrets
+        if profile_name and str(row.get("profile", "") or "").strip() == profile_name
+    )
 
     removed_nat = 0
     for rule in list(nat_rules):
@@ -347,22 +370,30 @@ def _remove_client_objects(api, secret: dict, profiles: list[dict], nat_rules: l
             continue
         comment = str(rule.get("comment", "") or "").strip()
         target = str(rule.get("to-addresses", "") or rule.get("to_addresses", "") or "").strip()
-        if comment == login or (remote and target == remote):
-            api.remove("/ip/firewall/nat", nrid)
-            removed_nat += 1
-            try:
-                nat_rules.remove(rule)
-            except ValueError:
-                pass
+        # Never remove a rule explicitly targeting a different client's address.
+        if remote and target and target != remote:
+            continue
+        owned_by_comment = comment == login
+        by_unique_remote = (
+            bool(remote and target == remote)
+            and not shared_remote
+            and str(rule.get("chain", "dstnat") or "dstnat").strip().lower() == "dstnat"
+            and str(rule.get("action", "dst-nat") or "dst-nat").strip().lower() == "dst-nat"
+        )
+        if not (owned_by_comment or by_unique_remote):
+            continue
+        api.remove("/ip/firewall/nat", nrid)
+        removed_nat += 1
+        nat_rules.remove(rule)
 
-    profile_uses = sum(1 for row in api.print("/ppp/secret") if str(row.get("profile", "") or "").strip() == profile_name) if profile_name else 0
-    if rid:
-        api.remove("/ppp/secret", rid)
+    if not rid:
+        raise RuntimeError(f"Нет RouterOS ID PPP Secret {login}; удаление отменено")
+    api.remove("/ppp/secret", rid)
 
     removed_profile = False
-    if profile_name and profile_uses <= 1 and profile_name not in {"default", "default-encryption"}:
-        profile = next((row for row in profiles if str(row.get("name", "") or "").strip() == profile_name), None)
-        prid = str((profile or {}).get(".id", "") or "").strip()
+    if profile_name and profile_uses == 1 and profile_name not in {"default", "default-encryption"}:
+        profile = profiles_by_name.get(profile_name, {})
+        prid = str(profile.get(".id", "") or "").strip()
         if prid:
             api.remove("/ppp/profile", prid)
             removed_profile = True
