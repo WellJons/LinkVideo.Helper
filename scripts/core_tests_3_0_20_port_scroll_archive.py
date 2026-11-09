@@ -50,6 +50,19 @@ port_list.wheelEvent(wheel)
 assert wheel.isAccepted()
 assert 0 < bar.value() < bar.maximum(), (bar.value(), bar.maximum())
 
+# The production QApplication installs a global nested-wheel filter, which
+# previously swallowed events at the now-hidden inner scrollbar.
+from linkvideo_vpn_helper.ui.nested_scroll_guard import install_nested_scroll_guard
+install_nested_scroll_guard()
+bar.setValue(0)
+another = QWheelEvent(
+    QPointF(12, 12), QPointF(12, 12), QPoint(0, 0), QPoint(0, -120),
+    Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
+    Qt.ScrollPhase.ScrollUpdate, False,
+)
+QApplication.sendEvent(port_list.viewport(), another)
+assert bar.value() > 0, "Global wheel filter must forward to outer left pane"
+
 # Expanding a DVR adds content to the SAME outer scroll area.
 port_list.item(0).setSizeHint(QSize(0, 390))
 port_list.fit_to_contents()
