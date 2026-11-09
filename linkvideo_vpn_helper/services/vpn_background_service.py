@@ -312,7 +312,10 @@ def _admin_install(staged_path: Path) -> int:
     except Exception:
         # The scheduled task now exists: do not pretend that setup succeeded.
         return 15
-    source.unlink(missing_ok=True)
+    try:
+        source.unlink(missing_ok=True)
+    except OSError:
+        pass  # elevated admin may differ from the original desktop account
     backup.unlink(missing_ok=True)
     return 0
 
@@ -359,6 +362,11 @@ def _elevate(arguments: str) -> int:
         ]
 
     exe = _installed_executable()
+    # ShellExecuteEx may invoke a shell extension and requires COM on the
+    # calling thread. The settings UI launches this from a Python worker
+    # thread which has no apartment initialised by default.
+    com = ctypes.windll.ole32.CoInitializeEx(None, 0x2)  # COINIT_APARTMENTTHREADED
+    release_com = com in (0, 1)
     info = _ShellExecuteInfo()
     info.cbSize = ctypes.sizeof(info)
     info.fMask = 0x40  # SEE_MASK_NOCLOSEPROCESS
@@ -367,20 +375,26 @@ def _elevate(arguments: str) -> int:
     info.lpParameters = arguments
     info.lpDirectory = tempfile.gettempdir()
     info.nShow = 0
-    if not ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(info)):
-        raise RuntimeError("Подтверждение прав администратора отменено либо не выполнено")
     try:
-        # The user can decide on UAC. Keep waiting on a UI worker thread,
-        # never on the main QApplication thread.
-        wait = ctypes.windll.kernel32.WaitForSingleObject(info.hProcess, 240000)
-        if wait != 0:
-            raise RuntimeError("Установка фонового режима не завершилась вовремя")
-        code = wintypes.DWORD()
-        if not ctypes.windll.kernel32.GetExitCodeProcess(info.hProcess, ctypes.byref(code)):
-            raise ctypes.WinError()
-        return int(code.value)
+        if not ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(info)):
+            raise RuntimeError(
+                f"Windows не запустила программу с правами администратора "
+                f"(код {ctypes.WinError().winerror})."
+            )
+        try:
+            # The user decides on UAC. Never wait on the UI's QApplication thread.
+            wait = ctypes.windll.kernel32.WaitForSingleObject(info.hProcess, 240000)
+            if wait != 0:
+                raise RuntimeError("Установка фонового режима не завершилась вовремя")
+            code = wintypes.DWORD()
+            if not ctypes.windll.kernel32.GetExitCodeProcess(info.hProcess, ctypes.byref(code)):
+                raise ctypes.WinError()
+            return int(code.value)
+        finally:
+            ctypes.windll.kernel32.CloseHandle(info.hProcess)
     finally:
-        ctypes.windll.kernel32.CloseHandle(info.hProcess)
+        if release_com:
+            ctypes.windll.ole32.CoUninitialize()
 
 
 def enable_task(staged_file: Path) -> None:
