@@ -100,7 +100,7 @@ with tempfile.TemporaryDirectory() as temp:
         login=client.login, links=(), ambiguous=(), unmatched=(10715,),
         checked_cameras=2, stream_cameras=2,
         grouped=((10714, (
-            CameraPortLink(10714, "299150", "Вход", "Россия", client.server),
+            CameraPortLink(10714, "299150", "WB,Достоевского,57 (ресепшн) — камера перед входом", "Россия", client.server),
             CameraPortLink(10714, "299154", "Парковка", "Россия", client.server),
         )),),
     )
@@ -121,6 +121,14 @@ with tempfile.TemporaryDirectory() as temp:
     labels = [w.text() for w in panel.findChildren(QLabel)]
     assert any("299150" in text for text in labels), labels
     assert any("299154" in text for text in labels), labels
+    names = panel.findChildren(QLabel, "B2ONvrCameraName")
+    assert len(names) == 2 and all(label.wordWrap() for label in names)
+    assert any("Достоевского" in label.text() for label in names)
+    assert row.layout().count() >= 4
+    # The expanded entry reserves extra height for wrapped camera names.
+    port_item = next(page.port_list.item(i) for i in range(page.port_list.count())
+                     if page.port_list.item(i).data(256) == 10714)
+    assert port_item.sizeHint().height() > 170
     copies = panel.findChildren(QToolButton, "B2OCopyNvrCameraId")
     assert len(copies) == 2
     copies[1].click()
