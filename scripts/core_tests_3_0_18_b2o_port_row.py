@@ -14,7 +14,7 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QSettings
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton
+from PySide6.QtWidgets import QApplication, QLabel, QToolButton
 from linkvideo_vpn_helper.services.vpn_service import ClientRecord
 from linkvideo_vpn_helper.services.vpn_camera_port_match import (
     CameraPortLink, CameraPortReport,
@@ -87,8 +87,9 @@ with tempfile.TemporaryDirectory() as temp:
         camera_row = outer.itemAt(1).layout()
         assert camera_row is not None
         assert camera_row.itemAt(0).widget().text() == f"ID камеры B2O: {identifier}"
-        copy = row.findChild(QPushButton, "B2OCopyCameraId")
+        copy = row.findChild(QToolButton, "B2OCopyCameraId")
         assert copy is not None
+        assert copy.width() <= 22 and copy.height() <= 22
         copy.click()
         assert QApplication.clipboard().text() == identifier
         assert page.port_list.height() >= 185
