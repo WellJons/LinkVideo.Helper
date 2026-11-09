@@ -8,7 +8,6 @@ on:
   push:
     branches:
       - 'rc/**'
-      - 'test/vpn-task-visibility-3.0.23'
     tags:
       - 'v*'
 
@@ -87,20 +86,6 @@ jobs:
           } else {
             gh release create $tag $setup $report --repo $env:GITHUB_REPOSITORY --prerelease --target $env:GITHUB_SHA --title "LinkVideo.Helper $version RC" --notes $body
           }
-
-      # Private QA delivery only. Actions artifacts are NOT GitHub Releases and
-      # never enter the official updater manifest. Manual tester download.
-      - name: Upload private QA installer artifact (NOT a Release)
-        if: github.ref == 'refs/heads/test/vpn-task-visibility-3.0.23'
-        uses: actions/upload-artifact@v4
-        with:
-          name: LinkVideo.Helper_3.0.23_PRIVATE_TEST
-          path: |
-            release_candidate/LinkVideo.Helper_Setup_3.0.23_RC.exe
-            release_candidate/verification.json
-          if-no-files-found: error
-          retention-days: 14
-          compression-level: 0
 
       # A real version tag is the final private draft gate. Public publication is
       # still a separate explicit action after manual RC acceptance.
