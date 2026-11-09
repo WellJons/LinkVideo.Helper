@@ -34,6 +34,27 @@ try {
     # Well-known SIDs avoid Windows localization differences.
     & icacls.exe $rootData '/inheritance:r' '/grant:r' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not secure configuration directory' }
+
+    # Never execute user-writable source as SYSTEM. Snapshot agent and package
+    # inside the secured ProgramData directory so unprivileged users cannot
+    # replace Python code that the scheduled task will run as SYSTEM.
+    $trustedPython = $python.StartsWith(
+        (([Environment]::GetFolderPath('ProgramFiles')) + '\'),
+        [StringComparison]::OrdinalIgnoreCase) -or
+        $python.StartsWith(($rootData + '\'), [StringComparison]::OrdinalIgnoreCase)
+    if (-not $trustedPython) {
+        throw 'Python должен находиться в защищённой папке Program Files или VPNFleet. Не используйте Python из профиля пользователя для задачи SYSTEM.'
+    }
+    $protectedSource = Join-Path $rootData 'source'
+    $protectedScripts = Join-Path $protectedSource 'scripts'
+    New-Item -ItemType Directory -Force -Path $protectedScripts | Out-Null
+    $packageDestination = Join-Path $protectedSource 'linkvideo_vpn_helper'
+    if (Test-Path -LiteralPath $packageDestination) {
+        Remove-Item -LiteralPath $packageDestination -Recurse -Force
+    }
+    Copy-Item -LiteralPath (Join-Path $root 'linkvideo_vpn_helper') -Destination $protectedSource -Recurse -Force
+    $protectedAgent = Join-Path $protectedScripts 'vpn_fleet_health_agent.py'
+    Copy-Item -LiteralPath $agent -Destination $protectedAgent -Force
     $destKey = Join-Path $rootData 'google-service-account.json'
     Copy-Item -LiteralPath $keySource -Destination $destKey -Force
     & icacls.exe $destKey '/inheritance:r' '/grant:r' '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
@@ -60,12 +81,12 @@ try {
     $secure.Dispose()
 }
 # Preflight uses only RouterOS reads. Google is not contacted.
-& $python $agent --config $configFile --once --dry-run
+& $python $protectedAgent --config $configFile --once --dry-run
 if ($LASTEXITCODE -ne 0) { throw 'Read-only preflight failed; task was NOT installed' }
 
 $taskName = 'LinkVideo.VPN.FleetMonitor'
-$argument = ('"{0}" --config "{1}"' -f $agent, $configFile)
-$action = New-ScheduledTaskAction -Execute $python -Argument $argument -WorkingDirectory $root
+$argument = ('"{0}" --config "{1}"' -f $protectedAgent, $configFile)
+$action = New-ScheduledTaskAction -Execute $python -Argument $argument -WorkingDirectory $protectedSource
 $trigger = New-ScheduledTaskTrigger -AtStartup
 $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
