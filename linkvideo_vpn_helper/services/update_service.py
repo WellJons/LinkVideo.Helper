@@ -416,15 +416,22 @@ class UpdateService:
             raise FileNotFoundError(f"Файл обновления не найден: {setup_path}")
 
         if os.name == "nt":
+            # The installer must never inherit Helper's Program Files working
+            # directory. Windows blocks directory renames while a process
+            # uses that directory as CWD, even if the GUI has already exited.
+            safe_cwd = tempfile.gettempdir()
             try:
-                os.startfile(str(setup_path))
+                os.startfile(str(setup_path), cwd=safe_cwd)
             except OSError:
                 flags = (
                     int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
                     | int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
                     | int(getattr(subprocess, "DETACHED_PROCESS", 0))
                 )
-                subprocess.Popen([str(setup_path)], shell=False, creationflags=flags)
+                subprocess.Popen(
+                    [str(setup_path)], shell=False,
+                    creationflags=flags, cwd=safe_cwd,
+                )
         else:
             subprocess.Popen([str(setup_path)], shell=False)
         # Leave the running Qt event loop normally instead of aborting the
