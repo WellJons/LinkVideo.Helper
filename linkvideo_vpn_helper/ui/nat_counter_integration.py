@@ -7,9 +7,9 @@ rule. They are useful diagnostics, so keep them visible, but place them on a
 second row instead of squeezing every value into one horizontal line.
 """
 
-from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtCore import QRectF, QSize, Qt
+from PySide6.QtGui import QColor, QGuiApplication, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget
 
 
 _INSTALLED = False
@@ -143,26 +143,49 @@ def install_nat_counter_ui() -> None:
                 camera_id.setToolTip(
                     "Камера B2O: " + str(camera_link.label) +
                     " · подтверждено по логину аккаунта и RTSP-порту")
-                camera_id.setMinimumHeight(26)
+                camera_id.setMinimumHeight(22)
                 camera_id.setStyleSheet("font-size: 14px; font-weight: 700;")
                 camera_row = QHBoxLayout()
                 camera_row.setContentsMargins(0, 0, 0, 0)
-                camera_row.setSpacing(8)
+                camera_row.setSpacing(4)
                 camera_row.addWidget(camera_id, 0)
-                copy_id = QPushButton("⧉")
+
+                # Native QPushButton styles have a 40px min-height, so they
+                # clip the glyph and look like a giant orange smudge. Draw a
+                # 15px two-sheet copy pictogram into a transparent tool button.
+                picture = QPixmap(16, 16)
+                picture.fill(Qt.GlobalColor.transparent)
+                painter = QPainter(picture)
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                tone = camera_id.palette().color(camera_id.foregroundRole())
+                painter.setPen(QPen(QColor(tone), 1.5))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(QRectF(5, 4, 9, 10), 1.4, 1.4)
+                painter.drawLine(3, 11, 3, 2.8)
+                painter.drawLine(3, 2.8, 11, 2.8)
+                painter.end()
+                copy_id = QToolButton(row)
                 copy_id.setObjectName("B2OCopyCameraId")
-                copy_id.setProperty("role", "soft")
-                copy_id.setFixedSize(28, 26)
+                copy_id.setIcon(QIcon(picture))
+                copy_id.setIconSize(QSize(16, 16))
+                copy_id.setFixedSize(20, 20)
+                copy_id.setStyleSheet(
+                    "QToolButton#B2OCopyCameraId {"
+                    "background: transparent; border: 0; padding: 0; margin: 0;"
+                    "}"
+                )
+                copy_id.setCursor(Qt.CursorShape.PointingHandCursor)
                 copy_id.setToolTip("Скопировать ID камеры " + str(camera_link.camera_id))
                 copy_id.setAccessibleName("Скопировать ID камеры B2O")
+
                 def copy_camera_id(value, button):
                     QGuiApplication.clipboard().setText(value)
-                    button.setText("✓")
-                    button.setToolTip("ID камеры скопирован")
+                    button.setToolTip("ID камеры скопирован: " + value)
+
                 copy_id.clicked.connect(
                     lambda _checked=False, value=str(camera_link.camera_id), button=copy_id:
                     copy_camera_id(value, button))
-                camera_row.addWidget(copy_id)
+                camera_row.addWidget(copy_id, 0, Qt.AlignmentFlag.AlignVCenter)
                 camera_row.addStretch(1)
                 outer.addLayout(camera_row)
 
@@ -190,7 +213,7 @@ def install_nat_counter_ui() -> None:
             bottom.addWidget(_counter(f"Пакеты: {_fmt_packets(rule_packets)}"), 0)
             outer.addLayout(bottom)
 
-            item.setSizeHint(QSize(0, 99 if camera_link is not None else 76))
+            item.setSizeHint(QSize(0, 90 if camera_link is not None else 76))
             port_list.setItemWidget(item, row)
 
         # _render_client() initially sized the plain-text list too short.
