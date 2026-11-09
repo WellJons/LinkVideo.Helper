@@ -101,7 +101,47 @@ def _status_file() -> Path:
     return _data_dir() / STATUS_NAME
 
 
+def _write_public_status(payload: dict) -> None:
+    """Publish non-secret health metadata in read-only HKLM registry values."""
+    import winreg
+
+    with winreg.CreateKeyEx(
+        winreg.HKEY_LOCAL_MACHINE, TASK_RECEIPT_REGISTRY,
+        0, winreg.KEY_SET_VALUE,
+    ) as key:
+        winreg.SetValueEx(key, "CheckedUTC", 0, winreg.REG_SZ, payload["checked_utc"])
+        winreg.SetValueEx(key, "State", 0, winreg.REG_SZ, str(payload.get("state", "")))
+        for name in ("servers", "successful", "failed"):
+            winreg.SetValueEx(key, name.capitalize(), 0, winreg.REG_DWORD, int(payload.get(name, 0)))
+
+
+def _read_public_status() -> dict:
+    if not _on_windows():
+        return {}
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, TASK_RECEIPT_REGISTRY) as key:
+            def get(name):
+                return winreg.QueryValueEx(key, name)[0]
+
+            return {
+                "checked_utc": str(get("CheckedUTC")),
+                "state": str(get("State")),
+                "servers": int(get("Servers")),
+                "successful": int(get("Successful")),
+                "failed": int(get("Failed")),
+            }
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
 def read_status() -> dict:
+    # Prefer the admin-owned registry status: ProgramData is deliberately not
+    # traversable by ordinary users because it contains machine-DPAPI secrets.
+    status = _read_public_status()
+    if status:
+        return status
     try:
         payload = json.loads(_status_file().read_text(encoding="utf-8"))
         return payload if isinstance(payload, dict) else {}
@@ -110,20 +150,22 @@ def read_status() -> dict:
 
 
 def _write_status(**fields) -> None:
-    # Status is deliberately safe for normal local users to read:
-    # NO PPP login, password, token, camera IP, Google credentials or snapshot.
+    # No PPP login, password, token or RouterOS config is stored here.
     path = _status_file()
     payload = {
         "checked_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ"),
         **fields,
     }
+    # Registry metadata also works when normal desktop users cannot traverse
+    # the protected ProgramData directory.
+    _write_public_status(payload)
     temporary = path.with_suffix(".pending")
     try:
         temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         os.replace(temporary, path)
         _run_command(
             ["icacls.exe", str(path), "/inheritance:r", "/grant:r",
-             "*S-1-5-18:F", "*S-1-5-32-544:F", "*S-1-5-32-545:R"]
+             "*S-1-5-18:F", "*S-1-5-32-544:F"]
         )
     finally:
         temporary.unlink(missing_ok=True)
