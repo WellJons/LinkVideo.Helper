@@ -37,6 +37,7 @@ def build_reply_mime(text: str, images: list[Path]) -> tuple[QMimeData, int, lis
     count = 0
     total_bytes = 0
     failed: list[str] = []
+    first_image = None
 
     for path in images:
         source = Path(path)
@@ -76,6 +77,8 @@ def build_reply_mime(text: str, images: list[Path]) -> tuple[QMimeData, int, lis
             break
         total_bytes += len(raw)
         data_url = base64.b64encode(raw).decode("ascii")
+        if first_image is None:
+            first_image = image
         parts.append(
             '<p style="margin:12px 0 0">'
             f'<img alt="{escape(source.stem, quote=True)}" '
@@ -87,4 +90,9 @@ def build_reply_mime(text: str, images: list[Path]) -> tuple[QMimeData, int, lis
     parts.append("</body></html>")
     if count:
         mime.setHtml("".join(parts))
+        # Messenger/editor paste handlers generally ignore base64 <img> in
+        # HTML. Expose an actual native image flavor (CF_DIB/PNG on Windows)
+        # in addition to the text/html and text/plain flavors. One native
+        # image fits the standard clipboard; further images remain in HTML.
+        mime.setImageData(first_image)
     return mime, count, failed
