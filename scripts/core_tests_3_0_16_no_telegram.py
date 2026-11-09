@@ -9,7 +9,9 @@ services=ROOT/"linkvideo_vpn_helper/services"
 ui=ROOT/"linkvideo_vpn_helper/ui"
 assert not list(services.glob("telegram_*.py")), "Bot services must not ship"
 assert not list(ui.glob("telegram_*.py")), "Bot settings UI must not ship"
-assert not list(ROOT.glob("scripts/core_tests_*telegram*.py")), "Bot tests not included"
+bot_tests = [p for p in ROOT.glob("scripts/core_tests_*telegram*.py")
+             if p.name != Path(__file__).name]
+assert not bot_tests, "Bot tests not included"
 assert not (ROOT/"docs/telegram_camera_agent.md").exists()
 app=(ROOT/"linkvideo_vpn_helper/app.py").read_text(encoding="utf-8")
 settings=(ui/"pages/settings_page.py").read_text(encoding="utf-8")
