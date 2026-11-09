@@ -10,7 +10,7 @@ import zipfile
 from PySide6.QtCore import QEvent, Qt, QSize, QRect, QTimer
 from PySide6.QtGui import QIcon, QImageReader, QPixmap, QFontMetrics
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QListView, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
     QSplitter, QTextEdit, QVBoxLayout, QWidget,
 )
@@ -18,6 +18,19 @@ from PySide6.QtWidgets import (
 from linkvideo_vpn_helper.services.support_templates import TemplateStore, ALLOWED_IMAGES, IMAGE_LIMIT
 from linkvideo_vpn_helper.ui.reply_clipboard import build_reply_mime
 from linkvideo_vpn_helper.ui.components import Card, PageHeader, build_page_scaffold
+
+
+class SupportReplyBodyEditor(QTextEdit):
+    """Plain text body; Ctrl+V with a screenshot attaches a draft image."""
+    def __init__(self, image_paste, parent=None):
+        super().__init__(parent)
+        self._image_paste = image_paste
+
+    def insertFromMimeData(self, source):
+        if source.hasImage() and not source.hasText() and not self.isReadOnly():
+            self._image_paste()
+            return
+        super().insertFromMimeData(source)
 
 
 class SupportTemplatesPage(QWidget):
@@ -177,7 +190,7 @@ class SupportTemplatesPage(QWidget):
         hint.setObjectName("TinyMuted")
         body_row.addWidget(hint)
         rl.addLayout(body_row)
-        self.body_input = QTextEdit()
+        self.body_input = SupportReplyBodyEditor(self._paste_image)
         self.body_input.setObjectName("TemplateBodyInput")
         self.body_input.setPlaceholderText("Выберите шаблон слева или создайте новый ответ…")
         self.body_input.setAcceptRichText(False)
@@ -437,15 +450,34 @@ class SupportTemplatesPage(QWidget):
 
     def _save(self):
         try:
-            identifier = self.store.save(self.title_input.text(),self.body_input.toPlainText(),
-                                         self.category_input.currentText(),self._selected_id)
+            identifier = self.store.save(
+                self.title_input.text(), self.body_input.toPlainText(),
+                self.category_input.currentText(), self._selected_id)
         except (ValueError, OSError) as exc:
             self.notice.setText(str(exc))
             return
+
+        remaining: list[Path] = []
+        errors: list[str] = []
+        for path in self._pending_images:
+            try:
+                self.store.attach_image(identifier, path)
+            except (ValueError, OSError) as exc:
+                remaining.append(path)
+                errors.append(f"{path.name}: {exc}")
+        self._pending_images = remaining
+        for image_id in self._removed_image_ids:
+            self.store.detach_image(image_id, identifier)
+        self._removed_image_ids.clear()
         self._selected_id = identifier
-        self.add_image_btn.setEnabled(True)
         self._refresh()
-        self.notice.setText("✓ Шаблон сохранён локально.")
+        self._load_images()
+        self._set_editing(bool(errors))
+        if errors:
+            self.notice.setText(
+                "Текст сохранён, но не все вложения добавлены: " + "; ".join(errors[:2]))
+        else:
+            self.notice.setText("✓ Шаблон и изображения сохранены локально.")
 
     def _toggle_favorite(self):
         if self._selected_id is None:
@@ -460,11 +492,22 @@ class SupportTemplatesPage(QWidget):
     def _copy(self):
         from PySide6.QtWidgets import QApplication
         text = self.body_input.toPlainText().strip()
-        if not text:
-            self.notice.setText("Нет текста для копирования.")
+        paths = self._visible_image_paths()
+        if not text and not paths:
+            self.notice.setText("Нет текста или изображений для копирования.")
             return
-        QApplication.clipboard().setText(text)
-        self.notice.setText("✓ Ответ скопирован в буфер обмена.")
+        mime, count, failed = build_reply_mime(text, paths)
+        QApplication.clipboard().setMimeData(mime)
+        if failed:
+            self.notice.setText(
+                f"Текст и {count} изображений скопированы. "
+                + "; ".join(failed[:2]))
+        elif count:
+            self.notice.setText(
+                f"✓ Текст и {count} изображений скопированы. "
+                "Вставляйте в редактор с поддержкой форматирования.")
+        else:
+            self.notice.setText("✓ Текст скопирован в буфер обмена.")
 
     def _delete(self):
         if self._selected_id is None:
@@ -478,56 +521,132 @@ class SupportTemplatesPage(QWidget):
         self._refresh()
         self.notice.setText("Шаблон удалён.")
 
+    def _visible_image_records(self) -> list[tuple[str, int | None, Path]]:
+        records = []
+        if self._selected_id is not None:
+            records.extend(
+                ("saved", image_id, path)
+                for image_id, path in self.store.images(self._selected_id)
+                if image_id not in self._removed_image_ids
+            )
+        records.extend(("pending", None, path) for path in self._pending_images)
+        return records
+
+    def _visible_image_paths(self) -> list[Path]:
+        return [path for _, _, path in self._visible_image_records()]
+
     def _load_images(self):
         self.images_list.clear()
-        if self._selected_id is None:
-            self.image_area.hide()
-            self.attachment_count.setText("Вложения · 0")
-            return
-        images = self.store.images(self._selected_id)
-        self.attachment_count.setText(f"Вложения · {len(images)}")
-        self.image_area.setVisible(bool(images))
-        for image_id,path in images:
-            item = QListWidgetItem(path.name)
-            item.setData(Qt.ItemDataRole.UserRole,(image_id,str(path)))
+        records = self._visible_image_records()
+        self.attachment_count.setText(f"Изображения · {len(records)}")
+        self.image_area.setVisible(bool(records))
+        for index, (kind, image_id, path) in enumerate(records, start=1):
+            image = QPixmap(str(path))
+            thumbnail = image.scaled(
+                112, 78,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+            item = QListWidgetItem(QIcon(thumbnail), f"Фото {index}")
+            item.setData(Qt.ItemDataRole.UserRole, (kind, image_id, str(path)))
+            item.setToolTip(
+                f"{path.name}\n"
+                + ("Будет сохранено вместе с шаблоном" if kind == "pending"
+                   else "Двойной щелчок для просмотра"))
             self.images_list.addItem(item)
-        self.image_preview.clear()
+        self.remove_image_btn.setEnabled(self._editing and bool(records))
 
-    def _preview_image(self,item,*_):
+    def _preview_image(self, item, *_):
+        # Thumbnails are already visible. The selected one can be removed.
+        self.remove_image_btn.setEnabled(self._editing and item is not None)
+
+    def _open_image_preview(self, item):
         if item is None:
-            self.image_preview.clear()
             return
-        image_id,path = item.data(Qt.ItemDataRole.UserRole)
-        image = QPixmap(path)
+        _, _, source = item.data(Qt.ItemDataRole.UserRole)
+        image = QPixmap(source)
         if image.isNull():
-            self.image_preview.setText("Не удалось открыть изображение.")
-        else:
-            self.image_preview.setPixmap(image.scaled(
-                500, 145, Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation))
+            self.notice.setText("Не удалось открыть изображение.")
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Просмотр изображения")
+        dialog.resize(820, 620)
+        panel = QVBoxLayout(dialog)
+        preview = QLabel()
+        preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        preview.setPixmap(image.scaled(
+            780, 550, Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation))
+        panel.addWidget(preview, 1)
+        close = QPushButton("Закрыть")
+        close.clicked.connect(dialog.accept)
+        panel.addWidget(close, 0, Qt.AlignmentFlag.AlignRight)
+        dialog.exec()
+
+    def _stage_image(self, source: Path):
+        source = Path(source)
+        if (not source.is_file() or source.suffix.casefold() not in ALLOWED_IMAGES
+                or source.stat().st_size > IMAGE_LIMIT):
+            raise ValueError("Допускаются PNG/JPEG/WEBP/GIF до 5 МБ.")
+        reader = QImageReader(str(source))
+        if not reader.canRead():
+            raise ValueError("Не удалось распознать изображение.")
+        dest = Path(self._draft_dir.name) / (uuid.uuid4().hex + source.suffix.lower())
+        shutil.copyfile(source, dest)
+        self._pending_images.append(dest)
+        self._load_images()
 
     def _add_image(self):
-        if self._selected_id is None:
-            self.notice.setText("Сначала сохраните шаблон.")
-            return
-        path,_ = QFileDialog.getOpenFileName(
-            self,"Выберите скриншот","",
+        if not self._editing:
+            self._set_editing(True)
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Добавить изображения к ответу", "",
             "Изображения (*.png *.jpg *.jpeg *.webp *.gif)")
-        if not path:
+        if not paths:
+            return
+        errors: list[str] = []
+        for path in paths:
+            try:
+                self._stage_image(Path(path))
+            except (ValueError, OSError) as exc:
+                errors.append(f"{Path(path).name}: {exc}")
+        if errors:
+            self.notice.setText("Некоторые файлы не добавлены: " + "; ".join(errors[:2]))
+        else:
+            self.notice.setText(
+                "✓ Изображения прикреплены к черновику. Можно сохранить шаблон.")
+
+    def _paste_image(self):
+        from PySide6.QtWidgets import QApplication
+        image = QApplication.clipboard().image()
+        if image.isNull():
+            self.notice.setText("В буфере обмена нет изображения.")
+            return
+        if not self._editing:
+            self._set_editing(True)
+        destination = Path(self._draft_dir.name) / (uuid.uuid4().hex + ".png")
+        if not image.save(str(destination), "PNG"):
+            self.notice.setText("Не удалось сохранить изображение из буфера.")
             return
         try:
-            self.store.attach_image(self._selected_id,Path(path))
-            self._load_images()
-            self.notice.setText("✓ Изображение добавлено.")
-        except (ValueError,OSError) as exc:
+            self._stage_image(destination)
+            self.notice.setText("✓ Изображение вставлено в черновик.")
+        except (ValueError, OSError) as exc:
             self.notice.setText(str(exc))
 
     def _remove_image(self):
-        if self._selected_id is None or self.images_list.currentItem() is None:
+        item = self.images_list.currentItem()
+        if item is None or not self._editing:
             return
-        image_id,_ = self.images_list.currentItem().data(Qt.ItemDataRole.UserRole)
-        self.store.detach_image(image_id,self._selected_id)
+        kind, image_id, filename = item.data(Qt.ItemDataRole.UserRole)
+        if kind == "pending":
+            self._pending_images = [
+                path for path in self._pending_images if str(path) != filename
+            ]
+            Path(filename).unlink(missing_ok=True)
+        elif image_id is not None:
+            self._removed_image_ids.add(int(image_id))
         self._load_images()
+        self.notice.setText("Вложение убрано из черновика. Сохраните изменения.")
 
     def _import_docx(self):
         path, _ = QFileDialog.getOpenFileName(
