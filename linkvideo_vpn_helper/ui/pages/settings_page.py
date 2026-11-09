@@ -182,10 +182,57 @@ class SettingsPage(QWidget):
             self._render_archive_hosts(operator_id)
             ar.addWidget(section)
 
+        extra_title = QLabel("Дополнительные кластеры B2O")
+        extra_title.setObjectName("SectionTitle")
+        ar.addWidget(extra_title)
+        explanation = QLabel(
+            "Новые профили выключены по умолчанию. Включите нужный оператор, "
+            "после чего он появится в «Скачать архив» и «Диагностика архива». "
+            "Авторизация остаётся общей через подключённую «Админку»."
+        )
+        explanation.setObjectName("Muted")
+        explanation.setWordWrap(True)
+        ar.addWidget(explanation)
+
+        self.extra_cluster_switches: dict[str, Switch] = {}
+        for cluster_key, display_name, operator_id in self.archive_b2o.EXTRA_CLUSTERS:
+            cluster_card = Card(subtle=True)
+            cluster_row = QHBoxLayout(cluster_card)
+            cluster_row.setContentsMargins(13, 11, 13, 11)
+            cluster_row.setSpacing(12)
+            label_column = QVBoxLayout()
+            label_column.setSpacing(3)
+            headline = QLabel(f"{display_name} · оператор {operator_id}")
+            headline.setObjectName("Value")
+            label_column.addWidget(headline)
+            desc = QLabel(
+                f"B2O API: /operators/{operator_id}/cameras"
+                + (" · Общий оператор с другим названием" if operator_id == 1442 else "")
+            )
+            desc.setObjectName("TinyMuted")
+            desc.setWordWrap(True)
+            label_column.addWidget(desc)
+            cluster_row.addLayout(label_column, 1)
+            state = QLabel()
+            state.setObjectName("TinyMuted")
+            cluster_row.addWidget(state)
+            toggle = Switch(self.archive_b2o.extra_cluster_enabled(cluster_key))
+            toggle.setToolTip(f"Разрешить выбор кластера {display_name} в архиве")
+            self.extra_cluster_switches[cluster_key] = toggle
+
+            def state_changed(enabled, *, key=cluster_key, status=state):
+                self.archive_b2o.set_extra_cluster_enabled(key, enabled)
+                status.setText("Включён" if enabled else "Выключен")
+
+            toggle.toggled.connect(state_changed)
+            state.setText("Включён" if toggle.isChecked() else "Выключен")
+            cluster_row.addWidget(toggle)
+            ar.addWidget(cluster_card)
+
         extra_note = QLabel(
-            "Новый кластер B2O с отдельным ID оператора — не просто сервер. "
-            "Для него требуется подтверждённый адрес API, префикс камер и "
-            "права текущего аккаунта. Ссылки с токенами сюда вставлять не нужно."
+            "Важно: «Здравсервис» и Goodline имеют одинаковый operator ID 1442 "
+            "и открывают один и тот же список камер. Для разных данных потребуется "
+            "ещё один идентификатор оператора или другое различие в API."
         )
         extra_note.setObjectName("TinyMuted")
         extra_note.setWordWrap(True)
