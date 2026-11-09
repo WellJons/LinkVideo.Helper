@@ -34,7 +34,10 @@ with TemporaryDirectory() as td:
     page.close()
 
 assert bg.TASK_NAME == "LinkVideo.Helper.VPNSheetsMirror"
-assert bg._INTERVAL == 5
+assert bg.DEFAULT_INTERVAL_HOURS == 12
+assert bg.ALLOWED_INTERVAL_HOURS == (6, 12, 24)
+assert page.bg_interval.currentData() == 12
+assert not page.bg_apply_interval.isEnabled()
 
 with TemporaryDirectory() as td:
     credentials = SimpleNamespace(
@@ -58,6 +61,7 @@ with TemporaryDirectory() as td:
         assert restored["routeros_password"] == credentials.password
         assert restored["google_service_account"]["private_key"] == google["private_key"]
         assert restored["servers"] == ["vpn01.linkvideo.ru", "vpn02.linkvideo.ru"]
+        assert restored["interval_hours"] == 12
         stage.unlink()
         assert not stage.exists()
 
@@ -72,7 +76,7 @@ for term in (
     "CryptProtectData", "CryptUnprotectData",
     "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F",
     "schtasks.exe", '"/RU", "SYSTEM"',
-    '"/SC", "MINUTE"', '"/MO", str(_INTERVAL)',
+    '"/SC", "HOURLY"', '"/SC", "DAILY"',
     "--vpn-background-worker",
     "install_vpn_sheets_retention_compat()",
     "install_vpn_sheets_resilience()",
