@@ -6,12 +6,8 @@ param(
     [Parameter(Mandatory=$true)][string]$ServiceAccountJson,
     [string]$RouterOSUsername = "",
     [string]$SpreadsheetId = "",
-    [string[]]$Servers = @(
-        'vpn01.linkvideo.ru','vpn02.linkvideo.ru','vpn03.linkvideo.ru',
-        'vpn04.linkvideo.ru','vpn05.linkvideo.ru','vpn06.linkvideo.ru',
-        'vpn07.linkvideo.ru','vpn08.linkvideo.ru','vpn09.linkvideo.ru',
-        'vpn10.linkvideo.ru','rb-vpn01.linkvideo.ru','kz-vpn01.linkvideo.ru'
-    )
+    # Canary only. Opt in to additional servers explicitly with -Servers.
+    [string[]]$Servers = @('vpn01.linkvideo.ru')
 )
 $ErrorActionPreference = 'Stop'
 $who = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
