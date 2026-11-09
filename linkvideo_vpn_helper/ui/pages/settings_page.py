@@ -455,10 +455,7 @@ class SettingsPage(QWidget):
         self.bg_enabled.blockSignals(True)
         self.bg_enabled.setChecked(active)
         self.bg_enabled.blockSignals(False)
-        self.bg_status.setText(
-            "Включён: планировщик Windows запускает полное резервирование каждые 5 минут."
-            if active else "Выключен: фоновая синхронизация и отправка паролей не выполняются."
-        )
+        self._background_refresh_status()
 
     def _background_refresh_key(self):
         saved = str(self.settings.value("vpn_background/google_key_file", "", str) or "").strip()
@@ -623,13 +620,26 @@ class SettingsPage(QWidget):
             self.bg_status.setText("Настройка не выполнена: " + message)
 
     def _background_refresh_status(self):
-        from linkvideo_vpn_helper.services.vpn_background_service import task_registered
+        from linkvideo_vpn_helper.services.vpn_background_service import task_registered, read_status
         actual = task_registered()
         self._background_revert_toggle(actual)
-        self.bg_status.setText(
-            "Включён: задание зарегистрировано в Windows. Проверка выполнения — через Планировщик задач."
-            if actual else "Выключен: задание фоновой синхронизации не зарегистрировано."
-        )
+        if not actual:
+            self.bg_status.setText("Выключен: задание фоновой синхронизации не зарегистрировано.")
+            return
+        status = read_status()
+        checked = status.get("checked_utc", "ещё не запускалась")
+        successful = status.get("successful", 0)
+        failed = status.get("failed", 0)
+        state = status.get("state", "")
+        if state == "ok":
+            message = f"Последняя сверка: {checked} · успешно {successful} · ошибок {failed}."
+        elif state == "partial":
+            message = f"Частичная сверка: {checked} · успешно {successful} · ошибок {failed}. Проверьте доступ RouterOS/Google."
+        elif state == "running":
+            message = f"Сверка началась: {checked}."
+        else:
+            message = "Задание установлено; результата первой сверки пока нет."
+        self.bg_status.setText("Включён · раз в 5 минут. " + message)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
