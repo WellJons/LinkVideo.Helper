@@ -180,28 +180,126 @@ class TemplateStore:
         if Path(name).name==name:
             (self.media / name).unlink(missing_ok=True)
 
-    def import_docx(self, path: Path, category: str = "Прочее") -> int:
-        """Import readable Word paragraphs as one response template.
+    @staticmethod
+    def _docx_entries(path: Path) -> list[tuple[str, str]]:
+        """Read separate Word replies from headings, without extracting files.
 
-        Zip-bomb protection: docx limited by on-disk size, document.xml
-        decompressed size and no extraction of external relationships.
+        Word Heading/Title styles, bold standalone headings, and explicitly
+        labelled "Шаблон:" lines start a new answer. Unstructured documents
+        remain a single template, so ordinary multi-paragraph replies are not
+        accidentally split into dozens of records.
         """
-        path = Path(path)
-        if path.suffix.lower() != ".docx" or path.stat().st_size > DOCX_LIMIT:
+        if path.suffix.lower() != ".docx" or not path.is_file() or path.stat().st_size > DOCX_LIMIT:
             raise ValueError("Выберите документ DOCX до 12 МБ.")
         with zipfile.ZipFile(path) as archive:
             info = archive.getinfo("word/document.xml")
             if info.file_size > 10 * 1024 * 1024:
                 raise ValueError("Документ слишком большой.")
-            xml = archive.read(info)
-        root = ET.fromstring(xml)
-        ns = {"w":"http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
-        paragraphs = []
-        for paragraph in root.findall(".//w:p",ns):
-            text = "".join(n.text or "" for n in paragraph.findall(".//w:t",ns)).strip()
-            if text:
-                paragraphs.append(text)
-        if not paragraphs:
+            root = ET.fromstring(archive.read(info))
+
+        ns_uri = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+        ns = {"w": ns_uri}
+        attr = "{" + ns_uri + "}val"
+        paragraphs: list[tuple[str, bool]] = []
+        for paragraph in root.findall(".//w:body//w:p", ns):
+            # Preserve text runs and paragraph boundaries, including table cells.
+            value = "".join(part.text or "" for part in paragraph.findall(".//w:t", ns)).strip()
+            if not value:
+                paragraphs.append(("", False))
+                continue
+            style = paragraph.find("./w:pPr/w:pStyle", ns)
+            style_name = str(style.get(attr, "") if style is not None else "").casefold()
+            heading_style = (
+                style_name.startswith(("heading", "заголовок"))
+                or style_name in {"title", "subtitle", "название"}
+            )
+            runs = [run for run in paragraph.findall("./w:r", ns)
+                    if "".join(x.text or "" for x in run.findall(".//w:t", ns)).strip()]
+            bold_heading = bool(runs) and all(
+                (bold := run.find("./w:rPr/w:b", ns)) is not None
+                and str(bold.get(attr, "1")).casefold() not in {"0", "false", "off"}
+                for run in runs
+            )
+            labelled = bool(re.match(r"^(?:шаблон|ответ|тема)\s*(?:№\s*\d+)?\s*[:—-]\s*\S",
+                                     value, flags=re.IGNORECASE))
+            paragraphs.append((
+                value,
+                len(value) <= 180 and (heading_style or bold_heading or labelled),
+            ))
+
+        full_text = [text for text, _ in paragraphs if text]
+        if not full_text:
             raise ValueError("В документе не найден текст.")
-        title = re.sub(r"\s+"," ",path.stem).strip()[:180] or "Импортированный шаблон"
-        return self.save(title,"\n".join(paragraphs)[:50000],category)
+
+        filename_title = re.sub(r"\s+", " ", path.stem).strip()[:180] or "Импортированный шаблон"
+        entries: list[tuple[str, str]] = []
+        title: str | None = None
+        body: list[str] = []
+        intro: list[str] = []
+        blanks = 0
+        for value, styled_title in paragraphs:
+            if not value:
+                blanks += 1
+                continue
+            numbered_title = bool(re.match(r"^\d{1,3}[.)]\s+.{3,120}$", value))
+            heading = styled_title or (
+                blanks and (numbered_title or (
+                    len(value) <= 90 and value.endswith(":")
+                    and not re.match(r"^(?:http|rtsp)s?:", value, flags=re.IGNORECASE)
+                ))
+            )
+            if heading:
+                if title is not None and body:
+                    entries.append((title, "\n".join(body)))
+                    body = []
+                elif title is not None:
+                    # An empty heading was likely part of the previous title.
+                    intro.append(title)
+                title = re.sub(r"^(?:шаблон|ответ|тема)\s*[:—-]\s*", "", value,
+                               flags=re.IGNORECASE).rstrip(":").strip()[:180]
+                if intro:
+                    body = intro + body
+                    intro = []
+            elif title is None:
+                intro.append(value)
+            else:
+                body.append(value)
+            blanks = 0
+
+        if title is not None and body:
+            entries.append((title, "\n".join(body)))
+        elif title is not None:
+            intro.append(title)
+
+        if intro:
+            # Preamble or otherwise unclassified text must never be lost.
+            entries.insert(0, (filename_title, "\n".join(intro)))
+        if not entries:
+            entries = [(filename_title, "\n".join(full_text))]
+
+        cleaned = [(t.strip() or filename_title, b.strip()) for t, b in entries if b.strip()]
+        if not cleaned or len(cleaned) > 250:
+            raise ValueError("Не удалось выделить шаблоны или их слишком много (максимум 250).")
+        if any(len(title) > 180 or len(body) > 50000 for title, body in cleaned):
+            raise ValueError("Один из шаблонов слишком длинный.")
+        return cleaned
+
+    def import_docx_many(self, path: Path, category: str = "Прочее") -> list[int]:
+        """Import all detected replies atomically; do not overwrite existing ones."""
+        entries = self._docx_entries(Path(path))
+        category = category.strip() or "Прочее"
+        if len(category) > 70:
+            raise ValueError("Слишком длинная категория.")
+        now = int(datetime.now(timezone.utc).timestamp())
+        identifiers: list[int] = []
+        with self._db() as db:
+            for title, body in entries:
+                cursor = db.execute(
+                    "INSERT INTO templates(title,body,category,updated_at) VALUES(?,?,?,?)",
+                    (title, body, category, now))
+                identifiers.append(int(cursor.lastrowid))
+        return identifiers
+
+    def import_docx(self, path: Path, category: str = "Прочее") -> int:
+        """Backward-compatible entrypoint; imports all, returns the first ID."""
+        return self.import_docx_many(path, category)[0]
