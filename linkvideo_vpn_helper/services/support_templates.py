@@ -235,6 +235,36 @@ class TemplateStore:
             raise ValueError("В документе не найден текст.")
 
         filename_title = re.sub(r"\s+", " ", path.stem).strip()[:180] or "Импортированный шаблон"
+
+        # Some operator documents contain no Word heading styles at all:
+        # each response is two or more paragraphs separated by empty lines.
+        # Detect this repeated structure, but preserve ordinary one-block
+        # letters as a single template.
+        if not any(heading for _, heading in paragraphs):
+            blocks: list[list[str]] = []
+            block: list[str] = []
+            empty = 0
+            for value, _ in paragraphs:
+                if not value:
+                    empty += 1
+                    continue
+                if empty >= 2 and block:
+                    blocks.append(block)
+                    block = []
+                block.append(value)
+                empty = 0
+            if block:
+                blocks.append(block)
+            if len(blocks) >= 2 and all(
+                len(group) >= 2 and len(group[0]) <= 100 for group in blocks
+            ):
+                pairs = [(group[0].rstrip(":").strip(), "\n".join(group[1:]).strip())
+                         for group in blocks]
+                if len(pairs) <= 250 and all(
+                    title and body and len(body) <= 50000 for title, body in pairs
+                ):
+                    return pairs
+
         entries: list[tuple[str, str]] = []
         title: str | None = None
         body: list[str] = []
