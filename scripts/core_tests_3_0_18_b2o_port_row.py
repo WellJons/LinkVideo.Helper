@@ -82,7 +82,7 @@ with tempfile.TemporaryDirectory() as temp:
         labels = row.findChildren(QLabel)
         values = [lbl.text() for lbl in labels]
         assert f"ID камеры B2O: {identifier}" in values, values
-        assert any("Трафик порта:" in value for value in values), values
+        assert any("NAT-трафик:" in value for value in values), values
         outer = row.layout()
         assert outer.itemAt(1).widget().text() == f"ID камеры B2O: {identifier}"
         assert page.port_list.height() >= 185
