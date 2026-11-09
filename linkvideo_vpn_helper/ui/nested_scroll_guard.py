@@ -32,6 +32,15 @@ class _NestedScrollFilter(QObject):
         area = self._nearest_area(watched)
         if area is None or not area.isEnabled():
             return False
+        # Port cards intentionally grow to full height; their hidden internal
+        # scrollbar must NEVER consume a wheel tick. Route directly to the
+        # parent QScrollArea, regardless of small Qt layout rounding errors.
+        if bool(area.property("lvWheelToParent")):
+            parent = area.parentWidget()
+            while parent is not None and not isinstance(parent, QAbstractScrollArea):
+                parent = parent.parentWidget()
+            if parent is not None:
+                area = parent
 
         vertical = area.verticalScrollBar()
         horizontal = area.horizontalScrollBar()

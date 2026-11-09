@@ -169,19 +169,22 @@ with tempfile.TemporaryDirectory() as directory:
     vpn._open_client_view()
     app.processEvents()
     assert vpn.detail_scroll.property("lvWheelBoundaryLock") is True
-    assert vpn.port_list.property("lvWheelBoundaryLock") is True
+    assert vpn.port_list.property("lvWheelToParent") is True
+    assert vpn.port_list.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
     filter_ = _NestedScrollFilter()
     vpn.page_scroll.verticalScrollBar().setRange(0, 200)
     vpn.page_scroll.verticalScrollBar().setValue(80)
-    vpn.port_list.verticalScrollBar().setValue(0)
+    vpn.info_scroll.verticalScrollBar().setRange(0, 300)
+    vpn.info_scroll.verticalScrollBar().setValue(160)
     wheel = QWheelEvent(
         QPointF(5, 5), QPointF(5, 5), QPoint(0, 0), QPoint(0, 120),
         Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
         Qt.ScrollPhase.ScrollUpdate, False,
     )
     assert filter_.eventFilter(vpn.port_list.viewport(), wheel) is True
+    assert 0 <= vpn.info_scroll.verticalScrollBar().value() < 160
     assert vpn.page_scroll.verticalScrollBar().value() == 80
     vpn.close()
     app.processEvents()
 
-print("CORE TESTS OWNER TRANSFER, STATUS MODAL, CURRENCY, PREVIEW AND WHEEL LOCK OK")
+print("CORE TESTS OWNER TRANSFER, STATUS MODAL, CURRENCY, PREVIEW AND SINGLE LEFT-PANE WHEEL SCROLL OK")

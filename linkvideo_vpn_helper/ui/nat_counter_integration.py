@@ -9,7 +9,7 @@ second row instead of squeezing every value into one horizontal line.
 
 from PySide6.QtCore import QRect, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFontMetrics, QGuiApplication, QIcon, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QAbstractItemView, QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget
 
 
 _INSTALLED = False
@@ -92,10 +92,10 @@ def install_nat_counter_ui() -> None:
         if getattr(self, "_nvr_expanded_client_key", None) != client_key:
             self._nvr_expanded_client_key = client_key
             self._nvr_expanded_ports = set()
-        port_list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-        port_list.verticalScrollBar().setSingleStep(28)
-        port_list.setMinimumHeight(185)
-        port_list.setMaximumHeight(680)
+        # The parent SearchClientInfoScroll already handles all vertical
+        # scrolling. No second scrollbar should appear inside the port card.
+        port_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        port_list.setMinimumHeight(118)
 
         for index in range(port_list.count()):
             item = port_list.item(index)
@@ -307,12 +307,7 @@ def install_nat_counter_ui() -> None:
                          else f"▸ Раскрыть список найденных камер ({total})"))
                     list_item.setSizeHint(QSize(
                         0, 76 + 30 + (content_height if expanded_now else 0)))
-                    height = sum(
-                        list_widget.item(i).sizeHint().height()
-                        + list_widget.spacing()
-                        for i in range(list_widget.count())
-                    ) + 14
-                    list_widget.setFixedHeight(min(680, max(185, height)))
+                    list_widget.fit_to_contents()
                 toggle.clicked.connect(toggle_nvr)
                 toggle.setText(
                     "▾ Свернуть список камер" if expanded else
@@ -346,14 +341,9 @@ def install_nat_counter_ui() -> None:
                 0, (90 if camera_link is not None else 76) + group_extra))
             port_list.setItemWidget(item, row)
 
-        # _render_client() initially sized the plain-text list too short.
-        # After custom rows are attached, reserve space for the visible ID
-        # and the traffic line; keep scrolling for larger port inventories.
-        required = sum(
-            port_list.item(i).sizeHint().height() + port_list.spacing()
-            for i in range(port_list.count())
-        ) + 14
-        port_list.setFixedHeight(min(680, max(185, required)))
+        # Grow to the complete height of all rows; the parent left-panel
+        # QScrollArea remains the ONLY scrollbar even for many ports.
+        port_list.fit_to_contents()
 
     SearchManagePage._render_client = patched_render
     _INSTALLED = True

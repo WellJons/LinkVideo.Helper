@@ -26,6 +26,51 @@ from linkvideo_vpn_helper.services.archive_service_core import B2OService
 from linkvideo_vpn_helper.services.vpn_camera_port_match import account_login, match_vpn_ports
 
 
+class ClientPortsList(QListWidget):
+    """A list of rich port cards, NOT another vertically scrollable viewport.
+
+    The surrounding SearchClientInfoScroll already owns the left column's
+    vertical scrollbar. Growing the list to the measured height of every
+    card makes the cards fully visible while the parent handles navigation.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.outer_scroll: QScrollArea | None = None
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def fit_to_contents(self):
+        heights = sum(
+            max(1, self.item(index).sizeHint().height()) + self.spacing()
+            for index in range(self.count())
+        )
+        self.setFixedHeight(max(118, heights + self.frameWidth() * 2 + 12))
+
+    def wheelEvent(self, event):
+        # Forward the user's one wheel gesture to the ONE existing scrollbar.
+        # QListWidget otherwise eats the gesture even with its scrollbar off.
+        if self.outer_scroll is None:
+            return super().wheelEvent(event)
+        scrollbar = self.outer_scroll.verticalScrollBar()
+        pixels = event.pixelDelta().y()
+        angle = event.angleDelta().y()
+        if pixels:
+            delta = pixels
+        elif angle:
+            delta = int((angle / 120.0) * max(24, scrollbar.singleStep() * 3))
+        else:
+            event.ignore()
+            return
+        next_value = max(scrollbar.minimum(), min(scrollbar.maximum(), scrollbar.value() - delta))
+        if next_value == scrollbar.value():
+            event.ignore()
+            return
+        scrollbar.setValue(next_value)
+        event.accept()
+
+
 class TrafficGraph(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1284,18 +1329,19 @@ class SearchManagePage(QWidget):
             "ID показывается только при совпадении номера порта и "
             "подтверждённой принадлежности камеры учётке B2O.")
         pl.addWidget(camera_status)
-        self.port_list = QListWidget()
+        self.port_list = ClientPortsList()
+        self.port_list.outer_scroll = self.info_scroll
         self.port_list.setObjectName("PortList")
-        self.port_list.setProperty("lvWheelBoundaryLock", True)
+        # Always forward wheel input to the existing left-panel scrollbar.
+        self.port_list.setProperty("lvWheelToParent", True)
         self.port_list.setMinimumHeight(118)
-        self.port_list.setMaximumHeight(310)
+        # No maximum height here: the parent scroll handles even 100+ ports.
         verified_ports = {
             row.port for row in self._camera_match_result.links
         } if self._camera_match_result is not None and self._camera_match_key and (
             self._camera_match_key[:3] == (c.server, c.login, tuple(sorted(c.ports)))
         ) else set()
-        self.port_list.setFixedHeight(
-            min(310, max(118, len(c.ports) * 60 + len(verified_ports) * 24 + 16)))
+        self.port_list.setFixedHeight(118)  # measured after port card rendering
         self.port_list.setWordWrap(True)
         self.port_list.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.port_list.setSpacing(4)
@@ -1374,7 +1420,8 @@ class SearchManagePage(QWidget):
             item.setFlags(Qt.ItemFlag.NoItemFlags)
             item.setSizeHint(QSize(0, 42))
             self.port_list.addItem(item)
-        pl.addWidget(self.port_list, 1)
+        self.port_list.fit_to_contents()
+        pl.addWidget(self.port_list, 0)
         self.info_content.addWidget(ports)
         self.info_content.addStretch(1)
 

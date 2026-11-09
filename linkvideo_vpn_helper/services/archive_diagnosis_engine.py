@@ -141,12 +141,42 @@ class ArchiveDiagnosisEngine:
         address_compare: list[tuple[str, ArchiveDiscovery | None, Exception | None]],
         server_compare: list[tuple[str, ArchiveDiscovery | None, Exception | None]],
     ) -> ArchiveDiagnosis:
+        # A playable HLS fallback is NOT a verified DVR timeline. With no
+        # timestamped slices, _gaps() describes unverified coverage rather
+        # than confirmed camera outages. Never assign camera/server blame.
+        if main.hls_fallback_url and not main.slices:
+            return ArchiveDiagnosis(
+                side=DiagnosisSide.UNKNOWN,
+                confidence=DiagnosisConfidence.INSUFFICIENT,
+                title="HLS найден, точный DVR-таймлайн не подтверждён",
+                summary=(
+                    "Плеер вернул HLS-запись, но сервер не подтвердил интервалы "
+                    "времени DVR. Невозможно достоверно определить разрывы "
+                    "и их причину только по общей длительности плейлиста."
+                ),
+                evidence=[
+                    DiagnosisEvidence(
+                        "Прямой HLS",
+                        f"Сегментов: {main.hls_fallback_segments}; "
+                        f"длительность плейлиста: {main.hls_fallback_duration:.0f} сек.",
+                        "info",
+                    ),
+                ],
+                cautions=[
+                    "Нужен DVR-таймлайн или явные интервалы HLS-сегментов, "
+                    "чтобы подтвердить разрывы по времени.",
+                ],
+            )
+
         valid_address = [d for _, d, err in address_compare if d is not None and err is None]
         valid_server = [d for _, d, err in server_compare if d is not None and err is None]
         failed_address = sum(1 for _, d, err in address_compare if d is None or err is not None)
         failed_server = sum(1 for _, d, err in server_compare if d is None or err is not None)
 
-        if not main.gaps or main.coverage_percent >= 99.5:
+        # A high percentage is NOT proof that no gaps exist. For example,
+        # a 2-minute outage over 7 days still gives >99.98% coverage.
+        # Only the actual DVR gap list can establish a complete timeline.
+        if not main.gaps:
             return ArchiveDiagnosis(
                 side=DiagnosisSide.NONE,
                 confidence=DiagnosisConfidence.HIGH,
