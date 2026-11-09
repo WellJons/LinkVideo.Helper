@@ -600,7 +600,11 @@ class VPNServersPage(QWidget):
     def _install_with_backup(self, host: str):
         backup = self.backup_service.backup_one(host, self.credentials)
         if not backup.ok:
-            raise RuntimeError("Полная резервная копия перед установкой LV не создана")
+            details = "; ".join(backup.errors[:3]) if backup.errors else "нет критически важных разделов"
+            raise RuntimeError(
+                "Установка LV отменена: резервная копия RouterOS неполная. "
+                + details
+            )
         status = self.automation.install_or_update(host, self.credentials)
         return {"status": status, "backup": str(backup.json_path.parent if backup.json_path else "")}
 
