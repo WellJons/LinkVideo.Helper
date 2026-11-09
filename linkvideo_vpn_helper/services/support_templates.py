@@ -195,7 +195,10 @@ class TemplateStore:
             info = archive.getinfo("word/document.xml")
             if info.file_size > 10 * 1024 * 1024:
                 raise ValueError("Документ слишком большой.")
-            root = ET.fromstring(archive.read(info))
+            try:
+                root = ET.fromstring(archive.read(info))
+            except ET.ParseError as exc:
+                raise ValueError("Повреждённая структура DOCX.") from exc
 
         ns_uri = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
         ns = {"w": ns_uri}
@@ -244,7 +247,8 @@ class TemplateStore:
             numbered_title = bool(re.match(r"^\d{1,3}[.)]\s+.{3,120}$", value))
             heading = styled_title or (
                 blanks and (numbered_title or (
-                    len(value) <= 90 and value.endswith(":")
+                    len(value) <= 90 and (value.endswith(":") or blanks >= 2)
+
                     and not re.match(r"^(?:http|rtsp)s?:", value, flags=re.IGNORECASE)
                 ))
             )
