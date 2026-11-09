@@ -18,7 +18,7 @@ from linkvideo_vpn_helper.services.archive_service_core import B2OService
 from linkvideo_vpn_helper.services.camera_lookup import search_by_login
 
 _SUFFIX = re.compile(r"(?:_[1-9][0-9]*)+$")
-_OWNER_FIELDS = ("account_login", "customer_login", "client_login", "owner_login", "login")
+_OWNER_FIELDS = ("account_login", "customer_login", "client_login", "owner_login")
 _PORT_FIELDS = (
     "external_rtsp_port", "rtsp_external_port", "external_port",
     "port_forward", "rtsp_port", "rtspPort", "port_rtsp",
@@ -27,7 +27,7 @@ _PORT_FIELDS = (
 _URL_FIELDS = (
     "rtsp_url", "rtspUrl", "url_rtsp", "rtsp_uri", "rtspUri",
     "rtsp_link", "rtspLink", "camera_rtsp_url", "stream_rtsp_url",
-    "main_stream_rtsp_url",
+    "main_stream_rtsp_url", "stream_url", "streamUrl",
 )
 _NESTED = ("rtsp", "connection", "camera", "device", "network",
            "connection_settings", "stream", "main_stream")
