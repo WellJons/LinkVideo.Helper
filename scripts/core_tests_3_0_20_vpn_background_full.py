@@ -31,13 +31,16 @@ with TemporaryDirectory() as td:
     # No Windows setup and no credentials -> toggling cannot silently enable.
     page.bg_enabled.setChecked(True)
     assert page.bg_enabled.isChecked() is False
+    assert page.bg_interval.currentData() == 12
+    assert not page.bg_apply_interval.isEnabled()
     page.close()
 
 assert bg.TASK_NAME == "LinkVideo.Helper.VPNSheetsMirror"
 assert bg.DEFAULT_INTERVAL_HOURS == 12
 assert bg.ALLOWED_INTERVAL_HOURS == (6, 12, 24)
-assert page.bg_interval.currentData() == 12
-assert not page.bg_apply_interval.isEnabled()
+assert bg._task_schedule(6) == ["/SC", "HOURLY", "/MO", "6"]
+assert bg._task_schedule(12) == ["/SC", "HOURLY", "/MO", "12"]
+assert bg._task_schedule(24) == ["/SC", "DAILY", "/MO", "1"]
 
 with TemporaryDirectory() as td:
     credentials = SimpleNamespace(
