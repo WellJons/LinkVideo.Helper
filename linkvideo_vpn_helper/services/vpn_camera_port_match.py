@@ -96,7 +96,8 @@ def explicit_camera_ports(row: dict) -> set[int]:
                 if parsed.hostname and port is not None and 1 <= port <= 65535:
                     result.add(port)
             except ValueError:
-                pass
+                # An invalid or password-obscured RTSP URL proves no port.
+                continue
     return result
 
 
