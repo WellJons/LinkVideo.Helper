@@ -266,6 +266,7 @@ class SearchManagePage(QWidget):
         self._camera_match_result = None
         self._camera_match_message = "Камеры пока не проверены."
         self._camera_lookup_override = ""
+        self._camera_lookup_draft = ""
         self.cameraPortsReady.connect(self._on_camera_ports)
         self.searchReady.connect(self._on_search)
         self.progressReady.connect(self._on_progress)
@@ -937,6 +938,7 @@ class SearchManagePage(QWidget):
             self._camera_match_key = None
             self._camera_match_result = None
             self._camera_lookup_override = ""
+            self._camera_lookup_draft = ""
         self._selected_port = client.ports[0] if client.ports else None
         self._open_client_view()
 
@@ -1172,7 +1174,7 @@ class SearchManagePage(QWidget):
             line.setSpacing(8)
             caption = QLabel(field)
             caption.setObjectName("Muted")
-            caption.setFixedWidth(104)
+            caption.setFixedWidth(157)
             detail = QLabel(str(value))
             detail.setObjectName("Value")
             detail.setWordWrap(True)
@@ -1187,7 +1189,7 @@ class SearchManagePage(QWidget):
         password_row.setSpacing(8)
         password_label = QLabel("Пароль")
         password_label.setObjectName("Muted")
-        password_label.setFixedWidth(104)
+        password_label.setFixedWidth(157)
         password_value = QLabel(c.password)
         password_value.setObjectName("Value")
         password_value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -1320,7 +1322,12 @@ class SearchManagePage(QWidget):
                     if current_port in self._recent_new_ports:
                         details.append("Новый")
                     item.setText(f"Порт {port}  ·  {status}\n" + "  ·  ".join(details[1:]))
-                matching = self._camera_match_result if self._camera_match_key and self._camera_match_result else None
+                matching = (self._camera_match_result
+                            if self._camera_match_result is not None
+                            and self._camera_match_key
+                            and self._camera_match_key[:3] ==
+                                (c.server, c.login, tuple(sorted(c.ports)))
+                            else None)
                 if matching:
                     for link in matching.links:
                         if link.port == int(port):
@@ -1362,12 +1369,16 @@ class SearchManagePage(QWidget):
         lookup_row = QHBoxLayout()
         self.camera_b2o_login = QLineEdit()
         self.camera_b2o_login.setObjectName("VPNB2OAccountLogin")
-        self.camera_b2o_login.setText(self._camera_lookup_override or account_login(c.login))
+        self.camera_b2o_login.setText(
+            self._camera_lookup_draft or self._camera_lookup_override or account_login(c.login))
+        self.camera_b2o_login.textEdited.connect(
+            lambda text: setattr(self, "_camera_lookup_draft", text))
         self.camera_b2o_login.setPlaceholderText("Логин аккаунта B2O")
         self.camera_b2o_button = QPushButton("Сверить")
         self.camera_b2o_button.setProperty("role", "soft")
         self.camera_b2o_button.clicked.connect(
-            lambda: self._start_camera_port_check(self.camera_b2o_login.text().strip()))
+            lambda: self._start_camera_port_check(
+                self.camera_b2o_login.text().strip(), force=True))
         lookup_row.addWidget(self.camera_b2o_login, 1)
         lookup_row.addWidget(self.camera_b2o_button)
         camera_l.addLayout(lookup_row)
@@ -1376,7 +1387,9 @@ class SearchManagePage(QWidget):
         status.setWordWrap(True)
         camera_l.addWidget(status)
         report = self._camera_match_result
-        if report is not None and self._camera_match_key and c.ports:
+        if (report is not None and self._camera_match_key
+                and self._camera_match_key[:3] ==
+                    (c.server, c.login, tuple(sorted(c.ports)))):
             for link in report.links:
                 row = QLabel(f"Порт {link.port}: {link.label} · камера ID {link.camera_id}")
                 row.setObjectName("Value")
@@ -1704,14 +1717,16 @@ class SearchManagePage(QWidget):
         # нажимать «Обновить» после добавления/удаления/переключения портов.
         QTimer.singleShot(700, self._silent_refresh)
 
-    def _start_camera_port_check(self, override_login: str = ""):
+    def _start_camera_port_check(self, override_login: str = "", *, force: bool = False):
         client = self.current
         if client is None or not client.ports:
             return
         login = override_login or self._camera_lookup_override or account_login(client.login)
         self._camera_lookup_override = login if override_login else self._camera_lookup_override
+        if override_login:
+            self._camera_lookup_draft = login
         key = (client.server, client.login, tuple(sorted(client.ports)), login)
-        if key == self._camera_match_key:
+        if key == self._camera_match_key and not force:
             return
         self._camera_match_key = key
         self._camera_match_result = None
@@ -1721,6 +1736,7 @@ class SearchManagePage(QWidget):
         settings = self.registry.settings
         b2o = B2OService(settings)
         if not b2o.token() or account is None or not account.has_credentials:
+            self._camera_match_key = None  # Re-check must work after login.
             self._camera_match_message = (
                 "Войдите в учётную запись «Админка» для проверки камер. "
                 "Подключение MikroTik не предоставляет доступ к B2O."
@@ -1749,10 +1765,13 @@ class SearchManagePage(QWidget):
     def _on_camera_ports(self, generation: int, key, report, error: str):
         if generation != self._camera_match_generation or key != self._camera_match_key:
             return
-        if self.current is None or (self.current.server, self.current.login) != key[:2]:
+        if (self.current is None
+                or (self.current.server, self.current.login, tuple(sorted(self.current.ports)))
+                   != key[:3]):
             return
         self._camera_match_result = report
         if error:
+            self._camera_match_key = None  # Let an operator retry without refreshing the page.
             self._camera_match_message = error
         elif report is not None:
             self._camera_match_message = (
