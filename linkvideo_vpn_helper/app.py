@@ -71,6 +71,13 @@ def _migrate_settings(settings: QSettings):
 
 
 def main() -> int:
+    # The Scheduled Task invokes the same installed EXE in strictly headless
+    # mode. Handle service actions before QApplication/login is ever created.
+    from linkvideo_vpn_helper.services.vpn_background_service import dispatch_command
+    background_result = dispatch_command(sys.argv[1:])
+    if background_result is not None:
+        return background_result
+
     # Install the Windows subprocess guard before any QApplication/setting
     # initializers or automatic login can launch auxiliary programs.
     from linkvideo_vpn_helper.ui.background_ux_integration import (
