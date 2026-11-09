@@ -557,7 +557,11 @@ class B2OService:
                 candidates.append(host)
         if server not in candidates:
             candidates.insert(0, server)
-        return ArchiveCamera(number, label, server, stream, signature, tz, dict(data), candidates)
+        camera_payload = dict(data)
+        # Numeric camera IDs have no vendor prefix. Preserve the selected
+        # B2O operator so deep fallback never silently switches back to RU.
+        camera_payload["_lv_operator_id"] = int(operator_id)
+        return ArchiveCamera(number, label, server, stream, signature, tz, camera_payload, candidates)
 
     def cameras_on_server(self, operator_id: int, server_name: str, limit: int = 15) -> tuple[list[dict], dict]:
         """Возвращает онлайн-камеры текущего B2O vcore для массового сравнения.
@@ -1194,7 +1198,7 @@ class ArchiveService:
             if clean and clean not in seen:
                 seen.add(clean)
                 candidates.append(clean)
-        for host in self._deep_candidate_hosts(camera.server, self.b2o.resolve_operator_id(camera.label, 241), camera.label):
+        for host in self._deep_candidate_hosts(camera.server, int(camera.raw.get("_lv_operator_id") or self.b2o.resolve_operator_id(camera.label, 241)), camera.label):
             clean = self.b2o.normalize_vcore_host(host)
             if clean and clean not in seen:
                 seen.add(clean)
@@ -1230,7 +1234,7 @@ class ArchiveService:
                     found.extend(info.get("slices") or [])
                     learned = list(info.get("hosts") or [])
                     if learned:
-                        self._remember_global_hosts(self.b2o.resolve_operator_id(camera.label, 241), learned)
+                        self._remember_global_hosts(int(camera.raw.get("_lv_operator_id") or self.b2o.resolve_operator_id(camera.label, 241)), learned)
                 current_plan = self._build_plan(list(known_slices) + found, start_ts, end_ts)
                 if current_plan and not self._gaps(current_plan, start_ts, end_ts):
                     for item in futures:
