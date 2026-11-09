@@ -83,6 +83,9 @@ for required in (
     "New-ScheduledTaskTrigger -AtStartup", "-UserId 'SYSTEM'",
     "Register-ScheduledTask", "Read-Host 'RouterOS password' -AsSecureString",
     "icacls.exe", "--once --dry-run",
+    "Copy-Item -LiteralPath $agent -Destination $protectedAgent -Force",
+    "New-ScheduledTaskAction -Execute $python -Argument $argument -WorkingDirectory $protectedSource",
+    "if (-not $trustedPython)",
 ):
     assert required in powershell, required
 assert "RouterOS password is empty" in powershell
