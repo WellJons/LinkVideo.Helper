@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 import zipfile
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
@@ -26,64 +26,85 @@ class SupportTemplatesPage(QWidget):
 
     def _build(self):
         self.page_scroll, self.page_canvas, root = build_page_scaffold(
-            self, max_width=1420, min_width=720, margins=22, spacing=13)
+            self, max_width=1580, min_width=760, margins=20, spacing=12)
         root.addWidget(PageHeader(
             "Шаблоны ответов",
-            "Личная библиотека для техподдержки: поиск, категории, изображения и копирование. "
-            "Хранится только на этом компьютере."
+            "Быстрый поиск, редактирование и копирование ответов. Библиотека хранится на этом ПК."
         ))
+
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(10)
+        self.library_count = QLabel("Личная библиотека")
+        self.library_count.setObjectName("Muted")
+        toolbar.addWidget(self.library_count, 1)
+        import_btn = QPushButton("↓ Импорт DOCX")
+        import_btn.setToolTip("Загрузить отдельные шаблоны из заголовков Word-документа")
+        import_btn.clicked.connect(self._import_docx)
+        toolbar.addWidget(import_btn)
+        new_btn = QPushButton("＋ Новый шаблон")
+        new_btn.setProperty("role", "primary")
+        new_btn.clicked.connect(self._new)
+        toolbar.addWidget(new_btn)
+        root.addLayout(toolbar)
+
         columns = QSplitter(Qt.Orientation.Horizontal)
         columns.setChildrenCollapsible(False)
+        columns.setHandleWidth(10)
+        columns.setMinimumHeight(625)
 
         left = Card()
-        left.setMinimumWidth(280)
+        left.setMinimumWidth(300)
         ll = QVBoxLayout(left)
-        ll.setContentsMargins(14, 14, 14, 14)
-        ll.setSpacing(10)
-        heading = QLabel("Библиотека")
+        ll.setContentsMargins(16, 16, 16, 16)
+        ll.setSpacing(11)
+        heading = QLabel("Все ответы")
         heading.setObjectName("SectionTitle")
         ll.addWidget(heading)
 
         self.search = QLineEdit()
         self.search.setObjectName("TemplateSearch")
-        self.search.setPlaceholderText("Поиск по названию и тексту…")
+        self.search.setMinimumHeight(42)
+        self.search.setPlaceholderText("Поиск по названию и тексту")
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._refresh)
         ll.addWidget(self.search)
 
         filters = QHBoxLayout()
+        filters.setSpacing(8)
         self.category_filter = QComboBox()
         self.category_filter.setMinimumHeight(38)
         self.category_filter.currentIndexChanged.connect(self._refresh)
         filters.addWidget(self.category_filter, 1)
-        self.favorites_only = QCheckBox("★ Избранное")
+        self.favorites_only = QCheckBox("★ Избранные")
         self.favorites_only.toggled.connect(self._refresh)
         filters.addWidget(self.favorites_only)
         ll.addLayout(filters)
 
         self.templates_list = QListWidget()
         self.templates_list.setObjectName("TemplateResultsList")
-        self.templates_list.setSpacing(4)
+        self.templates_list.setWordWrap(True)
+        self.templates_list.setSpacing(6)
         self.templates_list.setMinimumHeight(380)
         self.templates_list.currentItemChanged.connect(self._select)
         ll.addWidget(self.templates_list, 1)
+        self.empty_label = QLabel("Пока нет ответов.\nСоздайте шаблон или импортируйте DOCX.")
+        self.empty_label.setObjectName("TinyMuted")
+        self.empty_label.setWordWrap(True)
+        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_label.hide()
+        ll.addWidget(self.empty_label)
 
-        left_actions = QHBoxLayout()
-        new_btn = QPushButton("＋ Создать шаблон")
-        new_btn.setProperty("role", "primary")
-        new_btn.clicked.connect(self._new)
-        import_btn = QPushButton("Импорт DOCX")
-        import_btn.clicked.connect(self._import_docx)
-        left_actions.addWidget(new_btn, 1)
-        left_actions.addWidget(import_btn)
-        ll.addLayout(left_actions)
+        local_note = QLabel("Сохранение локальное · без отправки на сервер")
+        local_note.setObjectName("TinyMuted")
+        ll.addWidget(local_note)
         columns.addWidget(left)
 
         right = Card()
-        right.setMinimumWidth(360)
+        right.setMinimumWidth(440)
         rl = QVBoxLayout(right)
-        rl.setContentsMargins(18, 15, 18, 18)
+        rl.setContentsMargins(20, 18, 20, 18)
         rl.setSpacing(10)
+
         title_row = QHBoxLayout()
         section = QLabel("Редактор ответа")
         section.setObjectName("SectionTitle")
@@ -93,82 +114,108 @@ class SupportTemplatesPage(QWidget):
         self.star.setProperty("role", "soft")
         self.star.clicked.connect(self._toggle_favorite)
         title_row.addWidget(self.star)
+        self.copy_btn = QPushButton("⧉ Копировать")
+        self.copy_btn.setToolTip("Скопировать текст ответа в буфер обмена")
+        self.copy_btn.clicked.connect(self._copy)
+        title_row.addWidget(self.copy_btn)
         rl.addLayout(title_row)
 
-        name_title = QLabel("Название")
+        fields = QHBoxLayout()
+        fields.setSpacing(12)
+        name_column = QVBoxLayout()
+        name_column.setSpacing(6)
+        name_title = QLabel("НАЗВАНИЕ")
         name_title.setObjectName("TinyMuted")
-        rl.addWidget(name_title)
+        name_column.addWidget(name_title)
         self.title_input = QLineEdit()
         self.title_input.setObjectName("TemplateTitleInput")
-        self.title_input.setPlaceholderText("Например: Потери Wi-Fi на камере")
-        self.title_input.setMinimumHeight(40)
-        rl.addWidget(self.title_input)
-
-        name_category = QLabel("Категория")
+        self.title_input.setPlaceholderText("Краткое название для поиска")
+        self.title_input.setMinimumHeight(42)
+        name_column.addWidget(self.title_input)
+        fields.addLayout(name_column, 3)
+        category_column = QVBoxLayout()
+        category_column.setSpacing(6)
+        name_category = QLabel("КАТЕГОРИЯ")
         name_category.setObjectName("TinyMuted")
-        rl.addWidget(name_category)
+        category_column.addWidget(name_category)
         self.category_input = QComboBox()
         self.category_input.setEditable(True)
-        self.category_input.setMinimumHeight(40)
+        self.category_input.setMinimumHeight(42)
         self.category_input.setObjectName("TemplateCategoryInput")
-        rl.addWidget(self.category_input)
+        category_column.addWidget(self.category_input)
+        fields.addLayout(category_column, 2)
+        rl.addLayout(fields)
 
+        body_row = QHBoxLayout()
         body_title = QLabel("Текст ответа")
-        body_title.setObjectName("TinyMuted")
-        rl.addWidget(body_title)
+        body_title.setObjectName("CardTitle")
+        body_row.addWidget(body_title)
+        body_row.addStretch(1)
+        hint = QLabel("Обычный текст")
+        hint.setObjectName("TinyMuted")
+        body_row.addWidget(hint)
+        rl.addLayout(body_row)
         self.body_input = QTextEdit()
         self.body_input.setObjectName("TemplateBodyInput")
-        self.body_input.setPlaceholderText("Напишите готовый ответ клиенту…")
+        self.body_input.setPlaceholderText("Выберите шаблон слева или создайте новый ответ…")
         self.body_input.setAcceptRichText(False)
-        self.body_input.setMinimumHeight(250)
+        self.body_input.setMinimumHeight(315)
         rl.addWidget(self.body_input, 1)
 
-        image_title = QLabel("Изображения и скриншоты")
-        image_title.setObjectName("TinyMuted")
-        rl.addWidget(image_title)
+        attachment_header = QHBoxLayout()
+        attachment_header.setSpacing(8)
+        self.attachment_count = QLabel("Вложения · 0")
+        self.attachment_count.setObjectName("CardTitle")
+        attachment_header.addWidget(self.attachment_count)
+        attachment_header.addStretch(1)
+        self.add_image_btn = QPushButton("＋ Добавить изображение")
+        self.add_image_btn.setProperty("role", "soft")
+        self.add_image_btn.setEnabled(False)
+        self.add_image_btn.clicked.connect(self._add_image)
+        attachment_header.addWidget(self.add_image_btn)
+        rl.addLayout(attachment_header)
+
+        self.image_area = QWidget()
+        image_layout = QVBoxLayout(self.image_area)
+        image_layout.setContentsMargins(0, 0, 0, 0)
+        image_layout.setSpacing(6)
         image_row = QHBoxLayout()
         self.images_list = QListWidget()
-        self.images_list.setMaximumHeight(95)
+        self.images_list.setMaximumHeight(100)
         self.images_list.setObjectName("TemplateImagesList")
         self.images_list.currentItemChanged.connect(self._preview_image)
         image_row.addWidget(self.images_list, 1)
-        image_controls = QVBoxLayout()
-        add_image = QPushButton("＋ Добавить")
-        add_image.clicked.connect(self._add_image)
-        remove_image = QPushButton("Убрать")
+        remove_image = QPushButton("Удалить вложение")
         remove_image.clicked.connect(self._remove_image)
-        image_controls.addWidget(add_image)
-        image_controls.addWidget(remove_image)
-        image_controls.addStretch(1)
-        image_row.addLayout(image_controls)
-        rl.addLayout(image_row)
-        self.image_preview = QLabel("Выберите изображение для просмотра")
+        image_row.addWidget(remove_image)
+        image_layout.addLayout(image_row)
+        self.image_preview = QLabel()
         self.image_preview.setObjectName("TinyMuted")
         self.image_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.image_preview.setMinimumHeight(75)
-        self.image_preview.setMaximumHeight(150)
-        rl.addWidget(self.image_preview)
+        self.image_preview.setMaximumHeight(125)
+        self.image_preview.setMinimumHeight(0)
+        image_layout.addWidget(self.image_preview)
+        rl.addWidget(self.image_area)
+        self.image_area.hide()
 
         actions = QHBoxLayout()
-        self.save_btn = QPushButton("Сохранить")
+        self.save_btn = QPushButton("Сохранить шаблон")
         self.save_btn.setObjectName("TemplateSaveButton")
         self.save_btn.setProperty("role", "primary")
         self.save_btn.clicked.connect(self._save)
-        copy_btn = QPushButton("Копировать ответ")
-        copy_btn.clicked.connect(self._copy)
         delete_btn = QPushButton("Удалить")
-        delete_btn.setProperty("role", "danger")
+        delete_btn.setProperty("role", "dangerGhost")
         delete_btn.clicked.connect(self._delete)
         actions.addWidget(self.save_btn, 1)
-        actions.addWidget(copy_btn, 1)
         actions.addWidget(delete_btn)
         rl.addLayout(actions)
-        self.notice = QLabel("Все шаблоны хранятся локально. Данные не отправляются на сервер.")
+        self.notice = QLabel("Выберите шаблон слева или нажмите «Новый шаблон».")
         self.notice.setObjectName("TinyMuted")
         self.notice.setWordWrap(True)
         rl.addWidget(self.notice)
         columns.addWidget(right)
-        columns.setStretchFactor(0, 3)
+
+        columns.setStretchFactor(0, 4)
         columns.setStretchFactor(1, 6)
         root.addWidget(columns, 1)
 
@@ -188,23 +235,33 @@ class SupportTemplatesPage(QWidget):
         idx = self.category_input.findText(chosen)
         if idx >= 0:
             self.category_input.setCurrentIndex(idx)
+        elif chosen:
+            self.category_input.setCurrentText(chosen)
 
     def _refresh(self, *_):
         selected = self._selected_id
         category = self.category_filter.currentData() if self.category_filter.count() else ""
         self._categories()
+        records = self.store.list(self.search.text(), category or "",
+                                  self.favorites_only.isChecked())
         self.templates_list.blockSignals(True)
         self.templates_list.clear()
-        for template in self.store.list(self.search.text(), category or "",
-                                        self.favorites_only.isChecked()):
+        for template in records:
+            preview = " ".join(template.body.split())
+            if len(preview) > 74:
+                preview = preview[:71].rstrip() + "…"
             item = QListWidgetItem(
-                ("★ " if template.favorite else "") + template.title + "\n" + template.category)
-            item.setData(Qt.ItemDataRole.UserRole,template.id)
-            item.setSizeHint(item.sizeHint().expandedTo(item.sizeHint()))
+                ("★  " if template.favorite else "") + template.title +
+                "\n" + template.category + "  ·  " + preview)
+            item.setData(Qt.ItemDataRole.UserRole, template.id)
+            item.setSizeHint(QSize(0, 76))
+            item.setToolTip(template.title + "\n" + template.category)
             self.templates_list.addItem(item)
             if template.id == selected:
                 self.templates_list.setCurrentItem(item)
         self.templates_list.blockSignals(False)
+        self.library_count.setText(f"Всего шаблонов: {len(self.store.list())} · найдено: {len(records)}")
+        self.empty_label.setVisible(not records)
         if selected is not None and self.store.get(selected) is None:
             self._new()
 
@@ -219,6 +276,7 @@ class SupportTemplatesPage(QWidget):
         self.category_input.setCurrentText(template.category)
         self.body_input.setPlainText(template.body)
         self.star.setText("★ В избранном" if template.favorite else "☆ В избранное")
+        self.add_image_btn.setEnabled(True)
         self._load_images()
         self.notice.setText("Шаблон загружен. Изменения сохраняются кнопкой «Сохранить».")
 
@@ -231,7 +289,10 @@ class SupportTemplatesPage(QWidget):
         self.category_input.setCurrentText("Прочее")
         self.star.setText("☆ В избранное")
         self.images_list.clear()
-        self.image_preview.setText("Для добавления картинки сначала сохраните шаблон.")
+        self.image_area.hide()
+        self.attachment_count.setText("Вложения · 0")
+        self.add_image_btn.setEnabled(False)
+        self.image_preview.clear()
         self.notice.setText("Новый ответ. Заполните название и текст.")
 
     def _save(self):
@@ -242,6 +303,7 @@ class SupportTemplatesPage(QWidget):
             self.notice.setText(str(exc))
             return
         self._selected_id = identifier
+        self.add_image_btn.setEnabled(True)
         self._refresh()
         self.notice.setText("✓ Шаблон сохранён локально.")
 
@@ -279,8 +341,13 @@ class SupportTemplatesPage(QWidget):
     def _load_images(self):
         self.images_list.clear()
         if self._selected_id is None:
+            self.image_area.hide()
+            self.attachment_count.setText("Вложения · 0")
             return
-        for image_id,path in self.store.images(self._selected_id):
+        images = self.store.images(self._selected_id)
+        self.attachment_count.setText(f"Вложения · {len(images)}")
+        self.image_area.setVisible(bool(images))
+        for image_id,path in images:
             item = QListWidgetItem(path.name)
             item.setData(Qt.ItemDataRole.UserRole,(image_id,str(path)))
             self.images_list.addItem(item)
@@ -323,19 +390,25 @@ class SupportTemplatesPage(QWidget):
         self._load_images()
 
     def _import_docx(self):
-        path,_ = QFileDialog.getOpenFileName(self,"Импорт шаблона из Word","",
-                                             "Word documents (*.docx)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Импорт шаблонов из Word", "", "Word documents (*.docx)")
         if not path:
             return
         try:
-            template_id = self.store.import_docx(Path(path))
-            self._selected_id = template_id
+            category = str(self.category_filter.currentData() or "Прочее")
+            identifiers = self.store.import_docx_many(Path(path), category)
+            self._selected_id = identifiers[0]
+            # Reset filters, otherwise the imported entries may be hidden.
+            self.search.clear()
+            self.favorites_only.setChecked(False)
+            self.category_filter.setCurrentIndex(0)
             self._refresh()
-            template = self.store.get(template_id)
-            if template is not None:
-                self.title_input.setText(template.title)
-                self.body_input.setPlainText(template.body)
-                self.category_input.setCurrentText(template.category)
-            self.notice.setText("✓ DOCX импортирован как один шаблон.")
-        except (ValueError,OSError,KeyError,zipfile.BadZipFile) as exc:
+            for index in range(self.templates_list.count()):
+                item = self.templates_list.item(index)
+                if item.data(Qt.ItemDataRole.UserRole) == identifiers[0]:
+                    self.templates_list.setCurrentItem(item)
+                    break
+            self.notice.setText(
+                f"✓ Из DOCX импортировано отдельных шаблонов: {len(identifiers)}.")
+        except (ValueError, OSError, KeyError, zipfile.BadZipFile) as exc:
             self.notice.setText("Не удалось импортировать DOCX: " + str(exc))
