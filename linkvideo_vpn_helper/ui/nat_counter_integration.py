@@ -164,7 +164,7 @@ def install_nat_counter_ui() -> None:
             detail.setObjectName("TinyMuted")
             detail.setMinimumWidth(0)
             bottom.addWidget(detail, 1)
-            bottom.addWidget(_counter(f"Трафик порта: {_fmt_bytes(rule_bytes)}"), 0)
+            bottom.addWidget(_counter(f"NAT-трафик: {_fmt_bytes(rule_bytes)}"), 0)
             bottom.addWidget(_counter(f"Пакеты: {_fmt_packets(rule_packets)}"), 0)
             outer.addLayout(bottom)
 
