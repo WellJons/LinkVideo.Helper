@@ -30,8 +30,8 @@ assert parsed.reason == "inactive_90"
 assert parsed.version == RETENTION_VERSION
 assert "|LV2|s=Q|l=111|c=99|r=q|" in comment
 assert "state=" not in comment and "created=" not in comment
-assert "never_active_30" in aging_script_source()
 assert ":set deleteAfter 30" in aging_script_source()
+assert ":local deleteAfter 365" in aging_script_source()
 
 legacy = "operator |LV1|state=Q|last=9590400000000000|created=8553600000000000|reason=inactive_90|ver=1.1.0|"
 migrated = parse_extended_comment(legacy)
@@ -43,17 +43,22 @@ assert migrated.reason == "inactive_90"
 
 aging = aging_script_source()
 for marker in (
-    "never_active_30",
-    "inactive_365",
+    ':local deleteAfter 365',
+    ':set deleteAfter 30',
+    ':local deleteCode "d"',
+    ':set deleteCode "n"',
     "/ppp secret disable $sid",
-    "/ppp secret remove $sid",
-    "/ip firewall nat remove $nid",
-    "/ppp profile remove $pid",
+    "s=R|l=",
     "LV QUARANTINE",
-    "LV RETENTION DELETE",
     "|c=",
 ):
     assert marker in aging, marker
+for forbidden in (
+    "/ppp secret remove $sid",
+    "/ip firewall nat remove $nid",
+    "/ppp profile remove $pid",
+):
+    assert forbidden not in aging, forbidden
 
 restore = restore_script_source()
 assert '($state = "Q")' in restore
@@ -77,7 +82,7 @@ from linkvideo_vpn_helper.services import vpn_lifecycle
 assert automation.LV_AUTOMATION_VERSION == RETENTION_VERSION
 assert automation_core.LV_AUTOMATION_VERSION == RETENTION_VERSION
 assert vpn_lifecycle.LV_AUTOMATION_VERSION == RETENTION_VERSION
-assert "never_active_30" in automation.VPNAutomationService.SCRIPT_SOURCES[automation_core.LV_AGING_SCRIPT]()
+assert ":set deleteAfter 30" in automation.VPNAutomationService.SCRIPT_SOURCES[automation_core.LV_AGING_SCRIPT]()
 assert "|LV2|" in automation.VPNAutomationService.SCRIPT_SOURCES[automation_core.LV_ACTIVITY_SCRIPT]()
 
 install_vpn_sheets_retention_compat()
