@@ -9,9 +9,10 @@ LinkVideo therefore keeps only the minimum missing state in a compact LV2 marker
 
 ``l`` and ``c`` are whole days since Unix epoch, not nanoseconds. This keeps the
 RouterOS comment short while preserving everything required for the policy:
-30 days -> sleeping, 90 days -> quarantine/disable, 365 days -> delete the PPP
-secret, its NAT rules and an unused custom profile. Accounts that never connected
-use ``c`` as their retention reference and are also deleted after 365 days.
+30 days -> sleeping, 90 days -> quarantine/disable. After 365 days of no
+activity (or 30 days after creation without a first connection), RouterOS
+marks the account for deletion; only a successful Google Sheets snapshot
+allows the desktop/background synchronizer to delete its PPP/NAT/profile.
 """
 
 from dataclasses import dataclass
@@ -22,7 +23,7 @@ from linkvideo_vpn_helper.mikrotik.api_ssl_client import RouterOSAPIClient
 from linkvideo_vpn_helper.services.app_logging import event, error
 
 
-RETENTION_VERSION = "2.1.0"
+RETENTION_VERSION = "2.1.1"
 LV_MARKER = "|LV2|"
 LEGACY_LV_MARKER = "|LV1|"
 DAY_NS = 86_400_000_000_000
@@ -175,7 +176,73 @@ def activity_script_source() -> str:
 
 
 def aging_script_source() -> str:
-    return f'''# LinkVideo.Helper LV Automation {RETENTION_VERSION}\n:local nowDay ([:tonsec [:timestamp]] / {DAY_NS})\n:foreach sid in=[/ppp secret find] do={{\n    :local u [/ppp secret get $sid name]\n    :local c [/ppp secret get $sid comment]\n    :local p [:find $c "{LV_MARKER}"]\n    :local base $c\n    :local state "U"\n    :local last 0\n    :local created $nowDay\n    :if ($p != nil) do={{\n        :set base [:pick $c 0 $p]\n        :local tail [:pick $c $p [:len $c]]\n        :local sp [:find $tail "|s="]\n        :if ($sp != nil) do={{ :local x [:pick $tail ($sp + 3) [:len $tail]]; :local e [:find $x "|"]; :if ($e != nil) do={{ :set state [:pick $x 0 $e] }} }}\n        :local lp [:find $tail "|l="]\n        :if ($lp != nil) do={{ :local x [:pick $tail ($lp + 3) [:len $tail]]; :local e [:find $x "|"]; :if ($e != nil) do={{ :set last [:tonum [:pick $x 0 $e]] }} }}\n        :local cp [:find $tail "|c="]\n        :if ($cp != nil) do={{ :local x [:pick $tail ($cp + 3) [:len $tail]]; :local e [:find $x "|"]; :if ($e != nil) do={{ :set created [:tonum [:pick $x 0 $e]] }} }}\n    }}\n    :if ($created = 0) do={{ :set created $nowDay }}\n    :local isActive ([:len [/ppp active find where name=$u]] > 0)\n    :local disabled [/ppp secret get $sid disabled]\n    :if ($isActive) do={{\n        /ppp secret set $sid comment=($base . "{LV_MARKER}s=A|l=" . $nowDay . "|c=" . $created . "|r=a|")\n    }} else={{\n        :local reference $last\n        :if ($reference = 0) do={{ :set reference $created }}\n        :local age ($nowDay - $reference)\n        :local deleteAfter {DELETE_DAYS}\n        :local deleteReason "inactive_365"\n        :if ($last = 0) do={{\n            :set deleteAfter {NEVER_ACTIVE_DELETE_DAYS}\n            :set deleteReason "never_active_30"\n        }}\n        :if ($age >= $deleteAfter) do={{\n            :local profile [/ppp secret get $sid profile]\n            :local remote [/ppp secret get $sid remote-address]\n            :if (([:len $remote] = 0) && ([:len $profile] > 0)) do={{\n                :foreach pid in=[/ppp profile find where name=$profile] do={{ :set remote [/ppp profile get $pid remote-address] }}\n            }}\n            :log warning ("LV RETENTION DELETE user=" . $u . " reason=" . $deleteReason . " age=" . $age)\n            :foreach nid in=[/ip firewall nat find where comment=$u] do={{ /ip firewall nat remove $nid }}\n            :if ([:len $remote] > 0) do={{ :foreach nid in=[/ip firewall nat find where to-addresses=$remote] do={{ /ip firewall nat remove $nid }} }}\n            :local profileUses 0\n            :if ([:len $profile] > 0) do={{ :set profileUses [:len [/ppp secret find where profile=$profile]] }}\n            /ppp secret remove $sid\n            :if (($profileUses <= 1) && ($profile != "") && ($profile != "default") && ($profile != "default-encryption")) do={{\n                :foreach pid in=[/ppp profile find where name=$profile] do={{ /ppp profile remove $pid }}\n            }}\n        }} else={{\n            :if ($disabled = true) do={{\n                :if ($state = "Q") do={{\n                    /ppp secret set $sid comment=($base . "{LV_MARKER}s=Q|l=" . $last . "|c=" . $created . "|r=q|")\n                }} else={{\n                    /ppp secret set $sid comment=($base . "{LV_MARKER}s=M|l=" . $last . "|c=" . $created . "|r=m|")\n                }}\n            }} else={{\n                :if ($age >= {QUARANTINE_DAYS}) do={{\n                    /ppp secret disable $sid\n                    /ppp secret set $sid comment=($base . "{LV_MARKER}s=Q|l=" . $last . "|c=" . $created . "|r=q|")\n                    :log warning ("LV QUARANTINE user=" . $u . " age=" . $age)\n                }} else={{\n                    :if ($age >= {SLEEP_DAYS}) do={{\n                        /ppp secret set $sid comment=($base . "{LV_MARKER}s=S|l=" . $last . "|c=" . $created . "|r=s|")\n                    }} else={{\n                        :if ($last = 0) do={{\n                            /ppp secret set $sid comment=($base . "{LV_MARKER}s=U|l=0|c=" . $created . "|r=c|")\n                        }} else={{\n                            /ppp secret set $sid comment=($base . "{LV_MARKER}s=A|l=" . $last . "|c=" . $created . "|r=a|")\n                        }}\n                    }}\n                }}\n            }}\n        }}\n    }}\n}}'''
+    """Daily RouterOS lifecycle: disable expired accounts but never delete before Google backup."""
+    return f'''# LinkVideo.Helper LV Automation {RETENTION_VERSION}
+:local nowDay ([:tonsec [:timestamp]] / {DAY_NS})
+:foreach sid in=[/ppp secret find] do={{
+    :local u [/ppp secret get $sid name]
+    :local c [/ppp secret get $sid comment]
+    :local p [:find $c "{LV_MARKER}"]
+    :local base $c
+    :local state "U"
+    :local last 0
+    :local created $nowDay
+    :if ($p != nil) do={{
+        :set base [:pick $c 0 $p]
+        :local tail [:pick $c $p [:len $c]]
+        :local sp [:find $tail "|s="]
+        :if ($sp != nil) do={{ :local x [:pick $tail ($sp + 3) [:len $tail]]; :local e [:find $x "|"]; :if ($e != nil) do={{ :set state [:pick $x 0 $e] }} }}
+        :local lp [:find $tail "|l="]
+        :if ($lp != nil) do={{ :local x [:pick $tail ($lp + 3) [:len $tail]]; :local e [:find $x "|"]; :if ($e != nil) do={{ :set last [:tonum [:pick $x 0 $e]] }} }}
+        :local cp [:find $tail "|c="]
+        :if ($cp != nil) do={{ :local x [:pick $tail ($cp + 3) [:len $tail]]; :local e [:find $x "|"]; :if ($e != nil) do={{ :set created [:tonum [:pick $x 0 $e]] }} }}
+    }}
+    :local isActive ([:len [/ppp active find where name=$u]] > 0)
+    :local disabled [/ppp secret get $sid disabled]
+    :if ($isActive) do={{
+        /ppp secret set $sid comment=($base . "{LV_MARKER}s=A|l=" . $nowDay . "|c=" . $created . "|r=a|")
+    }} else={{
+        :local reference $last
+        :if ($reference = 0) do={{ :set reference $created }}
+        :local age ($nowDay - $reference)
+        :local deleteAfter {DELETE_DAYS}
+        :local deleteCode "d"
+        :if ($last = 0) do={{
+            :set deleteAfter {NEVER_ACTIVE_DELETE_DAYS}
+            :set deleteCode "n"
+        }}
+        :if ($age >= $deleteAfter) do={{
+            # Final removal belongs to the successful Google Sheets mirror pass.
+            :if ($disabled = false) do={{ /ppp secret disable $sid }}
+            :local updated ($base . "{LV_MARKER}s=R|l=" . $last . "|c=" . $created . "|r=" . $deleteCode . "|")
+            :if ($updated != $c) do={{ /ppp secret set $sid comment=$updated }}
+        }} else={{
+            :if ($disabled = true) do={{
+                :if ($state = "Q") do={{
+                    /ppp secret set $sid comment=($base . "{LV_MARKER}s=Q|l=" . $last . "|c=" . $created . "|r=q|")
+                }} else={{
+                    /ppp secret set $sid comment=($base . "{LV_MARKER}s=M|l=" . $last . "|c=" . $created . "|r=m|")
+                }}
+            }} else={{
+                :if ($age >= {QUARANTINE_DAYS}) do={{
+                    /ppp secret disable $sid
+                    /ppp secret set $sid comment=($base . "{LV_MARKER}s=Q|l=" . $last . "|c=" . $created . "|r=q|")
+                    :log warning ("LV QUARANTINE user=" . $u . " age=" . $age)
+                }} else={{
+                    :if (($last > 0) && ($age >= {SLEEP_DAYS})) do={{
+                        /ppp secret set $sid comment=($base . "{LV_MARKER}s=S|l=" . $last . "|c=" . $created . "|r=s|")
+                    }} else={{
+                        :if ($last = 0) do={{
+                            /ppp secret set $sid comment=($base . "{LV_MARKER}s=U|l=0|c=" . $created . "|r=c|")
+                        }} else={{
+                            /ppp secret set $sid comment=($base . "{LV_MARKER}s=A|l=" . $last . "|c=" . $created . "|r=a|")
+                        }}
+                    }}
+                }}
+            }}
+        }}
+    }}
+}}'''
 
 
 def restore_script_source() -> str:
@@ -302,18 +369,19 @@ def _remove_client_objects(api, secret: dict, profiles: list[dict], nat_rules: l
     return removed_nat, removed_profile
 
 
-def apply_policy_now(server, creds) -> dict[str, int]:
+def apply_policy_now(server, creds, *, backed_up_logins: set[str] | None = None) -> dict[str, int]:
     """Apply and verify the same policy from Python immediately.
 
-    RouterOS scripts remain the autonomous source of daily enforcement. This pass
-    is a hard postcondition for an operator action: enabling quarantine or updating
-    an already-enabled server cannot return green while Q accounts remain enabled.
+    RouterOS enforces lifecycle states without physical deletion. Only logins
+    successfully mirrored to Google Sheets by this pass may be physically removed;
+    all other callers can enforce quarantine but must leave backup data intact.
     """
     from linkvideo_vpn_helper.services.vpn_service import VPNService
 
     now_ns = time.time_ns()
     vpn = VPNService()
-    counts = {"sleeping": 0, "quarantined": 0, "deleted": 0, "nat_removed": 0, "profiles_removed": 0}
+    deletable = set(backed_up_logins or ())
+    counts = {"sleeping": 0, "quarantined": 0, "staged": 0, "deleted": 0, "nat_removed": 0, "profiles_removed": 0}
 
     with RouterOSAPIClient(server, creds.username, creds.password, port=creds.port, timeout=creds.timeout) as api:
         try:
@@ -349,11 +417,37 @@ def apply_policy_now(server, creds) -> dict[str, int]:
             delete_after = NEVER_ACTIVE_DELETE_DAYS if last_ns <= 0 else DELETE_DAYS
             if age >= delete_after:
                 reason = "never_active_30" if last_ns <= 0 else "inactive_365"
-                nat_removed, profile_removed = _remove_client_objects(api, secret, profiles, nat_rules)
-                counts["deleted"] += 1
-                counts["nat_removed"] += nat_removed
-                counts["profiles_removed"] += int(profile_removed)
-                event("LV", "VPN-учётка удалена автоматически", f"{server} · {login} · {reason} · {age} дн.")
+                if login in deletable:
+                    # Re-read just before deletion: a reconnect or replacement cancels it.
+                    current = next(
+                        (r for r in api.print("/ppp/secret")
+                         if str(r.get(".id", "") or "").strip() == rid
+                         and str(r.get("name", "") or "").strip() == login), None
+                    )
+                    online = {
+                        str(r.get("name", "") or "").strip()
+                        for r in api.print("/ppp/active")
+                    }
+                    if current is None or login in online:
+                        continue
+                    current_meta = parse_extended_comment(str(current.get("comment", "") or ""))
+                    current_last = max(int(current_meta.last_ns or 0), _native_last_ns(vpn, current))
+                    current_created = int(current_meta.created_ns or now_ns)
+                    current_age = max(0, int((now_ns - (current_last or current_created)) // DAY_NS))
+                    if current_age < (NEVER_ACTIVE_DELETE_DAYS if current_last <= 0 else DELETE_DAYS):
+                        continue
+                    nat_removed, profile_removed = _remove_client_objects(api, current, profiles, nat_rules)
+                    counts["deleted"] += 1
+                    counts["nat_removed"] += nat_removed
+                    counts["profiles_removed"] += int(profile_removed)
+                    event("LV", "VPN-учётка удалена автоматически", f"{server} · {login} · {reason} · {age} дн.")
+                else:
+                    if not disabled:
+                        api.disable("/ppp/secret", rid)
+                    api.set("/ppp/secret", rid, {
+                        "comment": compose_extended_comment(meta.base_comment, "R", last_ns, created_ns, reason)
+                    })
+                    counts["staged"] += 1
                 continue
 
             if disabled:
@@ -401,7 +495,7 @@ def apply_policy_now(server, creds) -> dict[str, int]:
     event(
         "LV",
         "Retention policy применена",
-        f"{server} · карантин {counts['quarantined']} · удалено {counts['deleted']} · NAT {counts['nat_removed']} · профили {counts['profiles_removed']}",
+        f"{server} · подготовлено {counts['staged']} · карантин {counts['quarantined']} · удалено {counts['deleted']} · NAT {counts['nat_removed']} · профили {counts['profiles_removed']}",
     )
     return counts
 
@@ -536,6 +630,6 @@ def install_retention_policy() -> None:
     event(
         "LV",
         "Retention policy готов",
-        "LV2 compact · 30д сон · 90д карантин · 365д удаление PPP/NAT/профиля · never-active 365д",
+        "LV2.1.1 · 30д сон · 90д карантин · 365д удаление · never-active 30д · только после Google Sheets mirror",
     )
     _INSTALLED = True
