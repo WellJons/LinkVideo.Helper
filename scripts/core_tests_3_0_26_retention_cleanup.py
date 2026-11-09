@@ -178,6 +178,8 @@ rows = [
     sheet_row(secret("never", last=0, created=timestamp(31))),
     sheet_row(secret("new", last=0, created=timestamp(29))),
     sheet_row(secret("no-backup", last=0, created=timestamp(31)), snapshot=False),
+    sheet_row({**secret("legacy", last=0, created=timestamp(60)),
+               "comment": policy.compose_extended_comment("", "U", 0, timestamp(60), "never_active_tracking")}),
     {"Логин": "unknown", "Комментарий RouterOS": "", "Первое обнаружение": "2020-01-01",
      "RouterOS snapshot": json.dumps({"secret": {"name": "unknown"}})},
 ]
