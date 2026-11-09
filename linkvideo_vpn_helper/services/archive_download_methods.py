@@ -852,13 +852,101 @@ def install_archive_download_methods() -> None:
     if _INSTALLED:
         return
 
-    from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import (
+        QComboBox, QDialog, QHBoxLayout, QLabel, QMessageBox,
+        QPlainTextEdit, QPushButton, QVBoxLayout,
+    )
     from linkvideo_vpn_helper.ui.pages.archive_download_page import ArchiveDownloadPage
 
     original_build = ArchiveDownloadPage._build
     original_page_download = ArchiveDownloadPage._download
     original_page_update = ArchiveDownloadPage._on_download_update
     original_page_cancel = ArchiveDownloadPage.cancel_current_action
+
+    def _open_manual_ffmpeg_dialog(page):
+        dialog = QDialog(page)
+        dialog.setWindowTitle("Команда FFmpeg — ручной режим")
+        dialog.resize(810, 340)
+        dialog.setMinimumWidth(600)
+        content = QVBoxLayout(dialog)
+        content.setContentsMargins(18, 18, 18, 18)
+        content.setSpacing(12)
+
+        explanation = QLabel(
+            "Отредактируйте команду FFmpeg для скачивания HLS-архива. "
+            "{input} — найденный плейлист или участок; {output} — временный MP4. "
+            "Эти значения подставляет Helper. Команда запускается без cmd.exe "
+            "или PowerShell. HTTP-заголовки плеера добавляются автоматически."
+        )
+        explanation.setWordWrap(True)
+        content.addWidget(explanation)
+
+        edit = QPlainTextEdit(dialog)
+        edit.setObjectName("ArchiveManualFFmpegEditor")
+        method = str(getattr(page.archive_method_combo, "currentData")() or "ffmpeg")
+        default = (MANUAL_FFMPEG_NO_AUDIO_TEMPLATE if method == "ffmpeg_no_audio"
+                   else MANUAL_FFMPEG_TEMPLATE)
+        saved = str(page.settings.value("archive/manual_ffmpeg_template", default, str)
+                    or default)
+        edit.setPlainText(str(getattr(page, "_lv_archive_manual_command", "")
+                              or saved))
+        edit.setMinimumHeight(105)
+        edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        content.addWidget(edit)
+
+        privacy = QLabel(
+            "Подписанные HLS-адреса и ключи доступа не записываются в шаблон. "
+            "Ручная команда применится к каждому участку архива. "
+            "Чтобы вернуться к стандартному режиму, выберите метод скачивания заново."
+        )
+        privacy.setObjectName("TinyMuted")
+        privacy.setWordWrap(True)
+        content.addWidget(privacy)
+
+        actions = QHBoxLayout()
+        reset = QPushButton("По умолчанию")
+        cancel = QPushButton("Отмена")
+        save = QPushButton("Сохранить")
+        run = QPushButton("Сохранить и скачать")
+        run.setProperty("role", "primary")
+        actions.addWidget(reset)
+        actions.addStretch(1)
+        actions.addWidget(cancel)
+        actions.addWidget(save)
+        actions.addWidget(run)
+        content.addLayout(actions)
+
+        reset.clicked.connect(lambda: edit.setPlainText(default))
+        cancel.clicked.connect(dialog.reject)
+
+        def apply_command(download: bool = False):
+            try:
+                template = edit.toPlainText().strip()
+                validate_manual_ffmpeg_command(template)
+                if download and not (page.discovery and page.discovery.has_downloadable_archive):
+                    raise ValueError("Сначала найдите архив за выбранный период.")
+                if getattr(page, "_cancel_event", None) is not None:
+                    raise ValueError("Дождитесь завершения текущей операции.")
+            except ValueError as exc:
+                QMessageBox.warning(dialog, "Проверьте команду", str(exc))
+                return
+            page.settings.setValue("archive/manual_ffmpeg_template", template)
+            # Switch method first: the method change clears previous manual
+            # state. This run then explicitly enables the edited template.
+            if page.archive_method_combo.currentData() != "ffmpeg":
+                index = page.archive_method_combo.findData("ffmpeg")
+                page.archive_method_combo.setCurrentIndex(index)
+            page._lv_archive_manual_command = template
+            page.service._lv_archive_manual_command = template
+            page.archive_command_button.setText("✎ Команда FFmpeg · изменена")
+            dialog.accept()
+            if download:
+                QTimer.singleShot(0, page._download)
+
+        save.clicked.connect(lambda: apply_command(False))
+        run.clicked.connect(lambda: apply_command(True))
+        dialog.exec()
 
     def page_build(self):
         original_build(self)
@@ -878,12 +966,18 @@ def install_archive_download_methods() -> None:
         index = self.archive_method_combo.findData(saved)
         self.archive_method_combo.setCurrentIndex(index if index >= 0 else 0)
         self.archive_method_combo.setMinimumHeight(38)
-        self.archive_method_combo.currentIndexChanged.connect(
-            lambda *_: self.settings.setValue(
+        def update_method(*_):
+            self.settings.setValue(
                 "archive/download_method",
                 str(self.archive_method_combo.currentData() or DEFAULT_ARCHIVE_DOWNLOAD_METHOD),
             )
-        )
+            self._lv_archive_manual_command = ""
+            self.service._lv_archive_manual_command = ""
+            button = getattr(self, "archive_command_button", None)
+            if button is not None:
+                button.setText("✎ Команда FFmpeg…")
+
+        self.archive_method_combo.currentIndexChanged.connect(update_method)
         method_row.addWidget(method_label)
         method_row.addWidget(self.archive_method_combo, 1)
         button_index = layout.indexOf(self.btn_find)
@@ -892,6 +986,28 @@ def install_archive_download_methods() -> None:
         else:
             layout.insertLayout(button_index, method_row)
 
+        self._lv_archive_manual_command = ""
+        self.service._lv_archive_manual_command = ""
+        self.archive_command_button = QPushButton("✎ Команда FFmpeg…")
+        self.archive_command_button.setObjectName("ArchiveManualFFmpegButton")
+        self.archive_command_button.setProperty("role", "soft")
+        self.archive_command_button.setMinimumHeight(40)
+        self.archive_command_button.setToolTip(
+            "Редактировать аргументы FFmpeg и запустить вручную на найденном HLS.")
+        self.archive_command_button.clicked.connect(
+            lambda: _open_manual_ffmpeg_dialog(self))
+        summary_layout = self.summary.layout()
+        inserted = False
+        for row in range(summary_layout.count()):
+            sublayout = summary_layout.itemAt(row).layout()
+            if sublayout is not None and sublayout.indexOf(self.btn_download) >= 0:
+                sublayout.insertWidget(sublayout.indexOf(self.btn_download),
+                                       self.archive_command_button)
+                inserted = True
+                break
+        if not inserted:
+            summary_layout.addWidget(self.archive_command_button)
+
     def page_download(self):
         combo = getattr(self, "archive_method_combo", None)
         method = str(combo.currentData() if combo is not None else DEFAULT_ARCHIVE_DOWNLOAD_METHOD)
@@ -899,6 +1015,12 @@ def install_archive_download_methods() -> None:
             method = DEFAULT_ARCHIVE_DOWNLOAD_METHOD
         self.settings.setValue("archive/download_method", method)
         self.service._lv_archive_download_method = method
+        self.service._lv_archive_manual_command = str(
+            getattr(self, "_lv_archive_manual_command", "") or "")
+        if self.service._lv_archive_manual_command:
+            # The operator explicitly opted into an editable FFmpeg command,
+            # not the Curl exporter.
+            self.service._lv_archive_download_method = "ffmpeg"
         if combo is not None:
             combo.setEnabled(False)
         try:
