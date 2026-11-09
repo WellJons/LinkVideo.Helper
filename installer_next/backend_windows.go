@@ -49,6 +49,44 @@ func defaultInstallDir() string {
     return `C:\Program Files\LinkVideo.Helper`
 }
 
+// Windows cannot rename a directory while any process has it as its current
+// working directory. The old Helper may launch Setup from Program Files,
+// unintentionally making the installer itself the directory lock holder.
+func detachInstallerWorkingDirectory() error {
+    tempDir := filepath.Clean(os.TempDir())
+    installed := filepath.Clean(defaultInstallDir())
+    base := strings.ToLower(installed)
+    safe := strings.ToLower(tempDir)
+    if safe == base || strings.HasPrefix(safe, base+string(os.PathSeparator)) {
+        return errors.New("папка TEMP находится внутри каталога Helper")
+    }
+    if err := os.Chdir(tempDir); err != nil {
+        return fmt.Errorf("не удалось освободить рабочую папку установщика: %w", err)
+    }
+    return nil
+}
+
+// Do not delete or overwrite a live runtime. A short-lived antivirus or
+// shutdown handle may block one rename; retry only Windows lock errors.
+func renameRuntimeWithRetry(from, to string) error {
+    deadline := time.Now().Add(12 * time.Second)
+    for {
+        err := os.Rename(from, to)
+        if err == nil {
+            return nil
+        }
+        var code syscall.Errno
+        if !errors.As(err, &code) || (code != 5 && code != 32 && code != 33) {
+            return err
+        }
+        if !time.Now().Before(deadline) {
+            return fmt.Errorf("папка LinkVideo.Helper всё ещё занята другим процессом; "+
+                "закройте Helper, перезапустите Windows и повторите установку: %w", err)
+        }
+        time.Sleep(300 * time.Millisecond)
+    }
+}
+
 func isProcessElevated() bool {
     shell32 := syscall.NewLazyDLL("shell32.dll")
     ok, _, _ := shell32.NewProc("IsUserAnAdmin").Call()
@@ -78,12 +116,17 @@ func shellExecuteRunAs(path string, args []string) error {
     file, _ := syscall.UTF16PtrFromString(path)
     params, _ := syscall.UTF16PtrFromString(strings.Join(args, " "))
     shell32 := syscall.NewLazyDLL("shell32.dll")
+    safeDir, err := syscall.UTF16PtrFromString(os.TempDir())
+    if err != nil {
+        return fmt.Errorf("не удалось подготовить рабочую папку установщика: %w", err)
+    }
     info := shellExecuteInfoW{
         CBSize:       uint32(unsafe.Sizeof(shellExecuteInfoW{})),
         FMask:        0x00000040,
         LpVerb:       verb,
         LpFile:       file,
         LpParameters: params,
+        LpDirectory:  safeDir,
         NShow:        1,
     }
     ok, _, callErr := shell32.NewProc("ShellExecuteExW").Call(uintptr(unsafe.Pointer(&info)))
@@ -180,19 +223,67 @@ func removeLegacyHelperBotTask() {
     runCleanup("schtasks.exe", "/Delete", "/F", "/TN", oldTask)
 }
 
-func stopHelperProcesses() {
-    for _, image := range []string{
+func helperProcessNames() []string {
+    return []string{
         appExeName,
         "LinkVideo VPN Helper.exe",
-        "updater.exe",
-        silentUpdaterExeName,
+        "LinkVideo.Helper.Updater.exe",
         "LinkVideo.Helper.Updater.Worker.exe",
-        "official-patch.exe",
         "LinkVideo.Helper_Patch_Update.exe",
-    } {
+        "official-patch.exe",
+        // Older installations also shipped this generic updater binary.
+        "updater.exe",
+    }
+}
+
+// taskkill may return a nonzero exit code when the process is already gone.
+// Do not treat that as failure, but DO verify that no known Helper process
+// remains before replacing the Program Files runtime.
+func runningHelperProcesses() ([]string, error) {
+    ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+    defer cancel()
+    command := exec.CommandContext(ctx, "tasklist.exe", "/FO", "CSV", "/NH")
+    command.SysProcAttr = &syscall.SysProcAttr{
+        HideWindow: true, CreationFlags: createNoWindowFlag,
+    }
+    output, err := command.Output()
+    if err != nil {
+        return nil, fmt.Errorf("не удалось проверить процессы Helper: %w", err)
+    }
+    table := strings.ToLower(string(output))
+    active := make([]string, 0)
+    for _, image := range helperProcessNames() {
+        // Process names are the first quoted CSV column; the remaining
+        // columns differ between Windows languages, so never parse them.
+        if strings.Contains(table, "\""+strings.ToLower(image)+"\",") {
+            active = append(active, image)
+        }
+    }
+    return active, nil
+}
+
+func stopHelperProcesses() error {
+    for _, image := range helperProcessNames() {
         runCleanup("taskkill.exe", "/IM", image, "/T", "/F")
     }
-    time.Sleep(450 * time.Millisecond)
+    deadline := time.Now().Add(15 * time.Second)
+    for {
+        remaining, err := runningHelperProcesses()
+        if err != nil {
+            return err
+        }
+        if len(remaining) == 0 {
+            return nil
+        }
+        if !time.Now().Before(deadline) {
+            return fmt.Errorf("не удалось завершить процессы: %s. "+
+                "Закройте Helper и повторите установку", strings.Join(remaining, ", "))
+        }
+        for _, image := range remaining {
+            runCleanup("taskkill.exe", "/IM", image, "/T", "/F")
+        }
+        time.Sleep(450 * time.Millisecond)
+    }
 }
 
 // A full installer is an authoritative runtime snapshot, not an overlay.  It
@@ -248,7 +339,7 @@ func recoverInterruptedRuntimeUpgrade(dest string) error {
     if err := os.RemoveAll(dest); err != nil {
         return fmt.Errorf("не удалось удалить незавершённый runtime: %w", err)
     }
-    if err := os.Rename(backup, dest); err != nil {
+    if err := renameRuntimeWithRetry(backup, dest); err != nil {
         return fmt.Errorf("не удалось восстановить предыдущую версию: %w", err)
     }
     return nil
@@ -284,7 +375,7 @@ func activateStagedRuntime(dest, staging string) (string, error) {
 
     hadPrevious := false
     if _, err := os.Stat(dest); err == nil {
-        if err := os.Rename(dest, backup); err != nil {
+        if err := renameRuntimeWithRetry(dest, backup); err != nil {
             return "", fmt.Errorf("не удалось сохранить предыдущую версию: %w", err)
         }
         hadPrevious = true
@@ -292,9 +383,9 @@ func activateStagedRuntime(dest, staging string) (string, error) {
         return "", fmt.Errorf("не удалось проверить текущую версию: %w", err)
     }
 
-    if err := os.Rename(staging, dest); err != nil {
+    if err := renameRuntimeWithRetry(staging, dest); err != nil {
         if hadPrevious {
-            if restoreErr := os.Rename(backup, dest); restoreErr != nil {
+            if restoreErr := renameRuntimeWithRetry(backup, dest); restoreErr != nil {
                 return "", fmt.Errorf("не удалось активировать новую версию (%v) и восстановить старую (%v)", err, restoreErr)
             }
         }
@@ -313,7 +404,7 @@ func rollbackActivatedRuntime(dest, backup string) error {
     if backup == "" {
         return nil
     }
-    if err := os.Rename(backup, dest); err != nil {
+    if err := renameRuntimeWithRetry(backup, dest); err != nil {
         return fmt.Errorf("не удалось восстановить runtime из резервной копии: %w", err)
     }
     return nil
@@ -488,7 +579,9 @@ func installProduct(opts installOptions, progress progressFunc) (string, error) 
     // any staged differential patch. The task is never recreated.
     removeSilentUpdateTask()
     removeLegacyHelperBotTask()
-    stopHelperProcesses()
+    if err := stopHelperProcesses(); err != nil {
+        return "", fmt.Errorf("не удалось освободить файлы программы: %w", err)
+    }
     if err := recoverInterruptedRuntimeUpgrade(dest); err != nil {
         return "", fmt.Errorf("не удалось восстановить прерванное обновление: %w", err)
     }
@@ -499,7 +592,11 @@ func installProduct(opts installOptions, progress progressFunc) (string, error) 
     }
     defer os.RemoveAll(staging)
 
-    progress(74, "Атомарная замена версии…")
+    progress(74, "Ожидание завершения процессов перед заменой…")
+    if err := stopHelperProcesses(); err != nil {
+        return "", fmt.Errorf("не удалось освободить файлы программы: %w", err)
+    }
+    progress(76, "Атомарная замена версии…")
     backup, err := activateStagedRuntime(dest, staging)
     if err != nil {
         return "", err
@@ -567,7 +664,9 @@ func removeUserData() {
 func uninstallProduct(removeData bool, progress progressFunc) error {
     dest := defaultInstallDir()
     progress(8, "Остановка LinkVideo.Helper…")
-    stopHelperProcesses()
+    if err := stopHelperProcesses(); err != nil {
+        return fmt.Errorf("не удалось освободить файлы перед удалением: %w", err)
+    }
     removeLegacyHelperBotTask()
     progress(18, "Удаление фонового updater…")
     removeSilentUpdateTask()

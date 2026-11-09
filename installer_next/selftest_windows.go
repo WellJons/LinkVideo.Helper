@@ -34,6 +34,12 @@ func installerSelfTest() error {
 		return fmt.Errorf("create temp directory: %w", err)
 	}
 	defer os.RemoveAll(root)
+	// Reproduce the old auto-update issue: Setup inherits a working directory
+	// inside the runtime it is about to rename. Detaching must release that
+	// directory, after which a transactional move must succeed on Windows.
+	if err := installerWorkingDirectorySelfTest(root); err != nil {
+		return fmt.Errorf("installer working-directory recovery: %w", err)
+	}
 	dest := filepath.Join(root, "LinkVideo.Helper")
 
 	// Model a legacy installation. Staging must leave it completely untouched
@@ -184,5 +190,34 @@ func installerSelfTest() error {
 		return fmt.Errorf("rollback directory survived successful recovery")
 	}
 
+	return nil
+}
+
+func installerWorkingDirectorySelfTest(root string) error {
+	original, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	defer os.Chdir(original)
+	held := filepath.Join(root, "inherited-program-files-cwd")
+	if err := os.MkdirAll(held, 0o755); err != nil {
+		return err
+	}
+	if err := os.Chdir(held); err != nil {
+		return err
+	}
+	if err := detachInstallerWorkingDirectory(); err != nil {
+		return err
+	}
+	after, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	if strings.EqualFold(filepath.Clean(after), filepath.Clean(held)) {
+		return fmt.Errorf("installer still holds the old runtime working directory")
+	}
+	if err := renameRuntimeWithRetry(held, held+".moved"); err != nil {
+		return fmt.Errorf("installer kept a lock on old runtime: %w", err)
+	}
 	return nil
 }
