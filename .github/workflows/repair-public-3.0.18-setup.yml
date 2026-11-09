@@ -1,0 +1,204 @@
+name: Approved one-time repaired Setup for existing 3.0.18
+
+on:
+  push:
+    branches:
+      - ops/publish-v3.0.18-installer-repair
+
+permissions:
+  contents: read
+
+concurrency:
+  group: approved-installer-repair-3.0.18
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 70
+    steps:
+      - name: Checkout exact merged 3.0.18 repair
+        uses: actions/checkout@v4
+        with:
+          ref: ce91b32fc11425f4f1dba0132848777b6e613c9e
+
+      - name: Verify immutable source and version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expected = 'ce91b32fc11425f4f1dba0132848777b6e613c9e'
+          $actual = (& git rev-parse HEAD).Trim()
+          if ($actual -ne $expected) { throw "Wrong source commit: $actual" }
+          $remote = (& git ls-remote origin refs/heads/main)
+          if ($LASTEXITCODE -ne 0) { throw 'Could not verify main' }
+          $main = ($remote -split '\s+')[0]
+          if ($main -ne $expected) { throw "Main changed from tested commit: $main" }
+          $version = (& python -c "from linkvideo_vpn_helper.version import APP_VERSION; print(APP_VERSION)").Trim()
+          if ($version -ne '3.0.18') { throw "Do not publish as another version: $version" }
+
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Go 1.24
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.x'
+          cache-dependency-path: |
+            installer_next/go.mod
+            patcher/go.mod
+            silent_updater/go.mod
+
+      - name: Rebuild and verify exact Setup
+        shell: pwsh
+        run: ./scripts/verify_release.ps1
+
+      - name: Confirm verification evidence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $report = Get-Content -Raw 'release_candidate/verification.json' | ConvertFrom-Json
+          $setup = 'installer_next/output/LinkVideo.Helper_Setup.exe'
+          $sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash.ToLowerInvariant()
+          if ($report.source_commit -ne 'ce91b32fc11425f4f1dba0132848777b6e613c9e') { throw 'Incorrect build source' }
+          if ($report.version -ne '3.0.18' -or $report.setup_product_version -ne '3.0.18') {
+            throw 'ProductVersion must remain 3.0.18'
+          }
+          if ($report.setup_sha256 -ne $sha256) { throw 'Verification SHA mismatch' }
+          foreach ($field in @('exact_setup_self_test','python_release_preflight','ruff_critical','go_vet','patch_pipeline_compile')) {
+            if ($report.$field -ne 'passed') { throw "Build proof failed: $field" }
+          }
+
+      - name: Transfer verified output to publisher
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-3.0.18-installer-fix
+          retention-days: 5
+          if-no-files-found: error
+          path: |
+            installer_next/output/LinkVideo.Helper_Setup.exe
+            release_candidate/verification.json
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ secrets.UPDATES_REPO_TOKEN }}
+      UPDATES_REPO: WellJons/LinkVideo.Helper.Updates
+      HOTFIX_TAG: v3.0.18-installerfix1
+      OLD_SHA: 05eb6066492cd8201c80152b75024639682ce4873879a704aad30704f8ff0985
+    steps:
+      - name: Require configured update repository token
+        shell: bash
+        run: |
+          test -n "$GH_TOKEN" || { echo 'UPDATES_REPO_TOKEN missing' >&2; exit 1; }
+
+      - name: Download verified exact build
+        uses: actions/download-artifact@v4
+        with:
+          name: verified-3.0.18-installer-fix
+          path: verified
+
+      - name: Verify evidence before any public changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f verified/installer_next/output/LinkVideo.Helper_Setup.exe
+          test -f verified/release_candidate/verification.json
+          python3 - <<'PY'
+          import hashlib, json, pathlib
+          setup = pathlib.Path("verified/installer_next/output/LinkVideo.Helper_Setup.exe")
+          evidence = json.loads(pathlib.Path("verified/release_candidate/verification.json").read_text(encoding="utf-8-sig"))
+          digest = hashlib.sha256(setup.read_bytes()).hexdigest()
+          assert setup.stat().st_size > 10 * 1024 * 1024
+          assert setup.open("rb").read(2) == b"MZ"
+          assert evidence["version"] == evidence["setup_product_version"] == "3.0.18"
+          assert evidence["source_commit"] == "ce91b32fc11425f4f1dba0132848777b6e613c9e"
+          assert evidence["setup_sha256"] == digest
+          for field in ("exact_setup_self_test", "python_release_preflight", "ruff_critical", "go_vet", "patch_pipeline_compile"):
+              assert evidence[field] == "passed", field
+          print("Verified repaired Setup SHA256:",digest)
+          PY
+
+      - name: Verify old public manifest is still original 3.0.18
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$UPDATES_REPO/contents/update-manifest.json" --jq .content | base64 -d > /tmp/original-manifest.json
+          python3 - <<'PY'
+          import json
+          m = json.load(open("/tmp/original-manifest.json", encoding="utf-8"))
+          assert m["version"] == "3.0.18"
+          assert m["sha256"] == "05eb6066492cd8201c80152b75024639682ce4873879a704aad30704f8ff0985"
+          assert m["download_url"] == "https://github.com/WellJons/LinkVideo.Helper.Updates/releases/download/v3.0.18/LinkVideo.Helper_Setup.exe"
+          PY
+          if gh release view "$HOTFIX_TAG" --repo "$UPDATES_REPO" >/dev/null 2>&1; then
+            echo "Hotfix tag already exists; refusing unreviewed overwrite" >&2
+            exit 1
+          fi
+
+      - name: Upload repaired 3.0.18 to a new immutable download URL
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$HOTFIX_TAG" \
+            "verified/installer_next/output/LinkVideo.Helper_Setup.exe" \
+            "verified/release_candidate/verification.json" \
+            --repo "$UPDATES_REPO" --target main --latest=false \
+            --title "LinkVideo.Helper 3.0.18 — исправленный установщик" \
+            --notes "Исправлена блокировка папки Program Files и удаление старой версии без продолжения установки. Версия приложения остаётся 3.0.18. Сборка проверена из коммита ce91b32fc11425f4f1dba0132848777b6e613c9e. Старый 3.0.18 сохранён для аудита."
+
+      - name: Verify actual uploaded installer before switching channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p checked
+          gh release download "$HOTFIX_TAG" --repo "$UPDATES_REPO" \
+            --pattern 'LinkVideo.Helper_Setup.exe' --dir checked
+          cmp verified/installer_next/output/LinkVideo.Helper_Setup.exe checked/LinkVideo.Helper_Setup.exe
+          echo "Public hotfix asset matches verified Setup bytes."
+
+      - name: Atomically switch public manifest URL and SHA-256
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          gh repo clone "$UPDATES_REPO" updates-repo
+          python3 - <<'PY'
+          import hashlib, json, pathlib
+          p = pathlib.Path("updates-repo/update-manifest.json")
+          m = json.loads(p.read_text(encoding="utf-8-sig"))
+          assert m["version"] == "3.0.18"
+          assert m["sha256"] == "05eb6066492cd8201c80152b75024639682ce4873879a704aad30704f8ff0985"
+          assert m["download_url"] == "https://github.com/WellJons/LinkVideo.Helper.Updates/releases/download/v3.0.18/LinkVideo.Helper_Setup.exe"
+          setup = pathlib.Path("verified/installer_next/output/LinkVideo.Helper_Setup.exe")
+          m["sha256"] = hashlib.sha256(setup.read_bytes()).hexdigest()
+          m["download_url"] = "https://github.com/WellJons/LinkVideo.Helper.Updates/releases/download/v3.0.18-installerfix1/LinkVideo.Helper_Setup.exe"
+          m["notes"] = "LinkVideo.Helper 3.0.18: исправлена установка обновления поверх работающей программы."
+          m["mandatory"] = False
+          p.write_text(json.dumps(m, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
+          PY
+          cd updates-repo
+          git config user.name 'LinkVideo Release Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add update-manifest.json
+          git commit -m 'Repair LinkVideo.Helper 3.0.18 installer without a version bump'
+          git push origin HEAD:main
+
+      - name: Verify public version and SHA from GitHub API
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$UPDATES_REPO/contents/update-manifest.json" --jq .content | base64 -d > /tmp/updated-manifest.json
+          python3 - <<'PY'
+          import hashlib, json, pathlib
+          m = json.loads(pathlib.Path("/tmp/updated-manifest.json").read_text(encoding="utf-8"))
+          digest = hashlib.sha256(pathlib.Path("checked/LinkVideo.Helper_Setup.exe").read_bytes()).hexdigest()
+          assert m["version"] == "3.0.18"
+          assert m["sha256"] == digest
+          assert m["download_url"].endswith("/v3.0.18-installerfix1/LinkVideo.Helper_Setup.exe")
+          print("Public 3.0.18 installer repaired:", digest)
+          PY
