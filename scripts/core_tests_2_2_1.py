@@ -31,7 +31,9 @@ assert '"Старые"' in inactive and '"Новые"' in inactive
 assert 'SegmentedControl' in inactive
 assert 'class ServerTableWidget(QTableWidget)' in vpn
 assert 'event.accept()' in vpn
-assert 'self.table.setFixedHeight(360)' in vpn
+assert 'self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)' in vpn
+assert 'self._resize_servers_table()' in vpn
+assert 'self.table.outer_scroll = self.page_scroll' in vpn
 assert 'self.progress.setTextVisible(False)' in components
 assert 'progress_text or f"{value}%"' in components
 print('CORE TESTS 3.0.1 LAYOUT/SCROLL COMPAT OK')
