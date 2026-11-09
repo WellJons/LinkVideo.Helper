@@ -12,7 +12,7 @@ from PySide6.QtGui import QIcon, QImageReader, QPixmap, QFontMetrics
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QListView, QListWidget, QListWidgetItem, QMessageBox, QPushButton,
-    QSplitter, QTextEdit, QVBoxLayout, QWidget,
+    QScrollArea, QSplitter, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from linkvideo_vpn_helper.services.support_templates import TemplateStore, ALLOWED_IMAGES, IMAGE_LIMIT
@@ -179,7 +179,23 @@ class SupportTemplatesPage(QWidget):
         self.category_input.setObjectName("TemplateCategoryInput")
         category_column.addWidget(self.category_input)
         fields.addLayout(category_column, 2)
-        rl.addLayout(fields)
+        self.editor_fields = QWidget()
+        self.editor_fields.setObjectName("TemplateEditorFields")
+        self.editor_fields.setLayout(fields)
+        rl.addWidget(self.editor_fields)
+
+        self.view_heading = QWidget()
+        view_layout = QVBoxLayout(self.view_heading)
+        view_layout.setContentsMargins(0, 8, 0, 3)
+        view_layout.setSpacing(5)
+        self.view_title = QLabel("Выберите ответ из библиотеки")
+        self.view_title.setObjectName("TemplateViewHeading")
+        self.view_title.setWordWrap(True)
+        view_layout.addWidget(self.view_title)
+        self.view_category = QLabel("")
+        self.view_category.setObjectName("TemplateViewCategory")
+        view_layout.addWidget(self.view_category)
+        rl.addWidget(self.view_heading)
 
         body_row = QHBoxLayout()
         body_title = QLabel("Текст ответа")
@@ -194,8 +210,24 @@ class SupportTemplatesPage(QWidget):
         self.body_input.setObjectName("TemplateBodyInput")
         self.body_input.setPlaceholderText("Выберите шаблон слева или создайте новый ответ…")
         self.body_input.setAcceptRichText(False)
-        self.body_input.setMinimumHeight(260)
-        rl.addWidget(self.body_input, 1)
+        self.body_input.setMinimumHeight(255)
+        self.body_input.setMaximumHeight(440)
+        rl.addWidget(self.body_input, 0)
+
+        self.body_preview_area = QScrollArea()
+        self.body_preview_area.setObjectName("TemplatePreviewScroll")
+        self.body_preview_area.setWidgetResizable(True)
+        self.body_preview_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.body_preview_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.body_preview = QLabel("Выберите ответ из библиотеки")
+        self.body_preview.setObjectName("TemplateBodyPreview")
+        self.body_preview.setTextFormat(Qt.TextFormat.PlainText)
+        self.body_preview.setWordWrap(True)
+        self.body_preview.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.body_preview.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.body_preview.setContentsMargins(15, 14, 15, 14)
+        self.body_preview_area.setWidget(self.body_preview)
+        rl.addWidget(self.body_preview_area, 0)
 
         attachment_header = QHBoxLayout()
         attachment_header.setSpacing(8)
@@ -244,6 +276,7 @@ class SupportTemplatesPage(QWidget):
         image_layout.addLayout(image_footer)
         rl.addWidget(self.image_area)
         self.image_area.hide()
+        rl.addStretch(1)
 
         actions = QHBoxLayout()
         self.save_btn = QPushButton("Сохранить изменения")
@@ -393,6 +426,25 @@ class SupportTemplatesPage(QWidget):
         if selected is not None and self.store.get(selected) is None:
             self._new()
 
+    def _sync_preview_height(self):
+        if not hasattr(self, "body_preview_area"):
+            return
+        text = self.body_preview.text() or " "
+        width = max(180, self.body_preview_area.viewport().width() - 36)
+        fm = QFontMetrics(self.body_preview.font())
+        height = fm.boundingRect(
+            QRect(0, 0, width, 30000), int(Qt.TextFlag.TextWordWrap), text
+        ).height() + 42
+        target = max(132, min(320, height))
+        self.body_preview.setMinimumHeight(max(116, height))
+        self.body_preview_area.setFixedHeight(target)
+
+    def _sync_view(self):
+        self.view_title.setText(self.title_input.text() or "Новый ответ")
+        self.view_category.setText(self.category_input.currentText())
+        self.body_preview.setText(self.body_input.toPlainText().strip())
+        QTimer.singleShot(0, self._sync_preview_height)
+
     def _set_editing(self, editing: bool):
         self._editing = bool(editing)
         self.title_input.setReadOnly(not self._editing)
@@ -400,13 +452,15 @@ class SupportTemplatesPage(QWidget):
         self.category_input.setEnabled(self._editing)
         self.add_image_btn.setEnabled(self._editing)
         self.paste_image_btn.setEnabled(self._editing)
-        self.remove_image_btn.setEnabled(self._editing)
+        self.remove_image_btn.setEnabled(self._editing and bool(self.images_list.count()))
         self.save_btn.setVisible(self._editing)
         self.edit_btn.setVisible(not self._editing and self._selected_id is not None)
-        for widget in (self.title_input, self.body_input):
-            widget.setProperty("viewMode", "false" if self._editing else "true")
-            widget.style().unpolish(widget)
-            widget.style().polish(widget)
+        self.editor_fields.setVisible(self._editing)
+        self.body_input.setVisible(self._editing)
+        self.view_heading.setVisible(not self._editing)
+        self.body_preview_area.setVisible(not self._editing)
+        if not self._editing:
+            self._sync_view()
         if self._editing:
             self.title_input.setFocus(Qt.FocusReason.OtherFocusReason)
         self.image_help.setText(
