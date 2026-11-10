@@ -48,7 +48,6 @@ for marker in (
     ':local deleteCode "d"',
     ':set deleteCode "n"',
     "/ppp secret disable $sid",
-    "s=R|l=",
     "LV QUARANTINE",
     "|c=",
 ):
