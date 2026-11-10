@@ -185,7 +185,7 @@ def main() -> None:
     assert offline.deleted[0]["Lifecycle"] == "Удалена"
     assert "неизвестны" in offline.deleted[0]["Причина"].lower()
     assert offline.deleted[0]["Кто удалил"] == "Неизвестно (обнаружено при сверке)"
-    assert offline.history[0][8] == "Неизвестно (обнаружено при сверке)"
+    assert offline.history == []  # live sync intentionally disables LV История
 
     # The 85-day age exists only with verified Helper creation metadata.
     known_reason = _deleted_reason(
