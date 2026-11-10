@@ -200,7 +200,7 @@ def install_vpn_sheets_retention_compat() -> None:
             )
         return current
 
-    def reconcile_records(server, existing_rows, current_clients, *, source, initiator, now=None, sync_id=None):
+    def reconcile_records(server, existing_rows, current_clients, *, source, initiator, now=None, sync_id=None, capture_history=True):
         moment = now or datetime.now()
         before = {
             str(row.get("Логин", "") or "").strip(): dict(row)
@@ -221,6 +221,7 @@ def install_vpn_sheets_retention_compat() -> None:
             initiator=initiator,
             now=moment,
             sync_id=sync_id,
+            capture_history=capture_history,
         )
 
         newly_deleted: dict[str, str] = {}
