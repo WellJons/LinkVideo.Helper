@@ -16,6 +16,7 @@ _RAW_THEMES = {
     "midnight_purple": ("Полуночная", "#100B18", "#181022", "#21172E", "#2B1D3D", "#49345F", "#FBF6FF", "#B4A2C8", "#A855F7", "#9333EA", "#FF5F7A"),
     "cherry_pink": ("Тёмная вишня", "#190A10", "#240D16", "#30121E", "#3C1726", "#5E2A3B", "#FFF5F8", "#D3A5B4", "#F43F6C", "#E52A59", "#FF6B6B"),
     "soft_gray": ("Графитовая", "#171A1E", "#1F2328", "#282D33", "#333941", "#49515A", "#F5F7F9", "#AEB7C1", "#C88719", "#AC7210", "#FF5D6C"),
+    "terminal_code": ("Terminal // Code", "#0B1118", "#0D151D", "#121F28", "#182A33", "#2A464D", "#E4F8F0", "#86A8A8", "#56E2AC", "#7CF3C3", "#FF7E99"),
 }
 
 
@@ -59,14 +60,15 @@ def _to_dict(key: str, row: tuple[str, ...]) -> dict:
             "midnight_purple": "#321A46",
             "cherry_pink": "#45182A",
             "soft_gray": "#3A3120",
+            "terminal_code": "#143C31",
         }.get(key, panel3),
-        "success": "#168F65" if light else "#31C48D",
+        "success": "#56E6AA" if key == "terminal_code" else ("#168F65" if light else "#31C48D"),
         "success_soft": "#E9F8F2" if light else panel3,
-        "warning": "#B7791F" if light else "#F2B84B",
+        "warning": "#F9C56B" if key == "terminal_code" else ("#B7791F" if light else "#F2B84B"),
         "warning_soft": "#FFF5DF" if light else panel3,
         "danger": danger,
         "danger_soft": "#FFF0F2" if light else panel3,
-        "info": "#54697E" if key == "linkvideo_2026" else accent,
+        "info": "#7ECFFF" if key == "terminal_code" else ("#54697E" if key == "linkvideo_2026" else accent),
         "info_soft": {
             "rose_milk": "#FFF0F6",
             "linkvideo_2026": "#FFF3E9",
@@ -75,6 +77,7 @@ def _to_dict(key: str, row: tuple[str, ...]) -> dict:
             "midnight_purple": "#321A46",
             "cherry_pink": "#45182A",
             "soft_gray": "#3A3120",
+            "terminal_code": "#193749",
         }.get(key, panel3),
         "input": panel if not light else panel2,
         "graph_rx": {
@@ -85,6 +88,7 @@ def _to_dict(key: str, row: tuple[str, ...]) -> dict:
             "midnight_purple": "#D06BFF",
             "cherry_pink": "#FF9A76",
             "soft_gray": "#79B8FF",
+            "terminal_code": "#75CFF0",
         }.get(key, accent),
     }
 
@@ -153,7 +157,7 @@ def _apply_qt_palette(c: dict) -> None:
         QPalette.ColorRole.Button: c["panel"],
         QPalette.ColorRole.ButtonText: c["text"],
         QPalette.ColorRole.Highlight: c["accent"],
-        QPalette.ColorRole.HighlightedText: "#FFFFFF",
+        QPalette.ColorRole.HighlightedText: c["accent_text"],
         QPalette.ColorRole.ToolTipBase: c["text"],
         QPalette.ColorRole.ToolTipText: c["panel"],
         QPalette.ColorRole.Link: c["graph_rx"],
@@ -166,6 +170,8 @@ def _apply_qt_palette(c: dict) -> None:
 
 
 def get_theme_style(key: str = "rose_milk") -> str:
+    from linkvideo_vpn_helper.terminal_code_theme import terminal_console_qss
+
     c = THEMES[normalize_theme(key)]
     _apply_qt_palette(c)
     return f"""
@@ -546,4 +552,4 @@ def get_theme_style(key: str = "rose_milk") -> str:
         color: {c['accent_text']}; background: {c['accent']};
         border-radius: 10px; font-weight: 700;
     }}
-    """
+    """ + terminal_console_qss(key)
