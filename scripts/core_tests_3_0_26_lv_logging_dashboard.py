@@ -22,6 +22,7 @@ class FakeRouterOS:
         self._next_id = 1
         self.rows = {
             "/system/script": [],
+            "/system/resource": [{"version": "6.47.6 (stable)" if mode == "routeros6" else "7.16 (stable)"}],
             "/system/scheduler": [],
             "/system/logging/action": [
                 {".id": "*m", "name": "memory", "target": "memory"},
@@ -125,6 +126,7 @@ for mode, expected_action in (
     ("memory_not_listed", "memory"),
     ("memory_no_id", "memory"),
     ("find_ignores_name", "LVAuth"),
+    ("routeros6", "LVAuth"),
 ):
     api = FakeRouterOS(mode)
     # The new server has an unrelated global default memory rule.
@@ -149,6 +151,17 @@ for mode, expected_action in (
         "LV-Activity", "LV-Aging", "LV-AutoRestore",
     }, (mode, api.rows["/system/scheduler"])
     assert next(s for s in api.rows["/system/scheduler"] if s["name"] == LV_AGING_SCHED)["disabled"] == "yes"
+    if mode == "routeros6":
+        for name in ("LV-Activity", "LV-Aging"):
+            script = next(row for row in api.rows["/system/script"] if row["name"] == name)["source"]
+            assert ":local lvDate [/system clock get date]" in script, name
+            assert ":local nowDay" in script and "[:tonsec" not in script and "[:timestamp" not in script
+        source = next(row for row in api.rows["/system/script"] if row["name"] == "LV-Activity")["source"]
+        assert "/ppp active find" in source and 'login failure for user' not in source
+    else:
+        source = next(row for row in api.rows["/system/script"] if row["name"] == "LV-Activity")["source"]
+        assert "/ppp active find" in source and 'login failure for user' not in source
+
     assert not any(path.startswith("/ppp") for op, path, params in api.mutations)
     assert not any("/find" in cmd for cmd in getattr(api, "commands", [])), mode
 
