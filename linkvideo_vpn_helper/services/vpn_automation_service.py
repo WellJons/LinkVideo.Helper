@@ -334,6 +334,21 @@ class VPNAutomationService(_CoreVPNAutomationService):
             ]
             if not owned:
                 continue
+            # An abandoned LVAuth rule without the custom action is unusable.
+            # Delete it only after a functioning memory rule for this exact
+            # topic has been verified, never touch any stock memory rule.
+            if LV_LOG_ACTION not in actions and any(
+                cls._topic_set(row.get("topics")) == cls._topic_set(topics)
+                and str(row.get("action", "") or "").strip() == "memory"
+                and not cls._bool(row.get("disabled", "no"))
+                for row in rows
+            ):
+                for obsolete in owned:
+                    if str(obsolete.get("action", "") or "") == LV_LOG_ACTION:
+                        rid = str(obsolete.get(".id", "") or "").strip()
+                        if rid:
+                            api.remove("/system/logging", rid)
+                continue
             # Never remove an active destination without a verified replacement.
             owned.sort(key=lambda row: (
                 str(row.get("action", "") or "") == LV_LOG_ACTION
