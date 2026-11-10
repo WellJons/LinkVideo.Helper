@@ -143,6 +143,15 @@ class VPNAutomationService(_CoreVPNAutomationService):
                     # !trap means the component was accepted.
                     returned = str(api.add(path, {"name": name, **required}) or "").strip()
                 except Exception as exc:
+                    if (
+                        path == "/system/logging/action"
+                        and name == LV_LOG_ACTION
+                        and cls._looks_like_optional_field_error(exc)
+                    ):
+                        # Some RouterOS variants reject creating custom memory
+                        # actions. The built-in memory action is a supported
+                        # fallback; logging rules select it explicitly below.
+                        return ""
                     raise cls._component_error(path, name, ", ".join(required), exc) from exc
                 rid = returned or cls._find_id(api, path, "name", name)
             else:
@@ -164,13 +173,17 @@ class VPNAutomationService(_CoreVPNAutomationService):
         if not row:
             return False
         action = str(row.get("action", "") or "").strip()
-        if action != LV_LOG_ACTION:
-            return False
-        if cls._topic_set(row.get("topics")) == cls._topic_set(topics):
-            return True
-        # Compatibility with partially installed older builds that used prefix
-        # as identity. Action must still be LVAuth so unrelated rules are safe.
-        return bool(prefix) and str(row.get("prefix", "") or "").strip() == prefix
+        same_topics = cls._topic_set(row.get("topics")) == cls._topic_set(topics)
+        tagged = bool(prefix) and str(row.get("prefix", "") or "").strip() == prefix
+
+        if action == LV_LOG_ACTION:
+            # Existing dedicated-buffer rules may lack the optional prefix.
+            return same_topics or tagged
+        if action == "memory":
+            # Do not confuse a system/default memory rule with a managed LV
+            # rule: fallback identity REQUIRES our exact, unique prefix.
+            return same_topics and tagged
+        return False
 
     @classmethod
     def _find_logging_rule(cls, rows: Iterable[dict], topics: str, prefix: str = "") -> dict | None:
@@ -185,6 +198,22 @@ class VPNAutomationService(_CoreVPNAutomationService):
             )
         except Exception:
             return api.print("/system/logging")
+
+    @staticmethod
+    def _invalid_action_reference(exc: Exception) -> bool:
+        detail = str(exc or "").lower()
+        return (
+            "does not match any value of action" in detail
+            or "no such action" in detail
+            or "invalid value for action" in detail
+        )
+
+    @classmethod
+    def _logging_action_names(cls, api) -> set[str]:
+        return {
+            str(row.get("name", "") or "").strip()
+            for row in api.print("/system/logging/action")
+        }
 
     @classmethod
     def _set_logging_rule_enabled(cls, api, rid: str, enabled: bool) -> None:
@@ -206,26 +235,88 @@ class VPNAutomationService(_CoreVPNAutomationService):
 
     @classmethod
     def _upsert_logging_rule(cls, api, prefix: str, topics: str, enabled: bool = True) -> None:
-        # Only action+topics are functionally required. Prefix and regex are
-        # optional metadata/filtering and must never make installation fail.
+        # The custom LVAuth buffer works on existing routers. If a fresh
+        # router rejects the action reference, use the built-in "memory"
+        # action and a uniquely prefixed rule instead. No unrelated log rule
+        # may ever be modified.
         rows = cls._logging_rows(api)
         row = cls._find_logging_rule(rows, topics, prefix)
         rid = str((row or {}).get(".id", "") or "").strip()
+        actions = cls._logging_action_names(api)
 
-        if row:
-            if rid:
-                try:
-                    api.set("/system/logging", rid, {"topics": topics, "action": LV_LOG_ACTION})
-                except Exception as exc:
-                    raise cls._component_error("/system/logging", topics, "topics/action", exc) from exc
-        else:
+        if row and not rid:
+            rid = cls._find_id(api, "/system/logging", "prefix", prefix)
+            if not rid:
+                # Legacy RouterOS accepts a logging rule yet exposes neither
+                # ret nor .id. An exact functional match is already present,
+                # so do not attempt to create duplicates just to obtain an ID.
+                if cls._topic_set(row.get("topics")) == cls._topic_set(topics):
+                    return
+                raise RuntimeError(f"RouterOS не вернул ID логирования LV для темы {topics}")
+
+        current_action = str((row or {}).get("action", "") or "").strip()
+        candidates = (
+            ["memory"] if row and current_action == "memory"
+            else ([LV_LOG_ACTION, "memory"] if LV_LOG_ACTION in actions else ["memory"])
+        )
+        chosen = ""
+        for action in candidates:
+            if action == "memory" and "memory" not in actions:
+                # Verify the fallback only when it is actually necessary.
+                # A valid LVAuth setup does not depend on the memory action
+                # appearing in API's readback (older RouterOS/test variants).
+                raise RuntimeError("RouterOS не подтвердил стандартное действие логирования memory")
             try:
-                returned = str(api.add("/system/logging", {"topics": topics, "action": LV_LOG_ACTION}) or "").strip()
+                if row:
+                    api.set("/system/logging", rid, {"topics": topics, "action": action})
+                else:
+                    parameters = {"topics": topics, "action": action}
+                    if action == "memory":
+                        # Unique fallback identity even on RouterOS builds
+                        # returning !done without an internal .id.
+                        parameters.update({"prefix": prefix, "regex": "login failure for user"})
+                    rid = str(api.add("/system/logging", parameters) or "").strip()
+                chosen = action
+                break
             except Exception as exc:
+                if action == LV_LOG_ACTION and cls._invalid_action_reference(exc):
+                    # The LVAuth name may exist in a stale/unsupported action
+                    # listing but still be rejected by /system/logging.
+                    continue
                 raise cls._component_error("/system/logging", topics, "topics/action", exc) from exc
-            # Do not convert successful !done into an error merely because this
-            # RouterOS omitted ret or an immediate readback field.
-            rid = returned
+
+        if not chosen:
+            raise RuntimeError(f"Не удалось создать правило логирования LV {topics}")
+
+        # Look up the exact created rule; never take an unrelated system rule.
+        if not rid:
+            refreshed = cls._logging_rows(api)
+            found = next(
+                (
+                    entry for entry in refreshed
+                    if str(entry.get("action", "") or "").strip() == chosen
+                    and cls._topic_set(entry.get("topics")) == cls._topic_set(topics)
+                    and (chosen != "memory" or str(entry.get("prefix", "") or "").strip() == prefix)
+                ),
+                None,
+            )
+            rid = str((found or {}).get(".id", "") or "").strip()
+
+        if chosen == "memory" and not rid:
+            # Some RouterOS variants omit internal IDs for successful add.
+            # Verified prefix + topics + action is sufficient to recognize the
+            # fallback rule, even though optional edits cannot be applied.
+            found = next(
+                (item for item in cls._logging_rows(api)
+                 if str(item.get("action", "") or "").strip() == "memory"
+                 and str(item.get("prefix", "") or "").strip() == prefix
+                 and cls._topic_set(item.get("topics")) == cls._topic_set(topics)),
+                None,
+            )
+            if not found:
+                raise RuntimeError(
+                    f"RouterOS не подтвердил уникальное правило LV {topics} в стандартном буфере memory"
+                )
 
         if rid:
             for field, value in (("prefix", prefix), ("regex", "login failure for user")):
@@ -300,11 +391,17 @@ class VPNAutomationService(_CoreVPNAutomationService):
             ) as api:
                 actions = api.print("/system/logging/action")
                 rules = self._logging_rows(api)
-            action_ok = self._find(actions, "name", LV_LOG_ACTION) is not None
+            installed_actions = {
+                str(item.get("name", "") or "").strip() for item in actions
+            }
             ppp = self._find_logging_rule(rules, "ppp", LV_LOG_PREFIX_PPP)
             l2tp = self._find_logging_rule(rules, "l2tp", LV_LOG_PREFIX_L2TP)
-            status.logging_ready = bool(action_ok and ppp and l2tp)
             managed = [row for row in (ppp, l2tp) if row]
+            status.logging_ready = (
+                len(managed) == 2
+                and all(str(row.get("action", "") or "").strip() in installed_actions
+                        for row in managed)
+            )
             status.logging_enabled = bool(managed) and all(
                 not self._bool(row.get("disabled", "no")) for row in managed
             )
