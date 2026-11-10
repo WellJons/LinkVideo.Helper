@@ -84,6 +84,13 @@ class FakeRouterOS:
         row = next(r for r in self.rows[path] if r.get(".id") == rid)
         row.update(params)
 
+    def remove(self, path, rid):
+        self.mutations.append(("remove", path, {".id": rid}))
+        self.rows[path] = [
+            row for row in self.rows[path]
+            if str(row.get(".id", "") or "") != str(rid)
+        ]
+
     def enable(self, path, rid):
         self.set(path, rid, {"disabled": "no"})
 
