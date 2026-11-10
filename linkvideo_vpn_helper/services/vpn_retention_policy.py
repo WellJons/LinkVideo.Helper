@@ -11,8 +11,8 @@ LinkVideo therefore keeps only the minimum missing state in a compact LV2 marker
 RouterOS comment short while preserving everything required for the policy:
 30 days -> sleeping, 90 days -> quarantine/disable. After 365 days of no
 activity (or 30 days after creation without a first connection), RouterOS
-marks the account for deletion; only a successful Google Sheets snapshot
-allows the desktop/background synchronizer to delete its PPP/NAT/profile.
+removes its PPP Secret, client-owned NAT and unused profile on RouterOS.
+Google Sheets archives its deletion on the next successful sync.
 """
 
 from dataclasses import dataclass
@@ -23,7 +23,7 @@ from linkvideo_vpn_helper.mikrotik.api_ssl_client import RouterOSAPIClient
 from linkvideo_vpn_helper.services.app_logging import event, error
 
 
-RETENTION_VERSION = "2.1.1"
+RETENTION_VERSION = "2.1.2"
 LV_MARKER = "|LV2|"
 LEGACY_LV_MARKER = "|LV1|"
 DAY_NS = 86_400_000_000_000
@@ -177,7 +177,7 @@ def activity_script_source() -> str:
 
 
 def aging_script_source() -> str:
-    """Daily RouterOS lifecycle: disable expired accounts but never delete before Google backup."""
+    """Daily RouterOS lifecycle: expire confirmed-inactive PPP accounts without Sheets dependency."""
     return f'''# LinkVideo.Helper LV Automation {RETENTION_VERSION}
 :local nowDay ([:tonsec [:timestamp]] / {DAY_NS})
 :foreach sid in=[/ppp secret find] do={{
@@ -221,10 +221,26 @@ def aging_script_source() -> str:
             :set deleteCode "n"
         }}
         :if ($age >= $deleteAfter) do={{
-            # Final removal belongs to the successful Google Sheets mirror pass.
-            :if ($disabled = false) do={{ /ppp secret disable $sid }}
-            :local updated ($base . "{LV_MARKER}s=R|l=" . $last . "|c=" . $created . "|r=" . $deleteCode . "|")
-            :if ($updated != $c) do={{ /ppp secret set $sid comment=$updated }}
+            # Active sessions are excluded above. Do not depend on Google Sheets.
+            :local profile [/ppp secret get $sid profile]
+            :local remote [/ppp secret get $sid remote-address]
+            :if (([:len $remote] = 0) && ([:len $profile] > 0)) do={{
+                :foreach pid in=[/ppp profile find where name=$profile] do={{
+                    :set remote [/ppp profile get $pid remote-address]
+                }}
+            }}
+            :local profileUses 0
+            :if ([:len $profile] > 0) do={{ :set profileUses [:len [/ppp secret find where profile=$profile]] }}
+            # Only remove rules actually attributed to this client; no blind IP deletion.
+            :foreach nid in=[/ip firewall nat find where comment=$u] do={{
+                :local target [/ip firewall nat get $nid to-addresses]
+                :if (([:len $target] = 0) || ($target = $remote)) do={{ /ip firewall nat remove $nid }}
+            }}
+            :log warning ("LV RETENTION DELETE user=" . $u . " age=" . $age)
+            /ppp secret remove $sid
+            :if (($profileUses = 1) && ([:len $profile] > 0) && ($profile != "default") && ($profile != "default-encryption")) do={{
+                :foreach pid in=[/ppp profile find where name=$profile] do={{ /ppp profile remove $pid }}
+            }}
         }} else={{
             :if ($disabled = true) do={{
                 :if ($state = "Q") do={{
@@ -414,19 +430,17 @@ def _remove_client_objects(api, secret: dict, profiles: list[dict], nat_rules: l
     return removed_nat, removed_profile
 
 
-def apply_policy_now(server, creds, *, backed_up_logins: set[str] | None = None) -> dict[str, int]:
+def apply_policy_now(server, creds) -> dict[str, int]:
     """Apply and verify the same policy from Python immediately.
 
-    RouterOS enforces lifecycle states without physical deletion. Only logins
-    successfully mirrored to Google Sheets by this pass may be physically removed;
-    all other callers can enforce quarantine but must leave backup data intact.
+    RouterOS and Python enforce 30/90/365 lifecycle independently of Google Sheets.
+    The existing Sheets sync stores archival tombstones when connectivity resumes.
     """
     from linkvideo_vpn_helper.services.vpn_service import VPNService
 
     now_ns = time.time_ns()
     vpn = VPNService()
-    deletable = set(backed_up_logins or ())
-    counts = {"sleeping": 0, "quarantined": 0, "staged": 0, "deleted": 0, "nat_removed": 0, "profiles_removed": 0}
+    counts = {"sleeping": 0, "quarantined": 0, "deleted": 0, "nat_removed": 0, "profiles_removed": 0}
 
     with RouterOSAPIClient(server, creds.username, creds.password, port=creds.port, timeout=creds.timeout) as api:
         try:
@@ -472,39 +486,31 @@ def apply_policy_now(server, creds, *, backed_up_logins: set[str] | None = None)
             delete_after = NEVER_ACTIVE_DELETE_DAYS if last_ns <= 0 else DELETE_DAYS
             if age >= delete_after:
                 reason = "never_active_30" if last_ns <= 0 else "inactive_365"
-                if login in deletable:
-                    # Re-read just before deletion: a reconnect or replacement cancels it.
-                    current = next(
-                        (r for r in api.print("/ppp/secret")
-                         if str(r.get(".id", "") or "").strip() == rid
-                         and str(r.get("name", "") or "").strip() == login), None
-                    )
-                    online = {
-                        str(r.get("name", "") or "").strip()
-                        for r in api.print("/ppp/active")
-                    }
-                    if current is None or login in online:
-                        continue
-                    current_meta = parse_extended_comment(str(current.get("comment", "") or ""))
-                    current_last = max(int(current_meta.last_ns or 0), _native_last_ns(vpn, current))
-                    current_created = int(current_meta.created_ns or now_ns)
-                    if current_last <= 0 and current_meta.reason not in {"created", "never_active_30"}:
-                        continue
-                    current_age = max(0, int((now_ns - (current_last or current_created)) // DAY_NS))
-                    if current_age < (NEVER_ACTIVE_DELETE_DAYS if current_last <= 0 else DELETE_DAYS):
-                        continue
-                    nat_removed, profile_removed = _remove_client_objects(api, current, profiles, nat_rules)
-                    counts["deleted"] += 1
-                    counts["nat_removed"] += nat_removed
-                    counts["profiles_removed"] += int(profile_removed)
-                    event("LV", "VPN-учётка удалена автоматически", f"{server} · {login} · {reason} · {age} дн.")
-                else:
-                    if not disabled:
-                        api.disable("/ppp/secret", rid)
-                    api.set("/ppp/secret", rid, {
-                        "comment": compose_extended_comment(meta.base_comment, "R", last_ns, created_ns, reason)
-                    })
-                    counts["staged"] += 1
+                # Re-read just before deletion: a reconnect or replacement cancels it.
+                current = next(
+                    (r for r in api.print("/ppp/secret")
+                     if str(r.get(".id", "") or "").strip() == rid
+                     and str(r.get("name", "") or "").strip() == login), None
+                )
+                online = {
+                    str(r.get("name", "") or "").strip()
+                    for r in api.print("/ppp/active")
+                }
+                if current is None or login in online:
+                    continue
+                current_meta = parse_extended_comment(str(current.get("comment", "") or ""))
+                current_last = max(int(current_meta.last_ns or 0), _native_last_ns(vpn, current))
+                current_created = int(current_meta.created_ns or now_ns)
+                if current_last <= 0 and current_meta.reason not in {"created", "never_active_30"}:
+                    continue
+                current_age = max(0, int((now_ns - (current_last or current_created)) // DAY_NS))
+                if current_age < (NEVER_ACTIVE_DELETE_DAYS if current_last <= 0 else DELETE_DAYS):
+                    continue
+                nat_removed, profile_removed = _remove_client_objects(api, current, profiles, nat_rules)
+                counts["deleted"] += 1
+                counts["nat_removed"] += nat_removed
+                counts["profiles_removed"] += int(profile_removed)
+                event("LV", "VPN-учётка удалена автоматически", f"{server} · {login} · {reason} · {age} дн.")
                 continue
 
             if disabled:
@@ -552,7 +558,7 @@ def apply_policy_now(server, creds, *, backed_up_logins: set[str] | None = None)
     event(
         "LV",
         "Retention policy применена",
-        f"{server} · подготовлено {counts['staged']} · карантин {counts['quarantined']} · удалено {counts['deleted']} · NAT {counts['nat_removed']} · профили {counts['profiles_removed']}",
+        f"{server} · карантин {counts['quarantined']} · удалено {counts['deleted']} · NAT {counts['nat_removed']} · профили {counts['profiles_removed']}",
     )
     return counts
 
@@ -687,6 +693,6 @@ def install_retention_policy() -> None:
     event(
         "LV",
         "Retention policy готов",
-        "LV2.1.1 · 30д сон · 90д карантин · 365д удаление · never-active 30д · только после Google Sheets mirror",
+        "LV2.1.2 · 30д сон · 90д карантин · 365д удаление · never-active 30д · независимо от Google Sheets",
     )
     _INSTALLED = True
