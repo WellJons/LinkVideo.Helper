@@ -127,10 +127,18 @@ def install_nat_conflict_compat() -> None:
                     ))
         return conflicts
 
-    def safe_create(self: VPNService, server, creds, base_login, ports_per_client, accounts_count, progress_callback=None, cancel_event=None):
+    def safe_create(
+        self: VPNService, server, creds, base_login, ports_per_client,
+        accounts_count, progress_callback=None, cancel_event=None, *,
+        start_ip: str = None,
+    ):
+        # Keep the optional keyword in sync with VPNService.create_clients_batch.
+        # The wrapper is installed at runtime and previously dropped start_ip,
+        # causing every "Создать клиента" click to fail before RouterOS changes.
+        options = {} if start_ip is None else {"start_ip": start_ip}
         created = original_create(
             self, server, creds, base_login, ports_per_client, accounts_count,
-            progress_callback, cancel_event,
+            progress_callback, cancel_event, **options,
         )
         try:
             failures = []
