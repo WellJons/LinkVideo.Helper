@@ -348,8 +348,8 @@ def install_vpn_sheets_retention_compat() -> None:
         return None
 
     def sync_server(self, server, creds, *, source="RouterOS sync", initiator=""):
-        # First mirror the complete RouterOS state to Google. Only clients in
-        # successfully confirmed snapshots may be physically deleted afterwards.
+        # Mirror to Google when available, then catch up missed daily RouterOS
+        # cleanup. RouterOS LV-Aging does not depend on this mirror.
         result = original_sync_server(
             self,
             server,
@@ -381,7 +381,7 @@ def install_vpn_sheets_retention_compat() -> None:
                 )
                 return result
 
-            counts = apply_policy_now(server, creds, backed_up_logins=set(overdue))
+            counts = apply_policy_now(server, creds)
             if int(counts.get("deleted", 0) or 0) <= 0:
                 event(
                     "LV",
@@ -391,9 +391,8 @@ def install_vpn_sheets_retention_compat() -> None:
                 )
                 return result
 
-            # Re-read after successful deletion so disappeared accounts are moved
-            # to LV Удалённые immediately, with the last full snapshot from the
-            # first pass preserved as the recovery source.
+            # Re-read after cleanup so disappeared accounts are listed in
+            # LV Удалённые immediately, when Sheets is available.
             return original_sync_server(
                 self,
                 server,
