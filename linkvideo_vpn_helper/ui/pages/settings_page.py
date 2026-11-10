@@ -114,7 +114,11 @@ class SettingsPage(QWidget):
         al.setSpacing(11)
         title = QLabel("Внешний вид")
         title.setObjectName("SectionTitle")
-        hint = QLabel("Все темы используют один современный интерфейс LinkVideo, но отличаются собственными акцентами, поверхностями и характером. Семантика успеха, предупреждений и ошибок остаётся одинаковой.")
+        hint = QLabel(
+            "Terminal // Code — тёмный интерфейс в стиле IDE и консоли: "
+            "панели, таблицы, формы и окна входа. Выбор темы меняет "
+            "только внешний вид, а не работу Helper."
+        )
         hint.setObjectName("Muted")
         hint.setWordWrap(True)
         al.addWidget(title)
