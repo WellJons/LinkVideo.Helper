@@ -1,0 +1,52 @@
+name: Private VPN address allocation QA installer (manual test only)
+
+on:
+  push:
+    branches:
+      - test/vpn-ip-gap-3.0.25
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-vpn-qa-v3.0.25
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout private QA source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Set up Go 1.24
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.x'
+          cache-dependency-path: |
+            installer_next/go.mod
+            patcher/go.mod
+            silent_updater/go.mod
+
+      - name: Full Windows installer build and verification
+        shell: pwsh
+        run: ./scripts/verify_release.ps1
+
+      # Not GitHub Releases. Not the stable updater manifest.
+      - name: Upload installer for operator-only manual QA
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinkVideo.Helper_3.0.25_PRIVATE_TEST
+          path: |
+            release_candidate/LinkVideo.Helper_Setup_3.0.25_RC.exe
+            release_candidate/verification.json
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

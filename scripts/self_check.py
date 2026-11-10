@@ -316,15 +316,19 @@ auto_text = (
     auto_path.read_text(encoding="utf-8")
     + "\n"
     + (SRC / "services" / "vpn_automation_service_core.py").read_text(encoding="utf-8")
+    + "\n"
+    + (SRC / "services" / "vpn_automation_sources_v3.py").read_text(encoding="utf-8")
 )
 life_text = lifecycle_path.read_text(encoding="utf-8")
 servers_text = servers_page_path.read_text(encoding="utf-8")
 for token in ("LV-Activity", "LV-Aging", "LV-AutoRestore", "login failure for user", "memory-lines", "set_quarantine_enabled", "seed_lifecycle"):
     if token not in auto_text:
         fail("VPN Automation contract missing: " + token)
-for token in ("|LV1|", "state=A", "last="):
+for token in ("|LV1|", "|LV2|", "|LV2|s=", "|l=", "|state=", "|last="):
     if token not in life_text + auto_text:
         fail("VPN lifecycle marker contract missing: " + token)
+if "LV_AUTOMATION_VERSION = \"2.1.0\"" not in life_text:
+    fail("Expected LV Automation version 2.1.0")
 for token in ("Установить/обновить LV на всех", "Выгрузить все серверы", "Инициализировать активность", "Остановить LV", "Запустить LV", "Остановить LV на всех", "Запустить LV на всех", "backup_one"):
     if token not in servers_text:
         fail("VPN servers automation UI missing: " + token)

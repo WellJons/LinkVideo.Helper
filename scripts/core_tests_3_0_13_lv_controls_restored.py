@@ -59,9 +59,9 @@ def main() -> int:
     assert 'QPushButton("Запустить LV" if auto and auto.paused else "Остановить LV")' in page
     assert 'QPushButton("Выключить карантин" if auto and auto.aging_enabled else "Включить карантин")' in page
 
-    # Current local RouterOS automation really is 2.1.0, so an installed 2.0.0
+    # Current local RouterOS automation is 2.1.1; an installed 2.0.0
     # must be reported as requiring an update rather than as an UI error.
-    assert 'RETENTION_VERSION = "2.1.0"' in policy
+    assert 'RETENTION_VERSION = "2.1.2"' in policy
     assert "public.LV_AUTOMATION_VERSION = RETENTION_VERSION" in policy
 
     print("LV_CONTROLS_RESTORED_OK")

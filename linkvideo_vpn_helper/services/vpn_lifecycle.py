@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 
 
-LV_AUTOMATION_VERSION = "2.0.0"
+LV_AUTOMATION_VERSION = "2.1.0"
 LV_MARKER = "|LV2|"
 LEGACY_LV_MARKER = "|LV1|"
 DAY_NS = 86_400_000_000_000
@@ -73,16 +73,23 @@ def parse_lv_comment(comment: str) -> LifecycleMeta:
         if ver_m:
             version = ver_m.group(1)
 
+    # LV2.0 deployed a verbose layout by mistake, despite the desktop UI
+    # expecting a compact one. Decode BOTH formats before migrating. If both
+    # appear, compact LV2 is authoritative, and last activity is monotonic.
     current_pos = raw.find(LV_MARKER)
     if current_pos >= 0:
         tail = raw[current_pos:]
-        state_m = re.search(r"\|s=([A-Z]+)\|", tail)
-        last_m = re.search(r"\|l=(\d+)\|", tail)
-        if state_m:
-            state = state_m.group(1)
-        if last_m:
-            last_ns = max(last_ns, _day_to_ns(int(last_m.group(1))))
-        version = LV_AUTOMATION_VERSION
+        compact = re.search(r"\|LV2\|s=([A-Z]+)\|l=(\d+)\|", tail)
+        verbose = re.search(r"\|LV2\|state=([A-Z]+)\|last=(\d+)\|", tail)
+        if compact:
+            state = compact.group(1)
+            last_ns = max(last_ns, _day_to_ns(int(compact.group(2))))
+            version = LV_AUTOMATION_VERSION
+        elif verbose:
+            state = verbose.group(1)
+            last_ns = max(last_ns, int(verbose.group(2)))
+            older_version = re.search(r"\|ver=([^|]+)\|", tail)
+            version = older_version.group(1) if older_version else "2.0.0"
 
     return LifecycleMeta(
         state=state or "U",
@@ -100,7 +107,11 @@ def compose_lv_comment(
 ) -> str:
     """Compose the compact LV2 marker used by RouterOS automation."""
     base = str(base_comment or "").strip()
-    marker = f"{LV_MARKER}s={str(state or 'U').upper()}|l={_ns_to_day(last_ns)}|"
+    code = str(state or "U").upper()
+    if code == "U" and int(last_ns or 0) <= 0:
+        # Unknown accounts do not need a metadata marker at all.
+        return base
+    marker = f"{LV_MARKER}s={code}|l={_ns_to_day(last_ns)}|"
     return f"{base} {marker}".strip()
 
 

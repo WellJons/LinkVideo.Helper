@@ -26,6 +26,10 @@ import tempfile
 import uuid
 
 TASK_NAME = "LinkVideo.Helper.VPNSheetsMirror"
+# This key contains NO credentials. Windows HKLM grants normal users read
+# access, so an unelevated GUI can inspect the installation receipt even when
+# Task Scheduler hides SYSTEM tasks from the creating desktop account.
+TASK_RECEIPT_REGISTRY = r"SOFTWARE\LinkVideo\Helper\VPNBackground"
 STAGING_NAME = "LinkVideo.Helper"  # user-private LOCALAPPDATA
 SERVER_DIRECTORY = "VPNSheetsMirror"
 CONFIG_NAME = "config.json"
@@ -43,7 +47,40 @@ INSTALL_ERROR_MESSAGES = {
     13: "Не удалось сохранить конфигурацию фоновой задачи.",
     14: "Планировщик Windows отказался создать задание.",
     15: "Задание создано, но его первый запуск не удался.",
+    16: "Создание задания завершилось, но проверка из-под администратора не прошла.",
+    17: "Задание создано, но Windows не позволила сохранить его общедоступный статус.",
 }
+
+
+def _write_task_receipt(*, installed: bool, interval_hours: int = DEFAULT_INTERVAL_HOURS) -> None:
+    """Admin-only install receipt: no passwords or private keys."""
+    import winreg
+
+    with winreg.CreateKeyEx(
+        winreg.HKEY_LOCAL_MACHINE, TASK_RECEIPT_REGISTRY,
+        0, winreg.KEY_SET_VALUE,
+    ) as registry:
+        winreg.SetValueEx(registry, "Installed", 0, winreg.REG_DWORD, int(installed))
+        winreg.SetValueEx(registry, "IntervalHours", 0, winreg.REG_DWORD, int(interval_hours))
+        winreg.SetValueEx(
+            registry, "UpdatedUTC", 0, winreg.REG_SZ,
+            datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ"),
+        )
+
+
+def read_task_receipt() -> dict:
+    """Visible to the desktop user; a receipt is not proof the task ran."""
+    if not _on_windows():
+        return {}
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, TASK_RECEIPT_REGISTRY) as key:
+            installed = int(winreg.QueryValueEx(key, "Installed")[0]) == 1
+            interval = int(winreg.QueryValueEx(key, "IntervalHours")[0])
+            return {"installed": installed, "interval_hours": interval}
+    except (OSError, ValueError, TypeError):
+        return {}
 
 
 def _on_windows() -> bool:
@@ -64,7 +101,47 @@ def _status_file() -> Path:
     return _data_dir() / STATUS_NAME
 
 
+def _write_public_status(payload: dict) -> None:
+    """Publish non-secret health metadata in read-only HKLM registry values."""
+    import winreg
+
+    with winreg.CreateKeyEx(
+        winreg.HKEY_LOCAL_MACHINE, TASK_RECEIPT_REGISTRY,
+        0, winreg.KEY_SET_VALUE,
+    ) as key:
+        winreg.SetValueEx(key, "CheckedUTC", 0, winreg.REG_SZ, payload["checked_utc"])
+        winreg.SetValueEx(key, "State", 0, winreg.REG_SZ, str(payload.get("state", "")))
+        for name in ("servers", "successful", "failed"):
+            winreg.SetValueEx(key, name.capitalize(), 0, winreg.REG_DWORD, int(payload.get(name, 0)))
+
+
+def _read_public_status() -> dict:
+    if not _on_windows():
+        return {}
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, TASK_RECEIPT_REGISTRY) as key:
+            def get(name):
+                return winreg.QueryValueEx(key, name)[0]
+
+            return {
+                "checked_utc": str(get("CheckedUTC")),
+                "state": str(get("State")),
+                "servers": int(get("Servers")),
+                "successful": int(get("Successful")),
+                "failed": int(get("Failed")),
+            }
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
 def read_status() -> dict:
+    # Prefer the admin-owned registry status: ProgramData is deliberately not
+    # traversable by ordinary users because it contains machine-DPAPI secrets.
+    status = _read_public_status()
+    if status:
+        return status
     try:
         payload = json.loads(_status_file().read_text(encoding="utf-8"))
         return payload if isinstance(payload, dict) else {}
@@ -73,20 +150,22 @@ def read_status() -> dict:
 
 
 def _write_status(**fields) -> None:
-    # Status is deliberately safe for normal local users to read:
-    # NO PPP login, password, token, camera IP, Google credentials or snapshot.
+    # No PPP login, password, token or RouterOS config is stored here.
     path = _status_file()
     payload = {
         "checked_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ"),
         **fields,
     }
+    # Registry metadata also works when normal desktop users cannot traverse
+    # the protected ProgramData directory.
+    _write_public_status(payload)
     temporary = path.with_suffix(".pending")
     try:
         temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         os.replace(temporary, path)
         _run_command(
             ["icacls.exe", str(path), "/inheritance:r", "/grant:r",
-             "*S-1-5-18:F", "*S-1-5-32-544:F", "*S-1-5-32-545:R"]
+             "*S-1-5-18:F", "*S-1-5-32-544:F"]
         )
     finally:
         temporary.unlink(missing_ok=True)
@@ -312,6 +391,16 @@ def _admin_install(staged_path: Path) -> int:
     except Exception:
         # The scheduled task now exists: do not pretend that setup succeeded.
         return 15
+    try:
+        # Verify with the SAME elevated security token that registered the task.
+        # The unelevated GUI may legitimately be denied /Query.
+        if _run_command(
+            ["schtasks.exe", "/Query", "/TN", TASK_NAME], tolerate_failure=True
+        ).returncode != 0:
+            return 16
+        _write_task_receipt(installed=True, interval_hours=payload["interval_hours"])
+    except Exception:
+        return 17
     backup.unlink(missing_ok=True)
     try:
         source.unlink(missing_ok=True)
@@ -322,6 +411,34 @@ def _admin_install(staged_path: Path) -> int:
     return 0
 
 
+def _admin_verify() -> int:
+    """Explicit UAC verification for tasks installed by 3.0.21/3.0.22.
+
+    Those versions did not leave a readable receipt, so the unprivileged UI
+    could report 'missing' even after schtasks /Create and /Run succeeded.
+    """
+    if not _is_elevated():
+        return 3
+    try:
+        result = _run_command(
+            ["schtasks.exe", "/Query", "/TN", TASK_NAME], tolerate_failure=True
+        )
+        if result.returncode != 0:
+            return 21
+        interval = DEFAULT_INTERVAL_HOURS
+        try:
+            settings = json.loads(_config_path().read_text(encoding="utf-8"))
+            payload = _unpack_settings(settings)
+            interval = int(payload.get("interval_hours", DEFAULT_INTERVAL_HOURS))
+        except (OSError, ValueError, KeyError, TypeError):
+            # Task existence is independent of access to its backup config.
+            interval = DEFAULT_INTERVAL_HOURS
+        _write_task_receipt(installed=True, interval_hours=interval)
+        return 0
+    except (OSError, subprocess.TimeoutExpired, UnicodeError):
+        return 22
+
+
 def _admin_remove() -> int:
     if not _is_elevated():
         return 3
@@ -330,20 +447,47 @@ def _admin_remove() -> int:
         _run_command(["schtasks.exe", "/Delete", "/TN", TASK_NAME, "/F"], tolerate_failure=True)
         _config_path().unlink(missing_ok=True)
         _status_file().unlink(missing_ok=True)
+        _write_task_receipt(installed=False)
         return 0
     except Exception:
         return 2
 
 
-def task_registered() -> bool:
+def task_inspection() -> dict:
+    """Separate 'not visible to this user' from 'not installed'.
+
+    A registry receipt is written only after successful elevated registration.
+    It can become stale if someone deletes the Windows task manually, so the
+    UI must label that state as unverified until an elevated inspection.
+    """
     if not _on_windows():
-        return False
+        return {"installed": False, "verified": False, "source": "unsupported"}
+    query_failure = "not_visible"
     try:
-        return _run_command(
+        query = _run_command(
             ["schtasks.exe", "/Query", "/TN", TASK_NAME], tolerate_failure=True
-        ).returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return False
+        )
+        if query.returncode == 0:
+            return {"installed": True, "verified": True, "source": "task_scheduler"}
+        query_failure = f"exit_{query.returncode}"
+    except (OSError, subprocess.TimeoutExpired, UnicodeError) as exc:
+        query_failure = type(exc).__name__
+
+    receipt = read_task_receipt()
+    if receipt.get("installed"):
+        return {
+            "installed": True, "verified": False, "source": "admin_receipt",
+            "interval_hours": receipt.get("interval_hours"),
+        }
+    return {
+        "installed": False, "verified": False,
+        "source": "unknown", "query_failure": query_failure,
+    }
+
+
+def task_registered() -> bool:
+    return bool(task_inspection()["installed"])
+
 
 
 def _elevate(arguments: str) -> int:
@@ -404,11 +548,23 @@ def enable_task(staged_file: Path) -> None:
     if result != 0:
         detail = INSTALL_ERROR_MESSAGES.get(result, f"неизвестный код {result}")
         raise RuntimeError(f"Не удалось включить фоновый режим (этап {result}): {detail}")
-    if not task_registered():
-        raise RuntimeError(
-            "Планировщик сообщил об успехе, но задание не найдено. "
-            "Проверьте права на чтение задач Windows."
-        )
+    # A zero exit code is already validated by the elevated installer, which
+    # queries the task and writes an HKLM receipt. The desktop user's /Query
+    # may return Access Denied even when SYSTEM is running the task.
+    # Do NOT produce a false installation error in that situation.
+
+
+def verify_task_as_administrator() -> None:
+    result = _elevate("--vpn-background-verify")
+    if result != 0:
+        if result == 21:
+            raise RuntimeError("Администратор не обнаружил задание VPN в планировщике.")
+        if result == 22:
+            raise RuntimeError("Не удалось проверить планировщик Windows с правами администратора.")
+        detail = INSTALL_ERROR_MESSAGES.get(result, f"код {result}")
+        raise RuntimeError(f"Проверка администратора не выполнена: {detail}")
+    if not read_task_receipt().get("installed"):
+        raise RuntimeError("Задание найдено, но обычный пользователь не видит подтверждение регистрации.")
 
 
 def disable_task() -> None:
@@ -489,4 +645,6 @@ def dispatch_command(argv: list[str]) -> int | None:
         return _admin_install(Path(argv[position + 1]))
     if "--vpn-background-remove" in argv:
         return _admin_remove()
+    if "--vpn-background-verify" in argv:
+        return _admin_verify()
     return None

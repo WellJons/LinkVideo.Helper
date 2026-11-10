@@ -6,6 +6,7 @@ Mimics DPAPI-unsealed configuration and task APIs without ever making live
 changes to Task Scheduler, ProgramData or RouterOS.
 """
 import json
+import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -26,14 +27,15 @@ def try_install(interval: int, *, fail_at: str = ""):
             commands.append(command)
             if fail_at and fail_at in command:
                 raise OSError(5, "Access denied by Task Scheduler")
-            return None
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
         with patch.object(bg, "_is_elevated", return_value=True), \
              patch.object(bg, "_unpack_settings", return_value={"interval_hours": interval}), \
              patch.object(bg, "_data_dir", return_value=directory), \
              patch.object(bg, "_secure_directory"), \
              patch.object(bg, "_installed_executable", return_value=Path(r"C:\Program Files\LinkVideo.Helper\LinkVideo.Helper.exe")), \
-             patch.object(bg, "_run_command", side_effect=run):
+             patch.object(bg, "_run_command", side_effect=run), \
+             patch.object(bg, "_write_task_receipt") as receipt_writer:
             result = bg._admin_install(temp)
 
         task = next((command for command in commands
@@ -46,6 +48,7 @@ def try_install(interval: int, *, fail_at: str = ""):
             assert target.read_text(encoding="utf-8") == "OLD_ENCRYPTED_CONFIG"
         else:
             assert result == 0, result
+            receipt_writer.assert_called_once_with(installed=True, interval_hours=interval)
             assert not temp.exists()
         return task
 

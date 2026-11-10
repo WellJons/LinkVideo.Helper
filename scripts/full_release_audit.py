@@ -55,7 +55,6 @@ _ALLOWED_PASS_SITES = {
     ("linkvideo_vpn_helper/services/routeros_search_compat.py", "install_routeros_search_compat", "Exception"): 2,
     ("linkvideo_vpn_helper/services/vpn_automation_service.py", "_find_ids", "Exception"): 1,
     ("linkvideo_vpn_helper/services/vpn_automation_service.py", "get_status", "Exception"): 1,
-    ("linkvideo_vpn_helper/services/vpn_retention_policy.py", "_remove_client_objects", "ValueError"): 1,
     ("linkvideo_vpn_helper/services/vpn_retention_policy.py", "parse_extended_comment", "Exception"): 1,
     ("linkvideo_vpn_helper/services/vpn_service.py", "_api_print_exact", "Exception"): 1,
     ("linkvideo_vpn_helper/services/vpn_service.py", "create_clients_batch", "Exception"): 3,

@@ -9,9 +9,10 @@ LinkVideo therefore keeps only the minimum missing state in a compact LV2 marker
 
 ``l`` and ``c`` are whole days since Unix epoch, not nanoseconds. This keeps the
 RouterOS comment short while preserving everything required for the policy:
-30 days -> sleeping, 90 days -> quarantine/disable, 365 days -> delete the PPP
-secret, its NAT rules and an unused custom profile. Accounts that never connected
-use ``c`` as their retention reference and are also deleted after 365 days.
+30 days -> sleeping, 90 days -> quarantine/disable. After 365 days of no
+activity (or 30 days after creation without a first connection), RouterOS
+removes its PPP Secret, client-owned NAT and unused profile on RouterOS.
+Google Sheets archives its deletion on the next successful sync.
 """
 
 from dataclasses import dataclass
@@ -22,7 +23,7 @@ from linkvideo_vpn_helper.mikrotik.api_ssl_client import RouterOSAPIClient
 from linkvideo_vpn_helper.services.app_logging import event, error
 
 
-RETENTION_VERSION = "2.1.0"
+RETENTION_VERSION = "2.1.2"
 LV_MARKER = "|LV2|"
 LEGACY_LV_MARKER = "|LV1|"
 DAY_NS = 86_400_000_000_000
@@ -32,7 +33,7 @@ DELETE_DAYS = 365
 NEVER_ACTIVE_DELETE_DAYS = 30
 
 _REASON_TO_CODE = {
-    "created": "c",
+    "created": "b",
     "never_active_tracking": "c",
     "tracked": "a",
     "activity": "a",
@@ -46,6 +47,7 @@ _REASON_TO_CODE = {
     "auto_restore": "r",
 }
 _CODE_TO_REASON = {
+    "b": "created",
     "c": "never_active_tracking",
     "a": "activity",
     "s": "inactive_30",
@@ -175,7 +177,101 @@ def activity_script_source() -> str:
 
 
 def aging_script_source() -> str:
-    return f'''# LinkVideo.Helper LV Automation {RETENTION_VERSION}\n:local nowDay ([:tonsec [:timestamp]] / {DAY_NS})\n:foreach sid in=[/ppp secret find] do={{\n    :local u [/ppp secret get $sid name]\n    :local c [/ppp secret get $sid comment]\n    :local p [:find $c "{LV_MARKER}"]\n    :local base $c\n    :local state "U"\n    :local last 0\n    :local created $nowDay\n    :if ($p != nil) do={{\n        :set base [:pick $c 0 $p]\n        :local tail [:pick $c $p [:len $c]]\n        :local sp [:find $tail "|s="]\n        :if ($sp != nil) do={{ :local x [:pick $tail ($sp + 3) [:len $tail]]; :local e [:find $x "|"]; :if ($e != nil) do={{ :set state [:pick $x 0 $e] }} }}\n        :local lp [:find $tail "|l="]\n        :if ($lp != nil) do={{ :local x [:pick $tail ($lp + 3) [:len $tail]]; :local e [:find $x "|"]; :if ($e != nil) do={{ :set last [:tonum [:pick $x 0 $e]] }} }}\n        :local cp [:find $tail "|c="]\n        :if ($cp != nil) do={{ :local x [:pick $tail ($cp + 3) [:len $tail]]; :local e [:find $x "|"]; :if ($e != nil) do={{ :set created [:tonum [:pick $x 0 $e]] }} }}\n    }}\n    :if ($created = 0) do={{ :set created $nowDay }}\n    :local isActive ([:len [/ppp active find where name=$u]] > 0)\n    :local disabled [/ppp secret get $sid disabled]\n    :if ($isActive) do={{\n        /ppp secret set $sid comment=($base . "{LV_MARKER}s=A|l=" . $nowDay . "|c=" . $created . "|r=a|")\n    }} else={{\n        :local reference $last\n        :if ($reference = 0) do={{ :set reference $created }}\n        :local age ($nowDay - $reference)\n        :local deleteAfter {DELETE_DAYS}\n        :local deleteReason "inactive_365"\n        :if ($last = 0) do={{\n            :set deleteAfter {NEVER_ACTIVE_DELETE_DAYS}\n            :set deleteReason "never_active_30"\n        }}\n        :if ($age >= $deleteAfter) do={{\n            :local profile [/ppp secret get $sid profile]\n            :local remote [/ppp secret get $sid remote-address]\n            :if (([:len $remote] = 0) && ([:len $profile] > 0)) do={{\n                :foreach pid in=[/ppp profile find where name=$profile] do={{ :set remote [/ppp profile get $pid remote-address] }}\n            }}\n            :log warning ("LV RETENTION DELETE user=" . $u . " reason=" . $deleteReason . " age=" . $age)\n            :foreach nid in=[/ip firewall nat find where comment=$u] do={{ /ip firewall nat remove $nid }}\n            :if ([:len $remote] > 0) do={{ :foreach nid in=[/ip firewall nat find where to-addresses=$remote] do={{ /ip firewall nat remove $nid }} }}\n            :local profileUses 0\n            :if ([:len $profile] > 0) do={{ :set profileUses [:len [/ppp secret find where profile=$profile]] }}\n            /ppp secret remove $sid\n            :if (($profileUses <= 1) && ($profile != "") && ($profile != "default") && ($profile != "default-encryption")) do={{\n                :foreach pid in=[/ppp profile find where name=$profile] do={{ /ppp profile remove $pid }}\n            }}\n        }} else={{\n            :if ($disabled = true) do={{\n                :if ($state = "Q") do={{\n                    /ppp secret set $sid comment=($base . "{LV_MARKER}s=Q|l=" . $last . "|c=" . $created . "|r=q|")\n                }} else={{\n                    /ppp secret set $sid comment=($base . "{LV_MARKER}s=M|l=" . $last . "|c=" . $created . "|r=m|")\n                }}\n            }} else={{\n                :if ($age >= {QUARANTINE_DAYS}) do={{\n                    /ppp secret disable $sid\n                    /ppp secret set $sid comment=($base . "{LV_MARKER}s=Q|l=" . $last . "|c=" . $created . "|r=q|")\n                    :log warning ("LV QUARANTINE user=" . $u . " age=" . $age)\n                }} else={{\n                    :if ($age >= {SLEEP_DAYS}) do={{\n                        /ppp secret set $sid comment=($base . "{LV_MARKER}s=S|l=" . $last . "|c=" . $created . "|r=s|")\n                    }} else={{\n                        :if ($last = 0) do={{\n                            /ppp secret set $sid comment=($base . "{LV_MARKER}s=U|l=0|c=" . $created . "|r=c|")\n                        }} else={{\n                            /ppp secret set $sid comment=($base . "{LV_MARKER}s=A|l=" . $last . "|c=" . $created . "|r=a|")\n                        }}\n                    }}\n                }}\n            }}\n        }}\n    }}\n}}'''
+    """Daily RouterOS lifecycle: expire confirmed-inactive PPP accounts without Sheets dependency."""
+    return f'''# LinkVideo.Helper LV Automation {RETENTION_VERSION}
+:local nowDay ([:tonsec [:timestamp]] / {DAY_NS})
+:foreach sid in=[/ppp secret find] do={{
+    :local u [/ppp secret get $sid name]
+    :local c [/ppp secret get $sid comment]
+    :local p [:find $c "{LV_MARKER}"]
+    :local base $c
+    :local state "U"
+    :local last 0
+    :local created $nowDay
+    :local verifiedNever false
+    :if ($p != nil) do={{
+        :set base [:pick $c 0 $p]
+        :local tail [:pick $c $p [:len $c]]
+        :local sp [:find $tail "|s="]
+        :if ($sp != nil) do={{ :local x [:pick $tail ($sp + 3) [:len $tail]]; :local e [:find $x "|"]; :if ($e != nil) do={{ :set state [:pick $x 0 $e] }} }}
+        :local lp [:find $tail "|l="]
+        :if ($lp != nil) do={{ :local x [:pick $tail ($lp + 3) [:len $tail]]; :local e [:find $x "|"]; :if ($e != nil) do={{ :set last [:tonum [:pick $x 0 $e]] }} }}
+        :local cp [:find $tail "|c="]
+        :if ($cp != nil) do={{ :local x [:pick $tail ($cp + 3) [:len $tail]]; :local e [:find $x "|"]; :if ($e != nil) do={{ :set created [:tonum [:pick $x 0 $e]] }} }}
+        :local rp [:find $tail "|r="]
+        :if ($rp != nil) do={{
+            :local reason [:pick $tail ($rp + 3) ($rp + 4)]
+            :if (($reason = "b") || ($reason = "n")) do={{ :set verifiedNever true }}
+        }}
+    }}
+    :local isActive ([:len [/ppp active find where name=$u]] > 0)
+    :local disabled [/ppp secret get $sid disabled]
+    :if ($isActive) do={{
+        /ppp secret set $sid comment=($base . "{LV_MARKER}s=A|l=" . $nowDay . "|c=" . $created . "|r=a|")
+    }} else={{
+        :local reference $last
+        :if ($reference = 0) do={{ :set reference $created }}
+        :local age ($nowDay - $reference)
+        # Legacy "no last-login data" is NOT proof of never connecting.
+        :if (($last = 0) && ($verifiedNever = false)) do={{ :set age 0 }}
+        :local deleteAfter {DELETE_DAYS}
+        :local deleteCode "d"
+        :if ($last = 0) do={{
+            :set deleteAfter {NEVER_ACTIVE_DELETE_DAYS}
+            :set deleteCode "n"
+        }}
+        :if ($age >= $deleteAfter) do={{
+            # Active sessions are excluded above. Do not depend on Google Sheets.
+            :local profile [/ppp secret get $sid profile]
+            :local remote [/ppp secret get $sid remote-address]
+            :if (([:len $remote] = 0) && ([:len $profile] > 0)) do={{
+                :foreach pid in=[/ppp profile find where name=$profile] do={{
+                    :set remote [/ppp profile get $pid remote-address]
+                }}
+            }}
+            :local profileUses 0
+            :if ([:len $profile] > 0) do={{ :set profileUses [:len [/ppp secret find where profile=$profile]] }}
+            # Only remove rules actually attributed to this client; no blind IP deletion.
+            :foreach nid in=[/ip firewall nat find where comment=$u] do={{
+                :local target [/ip firewall nat get $nid to-addresses]
+                :if (([:len $target] = 0) || ($target = $remote)) do={{ /ip firewall nat remove $nid }}
+            }}
+            :log warning ("LV RETENTION DELETE user=" . $u . " age=" . $age)
+            /ppp secret remove $sid
+            :if (($profileUses = 1) && ([:len $profile] > 0) && ($profile != "default") && ($profile != "default-encryption")) do={{
+                :foreach pid in=[/ppp profile find where name=$profile] do={{ /ppp profile remove $pid }}
+            }}
+        }} else={{
+            :if ($disabled = true) do={{
+                :if ($state = "Q") do={{
+                    /ppp secret set $sid comment=($base . "{LV_MARKER}s=Q|l=" . $last . "|c=" . $created . "|r=q|")
+                }} else={{
+                    :local code "m"
+                    :if (($last = 0) && ($verifiedNever)) do={{ :set code "b" }}
+                    /ppp secret set $sid comment=($base . "{LV_MARKER}s=M|l=" . $last . "|c=" . $created . "|r=" . $code . "|")
+                }}
+            }} else={{
+                :if ($age >= {QUARANTINE_DAYS}) do={{
+                    /ppp secret disable $sid
+                    /ppp secret set $sid comment=($base . "{LV_MARKER}s=Q|l=" . $last . "|c=" . $created . "|r=q|")
+                    :log warning ("LV QUARANTINE user=" . $u . " age=" . $age)
+                }} else={{
+                    :if (($last > 0) && ($age >= {SLEEP_DAYS})) do={{
+                        /ppp secret set $sid comment=($base . "{LV_MARKER}s=S|l=" . $last . "|c=" . $created . "|r=s|")
+                    }} else={{
+                        :if ($last = 0) do={{
+                            :local code "c"
+                            :if ($verifiedNever) do={{ :set code "b" }}
+                            /ppp secret set $sid comment=($base . "{LV_MARKER}s=U|l=0|c=" . $created . "|r=" . $code . "|")
+                        }} else={{
+                            /ppp secret set $sid comment=($base . "{LV_MARKER}s=A|l=" . $last . "|c=" . $created . "|r=a|")
+                        }}
+                    }}
+                }}
+            }}
+        }}
+    }}
+}}'''
 
 
 def restore_script_source() -> str:
@@ -198,11 +294,15 @@ def _native_last_ns(vpn, row: dict) -> int:
         return 0
 
 
-def _desired_state(last_ns: int, created_ns: int, disabled: bool, was_quarantine: bool, now_ns: int) -> tuple[str, str]:
+def _desired_state(last_ns: int, created_ns: int, disabled: bool, was_quarantine: bool, now_ns: int, *, verified_never: bool = False) -> tuple[str, str]:
     reference = int(last_ns or created_ns or now_ns)
     age = max(0, int((now_ns - reference) // DAY_NS))
-    if last_ns <= 0 and age >= NEVER_ACTIVE_DELETE_DAYS:
-        return "R", "never_active_30"
+    if last_ns <= 0:
+        if verified_never and age >= NEVER_ACTIVE_DELETE_DAYS:
+            return "R", "never_active_30"
+        if verified_never:
+            return ("M", "created") if disabled else ("U", "created")
+        return ("M", "manual_or_external_disabled") if disabled else ("U", "never_active_tracking")
     if last_ns > 0 and age >= DELETE_DAYS:
         return "R", "inactive_365"
     if disabled:
@@ -254,6 +354,7 @@ def _ensure_tracking_for_server(server, creds) -> int:
                     disabled,
                     meta.state == "Q",
                     now_ns,
+                    verified_never=meta.reason in {"created", "never_active_30"},
                 )
 
             new_comment = compose_extended_comment(meta.base_comment, state, last_ns, created_ns, reason)
@@ -264,14 +365,37 @@ def _ensure_tracking_for_server(server, creds) -> int:
 
 
 def _remove_client_objects(api, secret: dict, profiles: list[dict], nat_rules: list[dict]) -> tuple[int, bool]:
+    """Delete only resources unambiguously belonging to one expired PPP account.
+
+    IP-only matching is forbidden when another PPP Secret can use that remote IP.
+    A shared PPP profile is never deleted; NAT with a foreign target is protected.
+    """
     rid = str(secret.get(".id", "") or "").strip()
     login = str(secret.get("name", "") or "").strip()
     profile_name = str(secret.get("profile", "") or "").strip()
-    remote = str(secret.get("remote-address", "") or secret.get("remote_address", "") or "").strip()
-    if not remote and profile_name:
-        profile = next((row for row in profiles if str(row.get("name", "") or "").strip() == profile_name), None)
-        if profile:
-            remote = str(profile.get("remote-address", "") or profile.get("remote_address", "") or "").strip()
+    profiles_by_name = {
+        str(row.get("name", "") or "").strip(): row for row in profiles
+    }
+
+    def effective_remote(row: dict) -> str:
+        remote = str(row.get("remote-address", "") or row.get("remote_address", "") or "").strip()
+        if remote:
+            return remote
+        name = str(row.get("profile", "") or "").strip()
+        p = profiles_by_name.get(name, {})
+        return str(p.get("remote-address", "") or p.get("remote_address", "") or "").strip()
+
+    remote = effective_remote(secret)
+    all_secrets = api.print("/ppp/secret")
+    others = [
+        row for row in all_secrets
+        if str(row.get(".id", "") or "").strip() != rid
+    ]
+    shared_remote = bool(remote and any(effective_remote(row) == remote for row in others))
+    profile_uses = sum(
+        1 for row in all_secrets
+        if profile_name and str(row.get("profile", "") or "").strip() == profile_name
+    )
 
     removed_nat = 0
     for rule in list(nat_rules):
@@ -280,22 +404,30 @@ def _remove_client_objects(api, secret: dict, profiles: list[dict], nat_rules: l
             continue
         comment = str(rule.get("comment", "") or "").strip()
         target = str(rule.get("to-addresses", "") or rule.get("to_addresses", "") or "").strip()
-        if comment == login or (remote and target == remote):
-            api.remove("/ip/firewall/nat", nrid)
-            removed_nat += 1
-            try:
-                nat_rules.remove(rule)
-            except ValueError:
-                pass
+        # Never remove a rule explicitly targeting a different client's address.
+        if remote and target and target != remote:
+            continue
+        owned_by_comment = comment == login
+        by_unique_remote = (
+            bool(remote and target == remote)
+            and not shared_remote
+            and str(rule.get("chain", "dstnat") or "dstnat").strip().lower() == "dstnat"
+            and str(rule.get("action", "dst-nat") or "dst-nat").strip().lower() == "dst-nat"
+        )
+        if not (owned_by_comment or by_unique_remote):
+            continue
+        api.remove("/ip/firewall/nat", nrid)
+        removed_nat += 1
+        nat_rules.remove(rule)
 
-    profile_uses = sum(1 for row in api.print("/ppp/secret") if str(row.get("profile", "") or "").strip() == profile_name) if profile_name else 0
-    if rid:
-        api.remove("/ppp/secret", rid)
+    if not rid:
+        raise RuntimeError(f"Нет RouterOS ID PPP Secret {login}; удаление отменено")
+    api.remove("/ppp/secret", rid)
 
     removed_profile = False
-    if profile_name and profile_uses <= 1 and profile_name not in {"default", "default-encryption"}:
-        profile = next((row for row in profiles if str(row.get("name", "") or "").strip() == profile_name), None)
-        prid = str((profile or {}).get(".id", "") or "").strip()
+    if profile_name and profile_uses == 1 and profile_name not in {"default", "default-encryption"}:
+        profile = profiles_by_name.get(profile_name, {})
+        prid = str(profile.get(".id", "") or "").strip()
         if prid:
             api.remove("/ppp/profile", prid)
             removed_profile = True
@@ -305,9 +437,8 @@ def _remove_client_objects(api, secret: dict, profiles: list[dict], nat_rules: l
 def apply_policy_now(server, creds) -> dict[str, int]:
     """Apply and verify the same policy from Python immediately.
 
-    RouterOS scripts remain the autonomous source of daily enforcement. This pass
-    is a hard postcondition for an operator action: enabling quarantine or updating
-    an already-enabled server cannot return green while Q accounts remain enabled.
+    RouterOS and Python enforce 30/90/365 lifecycle independently of Google Sheets.
+    The existing Sheets sync stores archival tombstones when connectivity resumes.
     """
     from linkvideo_vpn_helper.services.vpn_service import VPNService
 
@@ -346,10 +477,40 @@ def apply_policy_now(server, creds) -> dict[str, int]:
             age = max(0, int((now_ns - reference) // DAY_NS))
             disabled = _bool(secret.get("disabled", "no"))
 
+            if last_ns <= 0 and meta.reason not in {"created", "never_active_30"}:
+                # Migrated legacy accounts may have no RouterOS login history.
+                # Missing evidence is not proof of non-use.
+                state = "M" if disabled else "U"
+                reason = "manual_or_external_disabled" if disabled else "never_active_tracking"
+                api.set("/ppp/secret", rid, {
+                    "comment": compose_extended_comment(meta.base_comment, state, last_ns, created_ns, reason)
+                })
+                continue
+
             delete_after = NEVER_ACTIVE_DELETE_DAYS if last_ns <= 0 else DELETE_DAYS
             if age >= delete_after:
                 reason = "never_active_30" if last_ns <= 0 else "inactive_365"
-                nat_removed, profile_removed = _remove_client_objects(api, secret, profiles, nat_rules)
+                # Re-read just before deletion: a reconnect or replacement cancels it.
+                current = next(
+                    (r for r in api.print("/ppp/secret")
+                     if str(r.get(".id", "") or "").strip() == rid
+                     and str(r.get("name", "") or "").strip() == login), None
+                )
+                online = {
+                    str(r.get("name", "") or "").strip()
+                    for r in api.print("/ppp/active")
+                }
+                if current is None or login in online:
+                    continue
+                current_meta = parse_extended_comment(str(current.get("comment", "") or ""))
+                current_last = max(int(current_meta.last_ns or 0), _native_last_ns(vpn, current))
+                current_created = int(current_meta.created_ns or now_ns)
+                if current_last <= 0 and current_meta.reason not in {"created", "never_active_30"}:
+                    continue
+                current_age = max(0, int((now_ns - (current_last or current_created)) // DAY_NS))
+                if current_age < (NEVER_ACTIVE_DELETE_DAYS if current_last <= 0 else DELETE_DAYS):
+                    continue
+                nat_removed, profile_removed = _remove_client_objects(api, current, profiles, nat_rules)
                 counts["deleted"] += 1
                 counts["nat_removed"] += nat_removed
                 counts["profiles_removed"] += int(profile_removed)
@@ -358,7 +519,7 @@ def apply_policy_now(server, creds) -> dict[str, int]:
 
             if disabled:
                 state = "Q" if meta.state == "Q" else "M"
-                reason = "inactive_90" if state == "Q" else "manual_or_external_disabled"
+                reason = "inactive_90" if state == "Q" else ("created" if last_ns <= 0 and meta.reason == "created" else "manual_or_external_disabled")
                 api.set("/ppp/secret", rid, {
                     "comment": compose_extended_comment(meta.base_comment, state, last_ns, created_ns, reason)
                 })
@@ -379,7 +540,7 @@ def apply_policy_now(server, creds) -> dict[str, int]:
                 counts["sleeping"] += 1
             else:
                 state = "U" if last_ns <= 0 else "A"
-                reason = "never_active_tracking" if state == "U" else "tracked"
+                reason = ("created" if meta.reason == "created" else "never_active_tracking") if state == "U" else "tracked"
                 api.set("/ppp/secret", rid, {
                     "comment": compose_extended_comment(meta.base_comment, state, last_ns, created_ns, reason)
                 })
@@ -519,9 +680,11 @@ def install_retention_policy() -> None:
                     rid = str(row.get(".id", "") or "").strip()
                     meta = parse_extended_comment(str(row.get("comment", "") or ""))
                     created = int(meta.created_ns or now_ns)
-                    reason = "manual_enabled" if enabled else "manual_disabled"
-                    state = "A" if enabled else "M"
-                    last_ns = now_ns if enabled else int(meta.last_ns or 0)
+                    has_no_login = int(meta.last_ns or 0) <= 0 and meta.reason == "created"
+                    reason = "created" if has_no_login else ("manual_enabled" if enabled else "manual_disabled")
+                    state = ("U" if has_no_login else "A") if enabled else "M"
+                    # Changing the admin toggle is not a successful VPN connection.
+                    last_ns = int(meta.last_ns or 0)
                     if rid:
                         api.set("/ppp/secret", rid, {
                             "comment": compose_extended_comment(meta.base_comment, state, last_ns, created, reason)
@@ -536,6 +699,6 @@ def install_retention_policy() -> None:
     event(
         "LV",
         "Retention policy готов",
-        "LV2 compact · 30д сон · 90д карантин · 365д удаление PPP/NAT/профиля · never-active 365д",
+        "LV2.1.2 · 30д сон · 90д карантин · 365д удаление · never-active 30д · независимо от Google Sheets",
     )
     _INSTALLED = True

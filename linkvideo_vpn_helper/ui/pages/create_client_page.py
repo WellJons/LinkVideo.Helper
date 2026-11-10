@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
 )
 
 from linkvideo_vpn_helper.services.errors import classify_exception
+from linkvideo_vpn_helper.services.vpn_address_allocator import DEFAULT_START_IP, validate_start_ip
 from linkvideo_vpn_helper.services.search_service import FastSearchService
 from linkvideo_vpn_helper.services.server_registry import ServerRegistry
 from linkvideo_vpn_helper.services.vpn_service import ClientRecord, SessionCredentials, VPNService
@@ -30,6 +31,7 @@ class CreateClientPage(QWidget):
         self.search = search
         self.credentials = credentials
         self.registry = registry
+        self._ip_start_host = ""
         self._last_records: list[ClientRecord] = []
         self._retry_action = None
         self._cancel_event = None
@@ -120,6 +122,27 @@ class CreateClientPage(QWidget):
         pl.addLayout(ports_box, 1); pl.addLayout(accounts_box, 1)
         fl.addWidget(params)
 
+        ip_row = QHBoxLayout()
+        ip_row.setSpacing(12)
+        ip_caption = QLabel("Начальный Remote Address")
+        ip_caption.setObjectName("TinyMuted")
+        ip_row.addWidget(ip_caption)
+        self.ip_start = QLineEdit()
+        self.ip_start.setObjectName("VPNCreateStartIP")
+        self.ip_start.setPlaceholderText(DEFAULT_START_IP)
+        self.ip_start.setMaximumWidth(170)
+        self.ip_start.setToolTip(
+            "Начало поиска первого свободного адреса для выбранного VPN. "
+            "Высокие IP, заданные вручную, не сдвигают диапазон. "
+            "Адрес сохраняется отдельно для каждого сервера."
+        )
+        ip_row.addWidget(self.ip_start)
+        ip_row.addStretch(1)
+        fl.addLayout(ip_row)
+        self.ip_start.editingFinished.connect(self._save_ip_start)
+        self.server_picker.changed.connect(self._load_ip_start)
+        self._load_ip_start(self.server_picker.host())
+
         self.actions_row = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         self.actions_row.setSpacing(8)
         self.btn_create = QPushButton("Создать клиента")
@@ -192,6 +215,43 @@ class CreateClientPage(QWidget):
             self.counters_row.setDirection(QBoxLayout.Direction.LeftToRight)
         if hasattr(self, "actions_row"):
             self.actions_row.setDirection(QBoxLayout.Direction.TopToBottom if self.width() < 980 else QBoxLayout.Direction.LeftToRight)
+
+    @staticmethod
+    def _ip_start_key(host: str) -> str:
+        return f"vpn_create/start_ip/{str(host).strip().lower()}"
+
+    def _ip_start_for_server(self, host: str) -> str:
+        stored = str(self.registry.settings.value(
+            self._ip_start_key(host), "", str,
+        ) or "").strip()
+        # Early test builds persisted their old hardcoded default when changing
+        # servers. Restore the original VPN-table starting point for those
+        # untouched defaults; preserve any other operator-defined start.
+        if not stored or stored == "172.16.1.176":
+            return DEFAULT_START_IP
+        return stored
+
+    def _save_ip_start(self):
+        host = self._ip_start_host
+        if not host or not hasattr(self, "ip_start"):
+            return
+        try:
+            value = validate_start_ip(self.ip_start.text())
+        except ValueError:
+            # Keep the input visible so the operator can correct it. Never
+            # persist an invalid pool start.
+            return
+        self.registry.settings.setValue(self._ip_start_key(host), value)
+        self.registry.settings.sync()
+
+    def _load_ip_start(self, host: str):
+        if not hasattr(self, "ip_start"):
+            return
+        # Save an edited start for the previously selected server, not the new
+        # one. Each VPN may use a different local address plan.
+        self._save_ip_start()
+        self._ip_start_host = str(host or "").strip()
+        self.ip_start.setText(self._ip_start_for_server(host) if host else DEFAULT_START_IP)
 
     def _begin_operation(self):
         event = threading.Event()
@@ -339,6 +399,19 @@ class CreateClientPage(QWidget):
             self.task.show()
             self.task.warning("Введите логин", "Поле логина не может быть пустым.")
             return
+        try:
+            requested_start = validate_start_ip(self.ip_start.text())
+        except ValueError as exc:
+            self.task.show()
+            self.task.warning("Проверьте начальный Remote Address", str(exc))
+            return
+        self._save_ip_start()
+        # Snapshot preferences on the GUI thread; the background worker must
+        # not read QSettings created in a different thread.
+        server_starts = {
+            host: self._ip_start_for_server(host)
+            for host in self.registry.hosts()
+        }
         self._retry_action = lambda: self._start_create(auto_pick)
         cancel_event = self._begin_operation()
         self._set_actions_enabled(False)
@@ -383,7 +456,11 @@ class CreateClientPage(QWidget):
                 except Exception:
                     planned_login = login
 
-                self.progressReady.emit("Создаю клиента", f"{chosen} · проверяю IP и свободные NAT-порты…", 30)
+                chosen_start = requested_start if chosen == selected else server_starts.get(chosen, DEFAULT_START_IP)
+                self.progressReady.emit(
+                    "Создаю клиента",
+                    f"{chosen} · ищу свободный IP от {chosen_start} и проверяю NAT-порты…", 30,
+                )
 
                 def create_progress(done, total, current_login):
                     if cancel_event.is_set() or self._cancel_event is not cancel_event:
@@ -392,7 +469,8 @@ class CreateClientPage(QWidget):
                     self.progressReady.emit("Создаю учётные записи", f"{done}/{total} · {current_login}", min(95, pct))
 
                 records = self.service.create_clients_batch(
-                    chosen, self.credentials, planned_login, ports, accounts, create_progress, cancel_event
+                    chosen, self.credentials, planned_login, ports, accounts,
+                    create_progress, cancel_event, start_ip=chosen_start,
                 )
                 if not cancel_event.is_set() and self._cancel_event is cancel_event:
                     self.resultReady.emit(records, None)

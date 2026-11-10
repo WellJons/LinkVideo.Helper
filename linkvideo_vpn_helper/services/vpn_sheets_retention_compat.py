@@ -129,28 +129,37 @@ def _history_event(reason: str, row: dict[str, str], source: str) -> str | None:
 
 
 def _retention_overdue(rows: list[dict[str, str]], now: datetime | None = None) -> list[str]:
-    """Return clients that should already have been removed by LV-Aging."""
+    """Permit deletion only when the saved row proves the 30/365-day age.
+
+    A Google Sheets first-seen timestamp does not prove when a PPP secret was
+    created. Never delete an account solely because it appeared in Sheets 30
+    days ago. Both the LV age marker and the saved RouterOS snapshot are required.
+    """
+    import json
+
     moment = now or datetime.now()
+    now_ns = int(moment.timestamp() * 1_000_000_000)
     overdue: list[str] = []
     for row in rows:
         login = str(row.get("Логин", "") or "").strip()
         if not login:
             continue
         try:
-            days = int(str(row.get("Дней без связи", "") or "").strip())
-        except Exception:
-            days = -1
-        if days >= 365:
-            overdue.append(login)
+            snapshot = json.loads(str(row.get("RouterOS snapshot", "") or ""))
+            secret = snapshot.get("secret", {}) if isinstance(snapshot, dict) else {}
+            if not isinstance(secret, dict) or str(secret.get("name", "") or "").strip() != login:
+                continue
+        except (TypeError, ValueError):
             continue
 
-        # Never-connected accounts have no numeric inactivity age. Use the first
-        # successful mirror observation as a conservative fallback: only after 30
-        # full days in Sheets is the safety sweep allowed to enforce deletion.
-        lifecycle = str(row.get("Lifecycle", "") or "").strip()
-        if lifecycle == "Последняя активность неизвестна":
-            first = _parse_dt(str(row.get("Первое обнаружение", "") or ""))
-            if first is not None and (moment - first).days >= 30:
+        meta = parse_extended_comment(str(row.get("Комментарий RouterOS", "") or ""))
+        if meta.last_ns > 0:
+            age = (now_ns - meta.last_ns) // DAY_NS
+            if age >= 365:
+                overdue.append(login)
+        elif meta.created_ns > 0 and meta.reason in {"created", "never_active_30"}:
+            age = (now_ns - meta.created_ns) // DAY_NS
+            if age >= 30:
                 overdue.append(login)
     return overdue
 
@@ -339,9 +348,8 @@ def install_vpn_sheets_retention_compat() -> None:
         return None
 
     def sync_server(self, server, creds, *, source="RouterOS sync", initiator=""):
-        # First mirror the complete RouterOS state to Google. This guarantees a
-        # recovery snapshot exists before any retention safety sweep can delete
-        # RouterOS objects.
+        # Mirror to Google when available, then catch up missed daily RouterOS
+        # cleanup. RouterOS LV-Aging does not depend on this mirror.
         result = original_sync_server(
             self,
             server,
@@ -349,6 +357,8 @@ def install_vpn_sheets_retention_compat() -> None:
             source=source,
             initiator=initiator,
         )
+        if not result.success:
+            return result
         try:
             rows = self.backend.read_server_rows(server)
             overdue = _retention_overdue(rows)
@@ -381,9 +391,8 @@ def install_vpn_sheets_retention_compat() -> None:
                 )
                 return result
 
-            # Re-read after successful deletion so disappeared accounts are moved
-            # to LV Удалённые immediately, with the last full snapshot from the
-            # first pass preserved as the recovery source.
+            # Re-read after cleanup so disappeared accounts are listed in
+            # LV Удалённые immediately, when Sheets is available.
             return original_sync_server(
                 self,
                 server,

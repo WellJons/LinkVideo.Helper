@@ -32,11 +32,11 @@ class FakeRouterOSAPIClient:
         },
         {
             ".id": "*NEVER", "name": "never31", "profile": "p-never", "remote-address": "10.0.0.30",
-            "disabled": "no", "last-logged-out": "", "comment": policy.compose_extended_comment("", "U", 0, old(31), "never_active_tracking"),
+            "disabled": "no", "last-logged-out": "", "comment": policy.compose_extended_comment("", "U", 0, old(31), "created"),
         },
         {
             ".id": "*NEVER29", "name": "never29", "profile": "p-never29", "remote-address": "10.0.0.31",
-            "disabled": "no", "last-logged-out": "", "comment": policy.compose_extended_comment("", "U", 0, old(29), "never_active_tracking"),
+            "disabled": "no", "last-logged-out": "", "comment": policy.compose_extended_comment("", "U", 0, old(29), "created"),
         },
         {
             ".id": "*MAN100", "name": "manual100", "profile": "p-man", "remote-address": "10.0.0.40",

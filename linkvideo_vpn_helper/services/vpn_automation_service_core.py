@@ -110,21 +110,26 @@ class SeedResult:
     unknown: int
 
 
+from linkvideo_vpn_helper.services.vpn_automation_sources_v3 import (
+    activity_script_source_v3, aging_script_source_v3, restore_script_source_v3,
+)
+
+
 def activity_script_source() -> str:
-    refresh_ns = 6 * 60 * 60 * 1_000_000_000
-    return f'''# LinkVideo.Helper LV Automation {LV_AUTOMATION_VERSION}\n:local nowNs [:tonsec [:timestamp]]\n:local refreshNs {refresh_ns}\n:foreach a in=[/ppp active find where service="l2tp"] do={{\n    :local u [/ppp active get $a name]\n    :foreach sid in=[/ppp secret find where name=$u] do={{\n        :local c [/ppp secret get $sid comment]\n        :local p [:find $c "{LV_MARKER}"]\n        :local base $c\n        :local last 0\n        :if ($p != nil) do={{\n            :set base [:pick $c 0 $p]\n            :local tail [:pick $c $p [:len $c]]\n            :local lp [:find $tail "|last="]\n            :if ($lp != nil) do={{\n                :local lr [:pick $tail ($lp + 6) [:len $tail]]\n                :local le [:find $lr "|"]\n                :if ($le != nil) do={{ :set last [:tonum [:pick $lr 0 $le]] }}\n            }}\n        }}\n        :if (($last = 0) || (($nowNs - $last) >= $refreshNs)) do={{\n            /ppp secret set $sid comment=($base . "{LV_MARKER}state=A|last=" . $nowNs . "|ver={LV_AUTOMATION_VERSION}|")\n        }}\n    }}\n}}'''
+    return activity_script_source_v3(LV_AUTOMATION_VERSION)
 
 
 def aging_script_source() -> str:
-    sleep_ns = SLEEP_DAYS * DAY_NS
-    quarantine_ns = QUARANTINE_DAYS * DAY_NS
-    archive_ns = ARCHIVE_DAYS * DAY_NS
-    return f'''# LinkVideo.Helper LV Automation {LV_AUTOMATION_VERSION}\n:local nowNs [:tonsec [:timestamp]]\n:local sleepNs {sleep_ns}\n:local quarantineNs {quarantine_ns}\n:local archiveNs {archive_ns}\n:foreach sid in=[/ppp secret find] do={{\n    :local u [/ppp secret get $sid name]\n    :local c [/ppp secret get $sid comment]\n    :local p [:find $c "{LV_MARKER}"]\n    :if ($p != nil) do={{\n        :local base [:pick $c 0 $p]\n        :local tail [:pick $c $p [:len $c]]\n        :local state "U"\n        :local last 0\n        :local sp [:find $tail "|state="]\n        :if ($sp != nil) do={{\n            :local sr [:pick $tail ($sp + 7) [:len $tail]]\n            :local se [:find $sr "|"]\n            :if ($se != nil) do={{ :set state [:pick $sr 0 $se] }}\n        }}\n        :local lp [:find $tail "|last="]\n        :if ($lp != nil) do={{\n            :local lr [:pick $tail ($lp + 6) [:len $tail]]\n            :local le [:find $lr "|"]\n            :if ($le != nil) do={{ :set last [:tonum [:pick $lr 0 $le]] }}\n        }}\n        :local isActive ([:len [/ppp active find where name=$u]] > 0)\n        :if ($isActive) do={{\n            /ppp secret set $sid comment=($base . "{LV_MARKER}state=A|last=" . $nowNs . "|ver={LV_AUTOMATION_VERSION}|")\n        }} else={{\n            :if (($state != "M") && ($last > 0)) do={{\n                :local age ($nowNs - $last)\n                :local desired "A"\n                :if ($age >= $archiveNs) do={{ :set desired "R" }} else={{\n                    :if ($age >= $quarantineNs) do={{ :set desired "Q" }} else={{\n                        :if ($age >= $sleepNs) do={{ :set desired "S" }}\n                    }}\n                }}\n                :if (($desired = "Q") || ($desired = "R")) do={{\n                    /ppp secret set $sid disabled=yes\n                }}\n                /ppp secret set $sid comment=($base . "{LV_MARKER}state=" . $desired . "|last=" . $last . "|ver={LV_AUTOMATION_VERSION}|")\n            }}\n        }}\n    }}\n}}'''
+    # 365+ days is a recoverable archive state. Physical deletion belongs to
+    # a separately confirmed backup/restore workflow, never an on-router
+    # scheduled script that cannot verify the recovery copy.
+    return aging_script_source_v3(
+        LV_AUTOMATION_VERSION, SLEEP_DAYS, QUARANTINE_DAYS, ARCHIVE_DAYS,
+    )
 
 
 def restore_script_source() -> str:
-    token = "login failure for user "
-    return f'''# LinkVideo.Helper LV Automation {LV_AUTOMATION_VERSION}\n:local nowNs [:tonsec [:timestamp]]\n:local token "{token}"\n:foreach lid in=[/log find where buffer="{LV_LOG_ACTION}"] do={{\n    :local msg [/log get $lid message]\n    :local p [:find $msg $token]\n    :if ($p != nil) do={{\n        :local rest [:pick $msg ($p + [:len $token]) [:len $msg]]\n        :local e [:find $rest " from "]\n        :if ($e != nil) do={{\n            :local u [:pick $rest 0 $e]\n            :foreach sid in=[/ppp secret find where name=$u] do={{\n                :local c [/ppp secret get $sid comment]\n                :local mp [:find $c "{LV_MARKER}"]\n                :if ($mp != nil) do={{\n                    :local base [:pick $c 0 $mp]\n                    :local tail [:pick $c $mp [:len $c]]\n                    :local state "U"\n                    :local sp [:find $tail "|state="]\n                    :if ($sp != nil) do={{\n                        :local sr [:pick $tail ($sp + 7) [:len $tail]]\n                        :local se [:find $sr "|"]\n                        :if ($se != nil) do={{ :set state [:pick $sr 0 $se] }}\n                    }}\n                    :local disabled [/ppp secret get $sid disabled]\n                    :if ((($state = "Q") || ($state = "R")) && ($disabled = true)) do={{\n                        /ppp secret set $sid disabled=no comment=($base . "{LV_MARKER}state=A|last=" . $nowNs . "|ver={LV_AUTOMATION_VERSION}|")\n                        :log info ("LV AutoRestore: " . $u . " enabled after quarantine login attempt")\n                    }}\n                }}\n            }}\n        }}\n    }}\n}}'''
+    return restore_script_source_v3(LV_AUTOMATION_VERSION)
 
 
 class VPNAutomationService:
