@@ -47,19 +47,6 @@ jobs:
         shell: pwsh
         run: ./scripts/verify_release.ps1
 
-      # Test-only PR 39 artifact. This does not publish or change updater channels.
-      - name: Upload LV2 fleet test installer
-        if: github.event_name == 'pull_request' && github.event.pull_request.number == 39
-        uses: actions/upload-artifact@v4
-        with:
-          name: LinkVideo-Helper-LV2-Fleet-TEST
-          path: |
-            release_candidate/LinkVideo.Helper_Setup_3.0.25_RC.exe
-            release_candidate/verification.json
-          if-no-files-found: error
-          retention-days: 7
-          compression-level: 0
-
       # RC builds remain outside the stable updater channel. After all
       # release checks pass, publish a prerelease installer that users can
       # download directly for manual verification.
