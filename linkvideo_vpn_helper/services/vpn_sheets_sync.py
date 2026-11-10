@@ -17,7 +17,8 @@ from linkvideo_vpn_helper.services.vpn_service import SessionCredentials, VPNSer
 
 
 SPREADSHEET_ID = "1KxIMsVOtDD8klpVUj_vymbtZIDSkvS9-vjT5cQ2a9eA"
-HISTORY_SHEET = "LV История"
+HISTORY_SHEET = "LV История"  # Legacy tab is preserved; no more records are written.
+HISTORY_LOGGING_ENABLED = False
 SUMMARY_SHEET = "LV Сводка"
 DELETED_SHEET = "LV Удалённые"
 MAX_SERVER_ROWS = 1499
@@ -376,15 +377,6 @@ class GoogleSheetsBackend:
                 for item in list(metadata.get("sheets") or [])
             }
             requests_payload = []
-            if HISTORY_SHEET not in titles:
-                requests_payload.append({
-                    "addSheet": {
-                        "properties": {
-                            "title": HISTORY_SHEET,
-                            "gridProperties": {"rowCount": 5000, "columnCount": len(HISTORY_COLUMNS)},
-                        }
-                    }
-                })
             if DELETED_SHEET not in titles:
                 requests_payload.append({
                     "addSheet": {
@@ -398,7 +390,6 @@ class GoogleSheetsBackend:
                 self._request("POST", f"{base_url}:batchUpdate", payload={"requests": requests_payload})
                 if hasattr(self, "_lv_grid_cache"):
                     self._lv_grid_cache = None
-            self.put_values(f"'{HISTORY_SHEET}'!A1:J1", [list(HISTORY_COLUMNS)])
             self.put_values(
                 f"'{DELETED_SHEET}'!A1:Q1",
                 [list(DELETED_COLUMNS)],
@@ -676,6 +667,7 @@ def reconcile_records(
     initiator: str,
     now: datetime | None = None,
     sync_id: str | None = None,
+    capture_history: bool = True,
 ) -> ReconcileResult:
     now_text = _now_text(now)
     sync_id = sync_id or uuid.uuid4().hex[:12]
@@ -692,6 +684,8 @@ def reconcile_records(
     added = changed = deleted = restored = 0
 
     def add_history(login: str, event: str, fields: list[str], before: dict[str, Any], after: dict[str, Any]):
+        if not capture_history:
+            return
         history.append([
             now_text,
             server,
@@ -805,17 +799,16 @@ class VPNSheetsSyncService:
             source=source,
             initiator=initiator or self.default_initiator(),
             sync_id=sync_id,
+            capture_history=HISTORY_LOGGING_ENABLED,
         )
 
-        # Журнал важнее текущего представления: если второй запрос к Google
-        # внезапно не пройдёт, лучше получить повторное событие при следующей
-        # сверке, чем навсегда потерять факт изменения.
+        # Historical event logging is disabled for live synchronization to
+        # avoid huge, low-value Google Sheets writes. LV Удалённые and per-server
+        # state snapshots continue updating normally.
         if result.archived:
             # Archive first. Only after Google confirms the recovery copy do we
             # remove the deleted rows from the per-server working sheet.
             self.backend.archive_deleted_rows(server, result.archived)
-        if result.history:
-            self.backend.append_history(result.history)
         self.backend.write_server_rows(server, result.rows, len(existing_rows))
         if result.added:
             try:
