@@ -1,0 +1,124 @@
+name: One-time publish LinkVideo.Helper 3.0.27
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  publish-verified-3-0-27:
+    if: github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'Release LinkVideo.Helper 3.0.27')
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout exact release commit
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.x'
+          cache-dependency-path: |
+            installer_next/go.mod
+            patcher/go.mod
+            silent_updater/go.mod
+
+      - name: Verify exact final release source and build all artifacts
+        shell: pwsh
+        run: ./scripts/verify_release.ps1
+
+      - name: Guard final assets and release version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (python -c "from linkvideo_vpn_helper.version import APP_VERSION; print(APP_VERSION)").Trim()
+          if ($version -ne '3.0.27') { throw "Refusing wrong version $version" }
+          $report = Get-Content -Raw -LiteralPath 'release_candidate/verification.json' | ConvertFrom-Json
+          if ([string]$report.version -ne '3.0.27' -or [string]$report.source_commit -ne $env:GITHUB_SHA) {
+            throw 'Verification report source/version mismatch'
+          }
+          $setup = 'installer_next/output/LinkVideo.Helper_Setup.exe'
+          $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash.ToLowerInvariant()
+          if ($digest -ne [string]$report.setup_sha256) { throw 'Setup SHA mismatch' }
+          if ((Get-Item $setup).Length -lt 10MB) { throw 'Setup unexpectedly small' }
+          $requirements = @(
+            $setup,
+            'installer_next/output/Uninstall.exe',
+            'release_candidate/verification.json',
+            'release_payload/LinkVideo.Helper_Payload_3.0.27.zip',
+            'release_payload/LinkVideo.Helper_Payload_3.0.27.json',
+            'RELEASE_3.0.27_RU.txt'
+          )
+          foreach ($file in $requirements) {
+            if (-not (Test-Path -LiteralPath $file)) { throw "Missing final release file: $file" }
+          }
+          Write-Host "Verified v3.0.27 from $env:GITHUB_SHA with SHA256 $digest"
+
+      - name: Stage and publish official private source release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = 'v3.0.27'
+          $existing = git ls-remote --tags origin "refs/tags/$tag"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not check source tag' }
+          if ($existing) {
+            $existingSha = ($existing -split '\s+')[0].Trim()
+            if ($existingSha -ne $env:GITHUB_SHA) { throw "Existing $tag points at a different commit" }
+          } else {
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git tag $tag $env:GITHUB_SHA
+            git push origin "refs/tags/$tag"
+            if ($LASTEXITCODE -ne 0) { throw "Failed to create $tag" }
+          }
+          $assets = @(
+            'installer_next/output/LinkVideo.Helper_Setup.exe',
+            'installer_next/output/Uninstall.exe',
+            'release_payload/LinkVideo.Helper_Payload_3.0.27.zip',
+            'release_payload/LinkVideo.Helper_Payload_3.0.27.json',
+            'release_candidate/verification.json'
+          )
+          gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            $isDraft = gh release view $tag --repo $env:GITHUB_REPOSITORY --json isDraft --jq '.isDraft'
+            if ($LASTEXITCODE -ne 0 -or "$isDraft".Trim() -ne 'true') {
+              throw 'Refusing to mutate already published source release'
+            }
+            gh release upload $tag $assets --repo $env:GITHUB_REPOSITORY --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Upload failed' }
+            gh release edit $tag --repo $env:GITHUB_REPOSITORY --draft --title 'LinkVideo.Helper 3.0.27' --notes-file 'RELEASE_3.0.27_RU.txt'
+          } else {
+            gh release create $tag $assets --repo $env:GITHUB_REPOSITORY --draft --target $env:GITHUB_SHA --title 'LinkVideo.Helper 3.0.27' --notes-file 'RELEASE_3.0.27_RU.txt'
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Draft source release failed' }
+          $assetsJson = gh release view $tag --repo $env:GITHUB_REPOSITORY --json assets,isDraft | ConvertFrom-Json
+          $present = @($assetsJson.assets | ForEach-Object { $_.name })
+          foreach ($required in @('LinkVideo.Helper_Setup.exe', 'Uninstall.exe', 'LinkVideo.Helper_Payload_3.0.27.zip', 'LinkVideo.Helper_Payload_3.0.27.json', 'verification.json')) {
+            if ($required -notin $present) { throw "Draft release missing $required" }
+          }
+          if (-not [bool]$assetsJson.isDraft) { throw 'Release must be a draft before final publish' }
+          gh release edit $tag --repo $env:GITHUB_REPOSITORY --draft=false --prerelease=false
+          if ($LASTEXITCODE -ne 0) { throw 'Final source release publication failed' }
+          $final = gh release view $tag --repo $env:GITHUB_REPOSITORY --json isDraft,isPrerelease | ConvertFrom-Json
+          if ([bool]$final.isDraft -or [bool]$final.isPrerelease) { throw 'Final source release status invalid' }
+          Write-Host 'Official 3.0.27 source release published'
+
+      - name: Trigger protected public update publisher
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run publish-public-update.yml --repo $env:GITHUB_REPOSITORY --ref main --field tag=v3.0.27
+          if ($LASTEXITCODE -ne 0) { throw 'Could not dispatch public updater workflow' }
+          Write-Host 'Public updater workflow dispatched; public manifest is verified in that workflow'
