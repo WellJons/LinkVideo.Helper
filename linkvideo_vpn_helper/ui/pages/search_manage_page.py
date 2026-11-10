@@ -740,8 +740,6 @@ class SearchManagePage(QWidget):
         self.search_note.clear()
         self.current = None
         self._deleted_current = None
-        self._deleted_lookup_query = q
-        self._deleted_lookup_pending = False
         self._active_match_count = 0
         self._search_had_errors = False
         self._selected_port = None
@@ -799,18 +797,8 @@ class SearchManagePage(QWidget):
         for client in report.matches:
             self._add_result(client)
 
-        archive_lookup = False
-        if self._mode == "login" and self._deleted_lookup_query == self.query.text().strip():
-            try:
-                from linkvideo_vpn_helper.ui import vpn_sheets_sync_integration as integration
-                coordinator = getattr(integration, "_COORDINATOR", None)
-                if coordinator is not None and coordinator.is_configured():
-                    archive_lookup = True
-                    self._deleted_lookup_pending = True
-                    coordinator.search_deleted_async(self, self._deleted_lookup_query)
-            except Exception:
-                archive_lookup = False
-
+        # Search RouterOS only. Historical/deleted clients are intentionally
+        # excluded to avoid an additional Google Sheets query per login search.
         if report.matches:
             self.task.hide()
             self.search_note.clear()
@@ -822,9 +810,6 @@ class SearchManagePage(QWidget):
             self.search_note.setText(
                 "Не удалось проверить:\n" + "\n".join(f"• {e.server}: {e.error.message}" for e in report.errors[:10])
             )
-        elif archive_lookup:
-            self.task.busy("Проверяю удалённые учётки", "Ищу логин в резервной базе Google Sheets…")
-            self.search_note.clear()
         else:
             self.task.done("Клиент не найден", f"Проверено серверов: {successful}/{report.total}")
             self.search_note.clear()
@@ -832,8 +817,6 @@ class SearchManagePage(QWidget):
         if self.results.count():
             self.results.setCurrentRow(-1)
             self.open_hint.setText("Клик по записи — открыть карточку")
-        elif archive_lookup:
-            self.open_hint.setText("Проверяю архив удалённых…")
         else:
             self.open_hint.setText("Совпадений нет")
 

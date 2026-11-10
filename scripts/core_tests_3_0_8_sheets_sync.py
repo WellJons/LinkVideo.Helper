@@ -131,6 +131,8 @@ read_pos = source_text.index("existing_rows = self.backend.read_server_rows")
 reconcile_pos = source_text.index("result = reconcile_records")
 assert fetch_pos < read_pos < reconcile_pos
 assert "ни одна старая строка не может быть ошибочно помечена как удалённая" in source_text
-assert "result.history" in source_text and source_text.index("self.backend.append_history") < source_text.index("self.backend.write_server_rows")
+assert "capture_history=HISTORY_LOGGING_ENABLED" in source_text
+assert "self.backend.append_history(result.history)" not in source_text
+assert source_text.index("self.backend.archive_deleted_rows") < source_text.index("self.backend.write_server_rows")
 
 print("CORE TESTS 3.0.8 VPN SHEETS SYNC OK")

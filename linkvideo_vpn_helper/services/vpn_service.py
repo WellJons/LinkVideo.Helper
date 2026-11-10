@@ -19,7 +19,7 @@ from linkvideo_vpn_helper.services.vpn_address_allocator import (
     used_remote_addresses,
     validate_start_ip,
 )
-from linkvideo_vpn_helper.services.vpn_lifecycle import classify_state, compose_lv_comment, parse_lv_comment
+from linkvideo_vpn_helper.services.vpn_lifecycle import classify_state, compose_lv_comment, parse_lv_comment, has_lv_metadata
 
 PORT_MIN = 10001
 PORT_MAX = 13000
@@ -758,7 +758,7 @@ class VPNService:
             is_online = login in active
             comment = str(secret.get("comment", "") or "")
             meta = parse_lv_comment(comment)
-            has_lv = "|LV1|" in comment
+            has_lv = has_lv_metadata(comment)
             raw_last = str(secret.get("last-logged-out", "") or secret.get("last_logged_out", "") or "").strip()
             fallback_dt = self.parse_router_datetime(raw_last)
             fallback_ns = int(fallback_dt.timestamp() * 1_000_000_000) if fallback_dt else 0

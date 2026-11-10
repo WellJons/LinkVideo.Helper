@@ -102,7 +102,8 @@ try:
         if call[0] == "POST" and call[1].endswith("/values:batchUpdate")
     ]
     assert len(sheet_updates) == 1, requests_seen
-    assert len(sheet_updates[0][3]["requests"]) == 2
+    assert len(sheet_updates[0][3]["requests"]) == 1
+    assert sheet_updates[0][3]["requests"][0]["addSheet"]["properties"]["title"] == sheets.DELETED_SHEET
     assert len(header_updates) == 1, requests_seen
     assert len(header_updates[0][3]["data"]) == 2
 
