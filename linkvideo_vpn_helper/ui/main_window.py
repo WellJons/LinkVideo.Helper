@@ -19,7 +19,7 @@ from linkvideo_vpn_helper.services.search_service import FastSearchService
 from linkvideo_vpn_helper.services.server_registry import ServerRegistry
 from linkvideo_vpn_helper.services.update_service import UpdateService
 from linkvideo_vpn_helper.services.vpn_service import SessionCredentials, VPNService
-from linkvideo_vpn_helper.theme import colors, get_theme_style
+from linkvideo_vpn_helper.theme import colors, get_theme_style, normalize_theme
 from linkvideo_vpn_helper.ui.components import Card
 from linkvideo_vpn_helper.ui.components_compat import AnimatedStack, Toast
 from linkvideo_vpn_helper.ui.dialogs import ConfirmDialog
@@ -30,6 +30,19 @@ from linkvideo_vpn_helper.version import APP_VERSION
 class MainWindow(QMainWindow):
     updateReady = Signal(object, object, bool)
     updateDownloaded = Signal(object, object)
+
+    TERMINAL_PATHS = {
+        "create": "vpn/create-client",
+        "search": "vpn/search-manage",
+        "archive": "archive/download",
+        "diagnostics": "archive/diagnostics",
+        "tariffs": "billing/tariffs",
+        "new_agent": "devices/agent",
+        "templates": "support/templates",
+        "vpn_servers": "infrastructure/vpn-servers",
+        "inactive": "vpn/lifecycle",
+        "settings": "workspace/settings",
+    }
 
     NAV_ITEMS = (
         ("create", "＋", "Создание клиента", "Новая L2TP-учётная запись"),
@@ -93,11 +106,28 @@ class MainWindow(QMainWindow):
         # пользователю сообщения об успешной проверке/сетевой ошибке.
         QTimer.singleShot(2200, lambda: self._check_updates(startup=True))
 
+    def _terminal_enabled(self) -> bool:
+        return normalize_theme(
+            str(self.settings.value("ui/theme_v2", "rose_milk", str) or "ocean_blue")
+        ) == "terminal_code"
+
+    def _sync_terminal_chrome(self):
+        enabled = self._terminal_enabled()
+        if hasattr(self, "terminal_topbar"):
+            self.terminal_topbar.setVisible(enabled)
+        if hasattr(self, "logo_sub"):
+            self.logo_sub.setText("WORKSPACE // OPERATOR" if enabled else "Рабочие инструменты")
+        if hasattr(self, "terminal_command"):
+            self.terminal_command.setText(
+                "./" + self.TERMINAL_PATHS.get(self._current_key, "workspace/home")
+            )
+
     def _apply_theme(self):
         key = str(self.settings.value("ui/theme_v2", "rose_milk", str) or "ocean_blue")
         app = QApplication.instance()
         if app:
             app.setStyleSheet(get_theme_style(key))
+        self._sync_terminal_chrome()
 
     def _build(self):
         root = QWidget()
@@ -265,8 +295,33 @@ class MainWindow(QMainWindow):
         self.content.setObjectName("ContentRoot")
         content_l = QVBoxLayout(self.content)
         content_l.setContentsMargins(0, 0, 0, 0)
+        content_l.setSpacing(0)
+
+        # Theme-only IDE command bar. Pure presentation; no operations or
+        # sensitive user data pass through this decorative header.
+        self.terminal_topbar = QFrame()
+        self.terminal_topbar.setObjectName("TerminalTopbar")
+        self.terminal_topbar.setFixedHeight(40)
+        tb = QHBoxLayout(self.terminal_topbar)
+        tb.setContentsMargins(22, 0, 22, 0)
+        tb.setSpacing(10)
+        self.terminal_signal = QLabel("●")
+        self.terminal_signal.setObjectName("TerminalSignal")
+        self.terminal_prompt = QLabel("linkvideo@helper:~$")
+        self.terminal_prompt.setObjectName("TerminalPrompt")
+        self.terminal_command = QLabel("./workspace/home")
+        self.terminal_command.setObjectName("TerminalCommand")
+        self.terminal_command.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.terminal_caption = QLabel("TERMINAL // CODE")
+        self.terminal_caption.setObjectName("TerminalCaption")
+        tb.addWidget(self.terminal_signal)
+        tb.addWidget(self.terminal_prompt)
+        tb.addWidget(self.terminal_command, 1)
+        tb.addWidget(self.terminal_caption)
+        content_l.addWidget(self.terminal_topbar)
         self.stack = AnimatedStack()
         content_l.addWidget(self.stack)
+        self._sync_terminal_chrome()
         layout.addWidget(self.content, 1)
 
         self.toast = Toast(root)
@@ -377,6 +432,7 @@ class MainWindow(QMainWindow):
         page = self._ensure_page(key)
         self.stack.setCurrent(key)
         self._current_key = key
+        self._sync_terminal_chrome()
         start_hook = getattr(page, "onActivated", None)
         if callable(start_hook):
             try:
@@ -396,14 +452,18 @@ class MainWindow(QMainWindow):
         # Icon colors match selected states in every theme, while the rail
         # itself stays graphite as in the approved UI reference.
         theme_key = str(self.settings.value("ui/theme_v2", "linkvideo_2026", str) or "linkvideo_2026")
-        accent_foreground = colors(theme_key)["accent_text"]
+        accent_foreground = (
+            "#7AF4BE" if normalize_theme(theme_key) == "terminal_code"
+            else colors(theme_key)["accent_text"]
+        )
+        inactive_foreground = "#9BBDB4" if normalize_theme(theme_key) == "terminal_code" else "#D8E0E8"
         for nav_key, (button, _, _, _) in self.nav.items():
             active = nav_key == self._current_key
             button.setIcon(navigation_icon(
-                nav_key, color=accent_foreground if active else "#D8E0E8"
+                nav_key, color=accent_foreground if active else inactive_foreground
             ))
         self.settings_btn.setIcon(navigation_icon(
-            "settings", color=accent_foreground if self._current_key == "settings" else "#D8E0E8"
+            "settings", color=accent_foreground if self._current_key == "settings" else inactive_foreground
         ))
 
     def _theme_changed(self):
