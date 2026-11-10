@@ -6,9 +6,15 @@ All credentials are fictional. No backend, RouterOS, or B2O auth is invoked.
 """
 
 import os
+import sys
 import tempfile
 from pathlib import Path
 
+# Invoked as "python scripts/..." by GitHub Actions. Add the repository root
+# explicitly, just like the normal release_preflight runner does.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QSettings
