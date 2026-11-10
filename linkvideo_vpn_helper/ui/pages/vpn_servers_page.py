@@ -481,19 +481,35 @@ class VPNServersPage(QWidget):
             online_note.setWordWrap(True)
             self.detail_layout.addWidget(online_note)
 
+        # Live L2TP sessions and LV comment states are DIFFERENT sources.
+        # Do not display 0 "active" for a new server with hundreds of actual
+        # sessions simply because LV has not recorded any activity yet.
+        lv_states_ready = bool(auto and auto.installed and auto.initialized > 0)
+        online_value = str(stat.clients_online) if stat is not None else "—"
+        state_value = lambda field: str(getattr(auto, field)) if lv_states_ready else "—"
         counts = QHBoxLayout()
         counts.setSpacing(8)
         values = [
-            ("Активные", auto.active if auto else 0),
-            ("Спящие", auto.sleeping if auto else 0),
-            ("Карантин", auto.quarantine if auto else 0),
-            ("Архив", auto.archive if auto else 0),
-            ("Вручную", auto.manual if auto else 0),
-            ("Неизвестно", auto.unknown if auto else 0),
+            ("L2TP онлайн", online_value),
+            ("Спящие LV", state_value("sleeping")),
+            ("Карантин LV", state_value("quarantine")),
+            ("Архив LV", state_value("archive")),
+            ("Вручную", state_value("manual")),
+            ("Без LV-истории", state_value("unknown")),
         ]
         for label, value in values:
-            counts.addWidget(MetricCard(label, str(value)), 1)
+            counts.addWidget(MetricCard(label, value), 1)
         self.detail_layout.addLayout(counts)
+
+        lv_note = QLabel(
+            "Онлайн L2TP — текущие подключения; остальные показатели — состояния учёток по меткам LV."
+            if lv_states_ready else
+            "LV-состояния пока недоступны: автоматика установлена не полностью "
+            "или история активности ещё не инициализирована. Прочерк — не ноль."
+        )
+        lv_note.setObjectName("TinyMuted")
+        lv_note.setWordWrap(True)
+        self.detail_layout.addWidget(lv_note)
 
         if auto and auto.installed:
             runtime_info = QLabel(
