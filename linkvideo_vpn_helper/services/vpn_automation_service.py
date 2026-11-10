@@ -254,12 +254,13 @@ class VPNAutomationService(_CoreVPNAutomationService):
             ["memory"] if row and current_action == "memory"
             else ([LV_LOG_ACTION, "memory"] if LV_LOG_ACTION in actions else ["memory"])
         )
-        if "memory" not in actions and "memory" in candidates:
-            # "memory" is built-in; if it is not returned, readback cannot
-            # guarantee a usable logging sink.
-            raise RuntimeError("RouterOS не подтвердил стандартное действие логирования memory")
         chosen = ""
         for action in candidates:
+            if action == "memory" and "memory" not in actions:
+                # Verify the fallback only when it is actually necessary.
+                # A valid LVAuth setup does not depend on the memory action
+                # appearing in API's readback (older RouterOS/test variants).
+                raise RuntimeError("RouterOS не подтвердил стандартное действие логирования memory")
             try:
                 if row:
                     api.set("/system/logging", rid, {"topics": topics, "action": action})
