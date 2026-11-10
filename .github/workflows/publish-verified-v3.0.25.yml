@@ -1,0 +1,49 @@
+name: Publish verified v3.0.25 draft and dispatch public updater
+
+on:
+  push:
+    branches: [rc/3.0.25]
+    paths:
+      - .github/workflows/publish-verified-v3.0.25.yml
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Verify final version draft and required assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          draft="$(gh release view v3.0.25 --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)"
+          if [ "$draft" != "true" ] && [ "$draft" != "false" ]; then
+            echo "Release is not a valid draft/published release" >&2; exit 1
+          fi
+          assets="$(gh release view v3.0.25 --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          for name in LinkVideo.Helper_Setup.exe Uninstall.exe LinkVideo.Helper_Payload_3.0.25.zip LinkVideo.Helper_Payload_3.0.25.json verification.json; do
+            printf '%s\n' "$assets" | grep -Fxq "$name"
+          done
+          gitref="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v3.0.25" --jq '.object.sha')"
+          test -n "$gitref"
+
+      - name: Publish final GitHub Release v3.0.25
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$(gh release view v3.0.25 --json isDraft --jq .isDraft)" = "true" ]; then
+            gh release edit v3.0.25 --draft=false --prerelease=false
+          fi
+          test "$(gh release view v3.0.25 --json isDraft --jq .isDraft)" = "false"
+          test "$(gh release view v3.0.25 --json isPrerelease --jq .isPrerelease)" = "false"
+
+      - name: Run canonical public update publisher
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run publish-public-update.yml --ref main -f tag=v3.0.25
