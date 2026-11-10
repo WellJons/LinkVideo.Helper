@@ -180,7 +180,7 @@ def install_vpn_sheets_operator_view() -> None:
                 record.row.update(_restore_activity_from_recovery(record.row))
         return current
 
-    def reconcile_records(server, existing_rows, current_clients, *, source, initiator, now=None, sync_id=None):
+    def reconcile_records(server, existing_rows, current_clients, *, source, initiator, now=None, sync_id=None, capture_history=True):
         # Normalize legacy visible values before comparison. Otherwise the first
         # 3.0.13 sync would create thousands of fake "NAT changed" events merely
         # because 3.0.12 stored `tcp 10001→10001` instead of `10001`.
@@ -229,6 +229,7 @@ def install_vpn_sheets_operator_view() -> None:
             initiator=initiator,
             now=now,
             sync_id=sync_id,
+            capture_history=capture_history,
         )
         after = {
             str(row.get("Логин", "") or "").strip(): row
