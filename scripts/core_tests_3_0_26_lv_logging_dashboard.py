@@ -13,6 +13,7 @@ from linkvideo_vpn_helper.services import vpn_automation_service as public
 from linkvideo_vpn_helper.services.vpn_automation_service_core import LV_AGING_SCHED
 from linkvideo_vpn_helper.services.vpn_retention_policy import restore_script_source, install_retention_policy
 from linkvideo_vpn_helper.services.vpn_automation_resilience import install_vpn_automation_resilience
+from linkvideo_vpn_helper.services.routeros6_lv_clock import V6_DAY_SOURCE, epoch_day_for_legacy_date
 from linkvideo_vpn_helper.services.vpn_service import SessionCredentials
 
 
@@ -252,4 +253,14 @@ assert '("Без LV-истории", state_value("unknown"))' in page
 assert 'lv_states_ready = bool(auto and auto.installed and auto.initialized > 0)' in page
 assert '"—"' in page
 
-print("LV LOGGING FALLBACK + INDEPENDENT LIVE L2TP STATUS OK")
+for clock_date, expected in (
+    ("feb/29/2024", 19782), ("mar/01/2024", 19783),
+    ("jan/01/2025", 20089), ("nov/10/2026", 20767),
+):
+    assert epoch_day_for_legacy_date(clock_date) == expected
+assert ":timestamp" not in V6_DAY_SOURCE
+assert ":tonsec" not in V6_DAY_SOURCE
+assert "/system clock get date" in V6_DAY_SOURCE
+assert "477" in V6_DAY_SOURCE
+
+print("LV ROUTEROS 6.47 3/3 INSTALL + EXACT-NAME RUNTIME PATCH + LEGACY DATE OK")
