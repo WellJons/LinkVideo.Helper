@@ -44,6 +44,12 @@ def _ns_to_day(value: int) -> int:
     return number if 0 < number < 10_000_000 else number // DAY_NS
 
 
+def has_lv_metadata(comment: str) -> bool:
+    """Detect both historical LV1 and current LV2 RouterOS lifecycle markers."""
+    raw = str(comment or "")
+    return LV_MARKER in raw or LEGACY_LV_MARKER in raw
+
+
 def parse_lv_comment(comment: str) -> LifecycleMeta:
     """Read both compact LV2 metadata and legacy LV1 metadata.
 
