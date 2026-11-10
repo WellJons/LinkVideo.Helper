@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - fix/lv-logging-dashboard-2026-11-10
-    paths:
-      - .github/workflows/private-lv-logging-installer.yml
 
 permissions:
   contents: read
