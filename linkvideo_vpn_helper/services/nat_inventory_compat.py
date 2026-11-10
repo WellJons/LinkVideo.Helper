@@ -297,7 +297,12 @@ def install_nat_inventory_compat() -> None:
 
         return records
 
-    def verified_create_clients_batch(self: VPNService, server, creds, base_login, ports_per_client, accounts_count, progress_callback=None, cancel_event=None):
+    def verified_create_clients_batch(
+        self: VPNService, server, creds, base_login, ports_per_client,
+        accounts_count, progress_callback=None, cancel_event=None, *,
+        start_ip: str = None,
+    ):
+        options = {} if start_ip is None else {"start_ip": start_ip}
         created = original_create_clients_batch(
             self,
             server,
@@ -307,6 +312,7 @@ def install_nat_inventory_compat() -> None:
             accounts_count,
             progress_callback,
             cancel_event,
+            **options,
         )
         if not created:
             return created
