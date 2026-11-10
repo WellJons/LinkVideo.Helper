@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Offline regression: 30/90/365 retention and confirmed Sheets backup gate.
+"""Offline regression: 30/90/365 retention without Google Sheets dependency.
 
 No RouterOS connection, real Google spreadsheet, or live VPN resource is touched.
 """
@@ -76,13 +76,10 @@ class FakeAPI:
         self.removed.append((path, rid))
 
 
-def run(api: FakeAPI, backup_logins=None):
+def run(api: FakeAPI):
     with patch.object(policy, "RouterOSAPIClient", lambda *args, **kwargs: api):
         with patch.object(policy, "event", lambda *args, **kwargs: None):
-            return policy.apply_policy_now(
-                "offline.test", CREDS,
-                backed_up_logins=backup_logins,
-            )
+            return policy.apply_policy_now("offline.test", CREDS)
 
 
 def sheet_row(entry: dict, *, snapshot: bool = True) -> dict:
@@ -93,21 +90,21 @@ def sheet_row(entry: dict, *, snapshot: bool = True) -> dict:
     }
 
 
-assert policy.RETENTION_VERSION == "2.1.1"
+assert policy.RETENTION_VERSION == "2.1.2"
 assert policy.NEVER_ACTIVE_DELETE_DAYS == 30
 assert policy.SLEEP_DAYS == 30
 assert policy.QUARANTINE_DAYS == 90
 assert policy.DELETE_DAYS == 365
 
 script = policy.aging_script_source()
-assert "/ppp secret remove" not in script
-assert "/ip firewall nat remove" not in script
+assert "/ppp secret remove $sid" in script
+assert "/ip firewall nat remove $nid" in script
 assert script.count("{") == script.count("}")
-assert 's=R|l=' in script
+assert "LV RETENTION DELETE" in script
 assert ':set deleteAfter 30' in script
 assert ':local deleteAfter 365' in script
 
-# A year-old account must not be deleted merely because the operator enabled LV.
+# A 366-day inactive client is deleted even if Google Sheets is unavailable.
 expired = secret("expired", last=timestamp(366), created=timestamp(500))
 api = FakeAPI(
     [expired],
@@ -115,20 +112,18 @@ api = FakeAPI(
     [nat_rule("*n", "expired", "172.16.0.3")],
 )
 result = run(api)
-assert result["deleted"] == 0 and result["staged"] == 1, result
-assert len(api.rows["/ppp/secret"]) == 1
-assert len(api.rows["/ip/firewall/nat"]) == 1
-assert api.rows["/ppp/secret"][0]["disabled"] == "yes"
-assert policy.parse_extended_comment(api.rows["/ppp/secret"][0]["comment"]).state == "R"
+assert result["deleted"] == 1 and result["nat_removed"] == 1, result
+assert not api.rows["/ppp/secret"]
+assert not api.rows["/ip/firewall/nat"]
 
-# A never-connected client is deleted at 30+ days only after a confirmed backup.
+# A verified never-connected client is deleted at 30 days without Sheets.
 never = secret("never", last=0, created=timestamp(31))
 api = FakeAPI(
     [never],
     [{".id": "*p", "name": "unique", "remote-address": "172.16.0.3"}],
     [nat_rule("*n", "never", "172.16.0.3")],
 )
-result = run(api, {"never"})
+result = run(api)
 assert result["deleted"] == 1 and result["nat_removed"] == 1
 assert result["profiles_removed"] == 1
 assert not api.rows["/ppp/secret"] and not api.rows["/ip/firewall/nat"]
@@ -139,7 +134,7 @@ young = secret("young", last=0, created=timestamp(29), rid="*1")
 aging = secret("aging", last=timestamp(364), created=timestamp(600),
                remote="172.16.0.4", rid="*2")
 api = FakeAPI([young, aging], [], [])
-result = run(api, {"young", "aging"})
+result = run(api)
 assert result["deleted"] == 0
 assert len(api.rows["/ppp/secret"]) == 2
 
@@ -157,7 +152,7 @@ api = FakeAPI(
         nat_rule("*n4", "old", "172.16.99.99"),
     ],
 )
-result = run(api, {"old"})
+result = run(api)
 assert result["deleted"] == 1 and result["nat_removed"] == 1, result
 assert [r["name"] for r in api.rows["/ppp/secret"]] == ["other"]
 assert [r[".id"] for r in api.rows["/ip/firewall/nat"]] == ["*n2", "*n3", "*n4"]
@@ -167,7 +162,7 @@ assert [r["name"] for r in api.rows["/ppp/profile"]] == ["shared"]
 connected = secret("connected", last=timestamp(366), created=timestamp(500))
 unknown = {**secret("unknown", last=0, created=0, rid="*2"), "comment": ""}
 api = FakeAPI([connected, unknown], [], [], active=("connected",))
-result = run(api, {"connected", "unknown"})
+result = run(api)
 assert result["deleted"] == 0
 assert len(api.rows["/ppp/secret"]) == 2
 
@@ -185,4 +180,4 @@ rows = [
 ]
 assert set(_retention_overdue(rows, datetime.now())) == {"old", "never"}
 
-print("CORE TESTS 3.0.26 RETENTION 30/90/365 + BACKUP GATE + SAFE NAT CLEANUP OK")
+print("CORE TESTS 3.0.26 RETENTION 30/90/365 + DIRECT CLEANUP + ACTIVE CLIENT SAFETY OK")
