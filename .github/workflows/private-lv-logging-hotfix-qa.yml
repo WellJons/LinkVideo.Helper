@@ -1,0 +1,41 @@
+name: Private LV logging and dashboard hotfix QA
+
+on:
+  push:
+    branches:
+      - fix/lv-logging-dashboard-2026-11-10
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Qt and service requirements
+        shell: pwsh
+        run: python -m pip install -r requirements.txt
+      - name: New RouterOS logging + LV status regression
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONPATH: .
+        run: python scripts/core_tests_3_0_26_lv_logging_dashboard.py
+      - name: Existing lifecycle and dashboard regression
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONPATH: .
+        run: |
+          python scripts/core_tests_3_0_11_vpn_status_sync.py
+          python scripts/core_tests_3_0_24_lv_lifecycle_safety.py
+          python scripts/core_tests_3_0_8_retention_policy.py
+      - name: Compile all changed Python sources
+        shell: pwsh
+        run: |
+          python -m py_compile linkvideo_vpn_helper/services/vpn_automation_service.py linkvideo_vpn_helper/services/vpn_retention_policy.py linkvideo_vpn_helper/ui/pages/vpn_servers_page.py scripts/core_tests_3_0_26_lv_logging_dashboard.py
