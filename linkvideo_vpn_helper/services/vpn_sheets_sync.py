@@ -12,7 +12,7 @@ from typing import Any, Iterable
 from urllib.parse import quote
 
 from linkvideo_vpn_helper.services.app_logging import event
-from linkvideo_vpn_helper.services.vpn_lifecycle import classify_state, parse_lv_comment
+from linkvideo_vpn_helper.services.vpn_lifecycle import classify_state, parse_lv_comment, has_lv_metadata
 from linkvideo_vpn_helper.services.vpn_service import SessionCredentials, VPNService
 
 
@@ -613,7 +613,7 @@ def build_current_clients(service: VPNService, snapshot: dict[str, list[dict]]) 
         disabled = _yes(secret.get("disabled", "no"))
         comment = str(secret.get("comment", "") or "")
         meta = parse_lv_comment(comment)
-        has_lv = "|LV1|" in comment
+        has_lv = has_lv_metadata(comment)
         raw_last = str(secret.get("last-logged-out", "") or secret.get("last_logged_out", "") or "").strip()
         fallback_dt = service.parse_router_datetime(raw_last)
         last_ns = int(meta.last_ns or 0)
