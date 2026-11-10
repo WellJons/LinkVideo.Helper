@@ -97,8 +97,12 @@ assert deleted.rows == []
 assert len(deleted.archived) == 1
 row = deleted.archived[0]
 assert row["Удалена"] == "Да"
-assert row["Причина"].startswith("Удалена автоматически: 370"), row["Причина"]
-assert any(history[3].startswith("Удалена автоматически: 370") for history in deleted.history), deleted.history
+assert row["Причина"].startswith("Удалена в RouterOS; последняя активность 370"), row["Причина"]
+assert row["Кто удалил"] == "Неизвестно (обнаружено при сверке)"
+assert any(
+    history[3].startswith("Удалена в RouterOS; последняя активность 370")
+    for history in deleted.history
+), deleted.history
 
 assert sheets.SERVER_COLUMNS[-1] == "Причина"
 assert len(sheets.SERVER_COLUMNS) == 20
