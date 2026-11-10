@@ -194,6 +194,33 @@ def install_vpn_sheets_operator_view() -> None:
             if str(row.get("Логин", "") or "").strip()
         }
 
+        # RouterOS can temporarily omit last-logged-out. Do not erase a
+        # previously observed date for the *same* account, but never carry it
+        # into a recreated/replaced account with a different password or IP.
+        for record in current_clients:
+            old = before.get(str(record.login or "").strip())
+            if not old:
+                continue
+            prior_password = str(old.get("Пароль", "") or "").strip()
+            current_password = str(record.row.get("Пароль", "") or "").strip()
+            prior_ip = str(old.get("Remote Address", "") or "").strip()
+            current_ip = str(record.row.get("Remote Address", "") or "").strip()
+            same_account = bool(
+                prior_password and current_password and prior_ip and current_ip
+                and prior_password == current_password and prior_ip == current_ip
+            )
+            if not same_account:
+                continue
+            old_last = _known_activity_from_recovery(old)
+            now_last = _known_activity_from_recovery(record.row)
+            if old_last and (now_last is None or old_last > now_last):
+                record.row["Последняя активность"] = old_last.replace(
+                    microsecond=0
+                ).isoformat(sep=" ")
+                record.row["Дней без связи"] = str(max(
+                    0, (datetime.now() - old_last).days
+                ))
+
         result = original_reconcile(
             server,
             normalized_existing,
