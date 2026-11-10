@@ -1,0 +1,60 @@
+name: Private LinkVideo.Helper 3.0.26 LV2 QA installer
+
+on:
+  pull_request:
+    branches:
+      - rc/3.0.26
+  push:
+    branches:
+      - test/lv2-fleet-fixes-3.0.26
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-lv2-3-0-26-qa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact 3.0.26 test source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Set up Go 1.24
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.x'
+          cache-dependency-path: |
+            installer_next/go.mod
+            patcher/go.mod
+            silent_updater/go.mod
+
+      - name: Verify that this is version 3.0.26
+        shell: pwsh
+        run: |
+          $version = (python -c "from linkvideo_vpn_helper.version import APP_VERSION; print(APP_VERSION)").Trim()
+          if ($version -ne "3.0.26") { throw "Wrong app version: $version (expected 3.0.26)" }
+
+      - name: Verify source and build Windows Setup
+        shell: pwsh
+        run: ./scripts/verify_release.ps1
+
+      - name: Publish private QA artifact for manual testing
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinkVideo-Helper-3.0.26-LV2-TEST
+          path: |
+            release_candidate/LinkVideo.Helper_Setup_3.0.26_RC.exe
+            release_candidate/verification.json
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

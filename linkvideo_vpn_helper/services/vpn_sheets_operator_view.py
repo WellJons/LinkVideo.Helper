@@ -8,9 +8,13 @@ resilience layers so it can normalize legacy 3.0.12 rows without changing restor
 semantics or the robust Google transport.
 """
 
+import json
 import re
+import threading
+from datetime import datetime
 
 from linkvideo_vpn_helper.services.vpn_retention_policy import parse_extended_comment
+from linkvideo_vpn_helper.services.vpn_service import VPNService
 
 
 _INSTALLED = False
@@ -52,6 +56,88 @@ def _normalize_visible_row(row: dict[str, str]) -> dict[str, str]:
     return item
 
 
+
+def _known_activity_from_recovery(row: dict[str, str]) -> datetime | None:
+    """Recover only dates that were actually stored by RouterOS/LV.
+
+    A saved RouterOS snapshot can contain last-logged-out even when an older
+    operator view incorrectly replaced its visible value with 'Никогда'.
+    Do not reconstruct dates from "Первое обнаружение" or creation metadata.
+    """
+    candidates: list[datetime] = []
+    visible = VPNService.parse_router_datetime(str(row.get("Последняя активность", "") or ""))
+    if visible:
+        candidates.append(visible)
+
+    comments = [str(row.get("Комментарий RouterOS", "") or "")]
+    raw_snapshot = str(row.get("RouterOS snapshot", "") or "")
+    try:
+        snapshot = json.loads(raw_snapshot) if raw_snapshot else {}
+    except (ValueError, TypeError):
+        snapshot = {}
+    if isinstance(snapshot, dict):
+        secret = snapshot.get("secret")
+        if isinstance(secret, dict):
+            comments.append(str(secret.get("comment", "") or ""))
+            router_last = VPNService.parse_router_datetime(
+                str(secret.get("last-logged-out", "") or secret.get("last_logged_out", "") or "")
+            )
+            if router_last:
+                candidates.append(router_last)
+
+    for comment in comments:
+        last_ns = int(parse_extended_comment(comment).last_ns or 0)
+        if last_ns > 0:
+            try:
+                candidates.append(datetime.fromtimestamp(last_ns / 1_000_000_000))
+            except (OverflowError, OSError, ValueError):
+                continue
+    return max(candidates) if candidates else None
+
+
+def _restore_activity_from_recovery(
+    row: dict[str, str], *, archived: bool = False
+) -> dict[str, str]:
+    """Correct an old incorrectly hidden activity date without guessing one."""
+    updated = dict(row)
+    observed = _known_activity_from_recovery(updated)
+    if observed is not None:
+        old_visible = VPNService.parse_router_datetime(
+            str(updated.get("Последняя активность", "") or "")
+        )
+        if old_visible is None or old_visible < observed:
+            updated["Последняя активность"] = observed.replace(microsecond=0).isoformat(sep=" ")
+            if archived:
+                reference = VPNService.parse_router_datetime(str(updated.get("Удалена в", "") or ""))
+                if reference is None:
+                    reference = datetime.now()
+            else:
+                reference = datetime.now()
+            days = max(0, (reference - observed).days)
+            updated["Дней без связи"] = str(days)
+            if archived:
+                reason = str(updated.get("Причина", "") or "").lower()
+                if any(token in reason for token in (
+                    "без единой активности", "история подключений", "причина удаления неизвест",
+                )):
+                    updated["Причина"] = (
+                        f"Удалена в RouterOS; последняя активность {days} дн. назад "
+                        "(причина удаления не подтверждена)"
+                    )
+        return updated
+
+    # No reliable timestamp: distinguish never-connected clients (LV2 created)
+    # from migrated old accounts with an unknown past. The 1970 sentinel means
+    # unavailable history, not proof of no connection.
+    if str(updated.get("Последняя активность", "") or "").strip().lower() in {
+        "", "никогда", "неизвестна", "jan/01/1970 00:00:00", "1970-01-01 00:00:00",
+    }:
+        meta = parse_extended_comment(str(updated.get("Комментарий RouterOS", "") or ""))
+        verified_never = meta.reason in {"created", "never_active_30"}
+        updated["Последняя активность"] = "Никогда" if verified_never else "Неизвестна"
+        updated["Дней без связи"] = ""
+    return updated
+
 def _describe_port_change(before: str, after: str) -> str:
     old = _port_set(before)
     new = _port_set(after)
@@ -88,21 +174,52 @@ def install_vpn_sheets_operator_view() -> None:
         for record in current:
             record.row.update(_normalize_visible_row(record.row))
             meta = parse_extended_comment(str(record.row.get("Комментарий RouterOS", "") or ""))
-            if record.login not in active_names and meta.last_ns <= 0:
-                record.row["Последняя активность"] = "Никогда"
-                record.row["Дней без связи"] = ""
+            if record.login not in active_names:
+                # Keep the actual RouterOS last-logged-out when LV2 l=0.
+                # Older code incorrectly replaced known dates with "Никогда".
+                record.row.update(_restore_activity_from_recovery(record.row))
         return current
 
-    def reconcile_records(server, existing_rows, current_clients, *, source, initiator, now=None, sync_id=None):
+    def reconcile_records(server, existing_rows, current_clients, *, source, initiator, now=None, sync_id=None, capture_history=True):
         # Normalize legacy visible values before comparison. Otherwise the first
         # 3.0.13 sync would create thousands of fake "NAT changed" events merely
         # because 3.0.12 stored `tcp 10001→10001` instead of `10001`.
-        normalized_existing = [_normalize_visible_row(row) for row in list(existing_rows or [])]
+        normalized_existing = [
+            _restore_activity_from_recovery(_normalize_visible_row(row))
+            for row in list(existing_rows or [])
+        ]
         before = {
             str(row.get("Логин", "") or "").strip(): row
             for row in normalized_existing
             if str(row.get("Логин", "") or "").strip()
         }
+
+        # RouterOS can temporarily omit last-logged-out. Do not erase a
+        # previously observed date for the *same* account, but never carry it
+        # into a recreated/replaced account with a different password or IP.
+        for record in current_clients:
+            old = before.get(str(record.login or "").strip())
+            if not old:
+                continue
+            prior_password = str(old.get("Пароль", "") or "").strip()
+            current_password = str(record.row.get("Пароль", "") or "").strip()
+            prior_ip = str(old.get("Remote Address", "") or "").strip()
+            current_ip = str(record.row.get("Remote Address", "") or "").strip()
+            same_account = bool(
+                prior_password and current_password and prior_ip and current_ip
+                and prior_password == current_password and prior_ip == current_ip
+            )
+            if not same_account:
+                continue
+            old_last = _known_activity_from_recovery(old)
+            now_last = _known_activity_from_recovery(record.row)
+            if old_last and (now_last is None or old_last > now_last):
+                record.row["Последняя активность"] = old_last.replace(
+                    microsecond=0
+                ).isoformat(sep=" ")
+                record.row["Дней без связи"] = str(max(
+                    0, (datetime.now() - old_last).days
+                ))
 
         result = original_reconcile(
             server,
@@ -112,6 +229,7 @@ def install_vpn_sheets_operator_view() -> None:
             initiator=initiator,
             now=now,
             sync_id=sync_id,
+            capture_history=capture_history,
         )
         after = {
             str(row.get("Логин", "") or "").strip(): row
@@ -122,7 +240,7 @@ def install_vpn_sheets_operator_view() -> None:
         for row in result.rows:
             row.update(_normalize_visible_row(row))
         for row in result.archived:
-            row.update(_normalize_visible_row(row))
+            row.update(_restore_activity_from_recovery(_normalize_visible_row(row), archived=True))
 
         for history in result.history:
             if len(history) < 10:
@@ -262,6 +380,60 @@ def install_vpn_sheets_operator_view() -> None:
         # Kept as a strict no-op: LV Сводка no longer exists by design.
         return None
 
+    original_sync_server = sheets.VPNSheetsSyncService.sync_server
+    archive_repair_gate = threading.RLock()
+
+    def repair_deleted_archive(self) -> int:
+        """Backfill archived last-seen dates only from saved RouterOS evidence.
+
+        Run during an explicit manual backup, not continuously. Lock against
+        other server workers writing the same shared deleted sheet.
+        """
+        lock = getattr(self, "_lv_deleted_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._lv_deleted_lock = lock
+        with lock:
+            rows = self.read_deleted_rows("")
+            repaired = 0
+            output = []
+            for old in rows:
+                new = _restore_activity_from_recovery(old, archived=True)
+                repaired += int(any(
+                    str(old.get(key, "") or "") != str(new.get(key, "") or "")
+                    for key in ("Последняя активность", "Дней без связи", "Причина")
+                ))
+                output.append(new)
+            if repaired:
+                self.put_values(
+                    f"'{sheets.DELETED_SHEET}'!A2:Q{len(output) + 1}",
+                    [self._deleted_dict_to_row(row) for row in output],
+                )
+            return repaired
+
+    def sync_server(self, server, creds, *, source="RouterOS sync", initiator=""):
+        result = original_sync_server(self, server, creds, source=source, initiator=initiator)
+        if source == "Ручная сверка RouterOS":
+            repair = getattr(self.backend, "repair_deleted_archive", None)
+            if callable(repair):
+                # Full backup uses several workers, so only one repairs the
+                # shared archive; the backend lock protects concurrent writes.
+                with archive_repair_gate:
+                    if not getattr(self.backend, "_lv_archived_activity_repaired", False):
+                        try:
+                            changed = repair()
+                        except Exception as exc:
+                            from linkvideo_vpn_helper.services.app_logging import event
+                            event("SHEETS", "Не удалось восстановить даты из архивных снимков", str(exc)[:220], level=30)
+                        else:
+                            self.backend._lv_archived_activity_repaired = True
+                            if changed:
+                                from linkvideo_vpn_helper.services.app_logging import event
+                                event("SHEETS", "Восстановлена подтверждённая активность в архиве", f"строк: {changed}")
+        return result
+
+    sheets.VPNSheetsSyncService.sync_server = sync_server
+    backend_cls.repair_deleted_archive = repair_deleted_archive
     sheets.build_current_clients = build_current_clients
     sheets.reconcile_records = reconcile_records
     backend_cls.apply_operator_view = apply_operator_view

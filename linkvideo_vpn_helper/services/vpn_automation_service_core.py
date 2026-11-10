@@ -206,6 +206,10 @@ class VPNAutomationService:
                 if rid:
                     api.set("/system/logging", rid, {"disabled": "no" if enabled else "yes"})
 
+    def _sources_for_routeros(self, api: RouterOSAPIClient):
+        """Version-aware source factory hook, overridden by the public service."""
+        return self.SCRIPT_SOURCES
+
     def _ensure_components(self, api: RouterOSAPIClient, *, preserve_pause: bool = True) -> None:
         """Create/repair the complete LV automation set in one RouterOS session.
 
@@ -224,7 +228,7 @@ class VPNAutomationService:
         was_paused = preserve_pause and had_runtime and not (activity_enabled or restore_enabled or aging_enabled)
         resume_aging = self._resume_aging_from_comment(activity_row) if was_paused else aging_enabled
 
-        for name, factory in self.SCRIPT_SOURCES.items():
+        for name, factory in self._sources_for_routeros(api).items():
             self._upsert_named(api, "/system/script", name, {
                 "source": factory(),
                 "comment": f"LinkVideo.Helper LV Automation {LV_AUTOMATION_VERSION}",

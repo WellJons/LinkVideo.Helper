@@ -134,6 +134,10 @@ def install_visual_density() -> None:
     def patched_get_theme_style(key: str = "rose_milk") -> str:
         base = original(key)
         c = theme.colors(key)
+        if theme.normalize_theme(key) == "terminal_code":
+            # Terminal Code already defines its own strong hierarchy and
+            # tighter console geometry. Do not flatten it with the legacy pass.
+            return base
         return base + _density_qss(c)
 
     patched_get_theme_style._lv_visual_density = True

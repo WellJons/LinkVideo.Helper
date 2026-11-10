@@ -1,0 +1,63 @@
+name: Private Terminal Code 3.0.26 visual QA
+
+on:
+  push:
+    branches:
+      - feature/terminal-code-theme-3.0.26
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-terminal-theme-v3.0.26
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact Terminal Code feature branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Set up Go 1.24
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.x'
+          cache-dependency-path: |
+            installer_next/go.mod
+            patcher/go.mod
+            silent_updater/go.mod
+
+      - name: Install Qt runtime for early visual smoke
+        shell: pwsh
+        run: python -m pip install -r requirements.txt
+
+      - name: Capture real Qt terminal login and workspace
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python scripts/render_terminal_theme_preview.py
+
+      - name: Full Windows installer build and regression checks
+        shell: pwsh
+        run: ./scripts/verify_release.ps1
+
+      - name: Private terminal UI previews and installer (not a Release)
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinkVideo.Helper_3.0.26_TERMINAL_CODE_PRIVATE
+          path: |
+            release_candidate/LinkVideo.Helper_Setup_3.0.26_RC.exe
+            release_candidate/verification.json
+            terminal_preview/terminal-code-login.png
+            terminal_preview/terminal-code-workspace.png
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

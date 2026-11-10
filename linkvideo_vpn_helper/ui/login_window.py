@@ -5,7 +5,7 @@ from pathlib import Path
 import threading
 
 from PySide6.QtCore import QEasingCurve, QObject, QPoint, QPropertyAnimation, QRect, QSettings, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPainterPath
+from PySide6.QtGui import QColor, QFont, QIcon, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QSizePolicy, QScrollArea, QVBoxLayout, QWidget,
@@ -30,7 +30,8 @@ class LoginIllustration(QWidget):
 
     def __init__(self, theme_key: str, parent=None):
         super().__init__(parent)
-        from linkvideo_vpn_helper.theme import colors
+        from linkvideo_vpn_helper.theme import colors, normalize_theme
+        self.theme_key = normalize_theme(theme_key)
         self.palette_colors = colors(theme_key)
         self.setObjectName("LoginIllustration")
 
@@ -42,6 +43,9 @@ class LoginIllustration(QWidget):
         c = self.palette_colors
         painter.fillRect(self.rect(), QColor(c["bg"]))
         if w < 5 or h < 5:
+            return
+        if self.theme_key == "terminal_code":
+            self._paint_terminal(painter, w, h)
             return
 
         # Curved waves are intentionally low-contrast behind the login brand.
@@ -66,6 +70,51 @@ class LoginIllustration(QWidget):
             gradient.setColorAt(0, top)
             gradient.setColorAt(1, bottom)
             painter.fillPath(shape, gradient)
+
+
+    def _paint_terminal(self, painter: QPainter, w: float, h: float) -> None:
+        """Decorative IDE/editor illustration, never live server status."""
+        painter.save()
+        painter.setPen(QPen(QColor("#1B343C"), 1))
+        for x in range(0, int(w), 33):
+            for y in range(0, int(h), 33):
+                painter.drawPoint(x, y)
+        x = max(18, int(w * 0.065))
+        box_w = max(10, int(w - 2 * x))
+        box_y = int(h * 0.16)
+        box_h = max(130, int(h * 0.55))
+        painter.setPen(QPen(QColor("#31545B"), 1))
+        painter.setBrush(QColor("#0F1D26"))
+        painter.drawRoundedRect(x, box_y, box_w, box_h, 8, 8)
+        painter.fillRect(x + 1, box_y + 1, box_w - 2, 39, QColor("#172A33"))
+        for index, color in enumerate(("#F47688", "#F0BE62", "#56D99F")):
+            painter.setPen(QColor(color))
+            painter.setBrush(QColor(color))
+            painter.drawEllipse(x + 17 + 17 * index, box_y + 15, 8, 8)
+        painter.setPen(QColor("#88AEB2"))
+        painter.setFont(QFont("Consolas", 9))
+        painter.drawText(x + 79, box_y + 25, "linkvideo / terminal-code")
+
+        snippets = (
+            ("01", "// UI PREVIEW — NO LIVE SERVER DATA", "#5C9494"),
+            ("02", "const app = 'LinkVideo.Helper';", "#79E9BB"),
+            ("03", "const mode = 'operator';", "#9AD7F5"),
+            ("04", "const auth = 'pending';", "#F3C77C"),
+            ("05", "const workspace = 'ready';", "#E4FAF1"),
+            ("06", ">", "#6BE6AA"),
+        )
+        painter.setFont(QFont("Consolas", 9))
+        line_y = box_y + 72
+        line_step = max(23, min(34, int((box_h - 100) / 5)))
+        for number, line, color in snippets:
+            if line_y > box_y + box_h - 18:
+                break
+            painter.setPen(QColor("#5C8890"))
+            painter.drawText(x + 14, line_y, number)
+            painter.setPen(QColor(color))
+            painter.drawText(x + 50, line_y, line)
+            line_y += line_step
+        painter.restore()
 
 
 class _LoginVerificationSignals(QObject):
@@ -153,6 +202,11 @@ class LoginWindow(QDialog):
         fl.setContentsMargins(32, 30, 32, 28)
         fl.setSpacing(11)
 
+        terminal_label = QLabel("> AUTHENTICATE / MIKROTIK")
+        terminal_label.setObjectName("TerminalPrompt")
+        from linkvideo_vpn_helper.theme import normalize_theme
+        terminal_label.setVisible(normalize_theme(theme_key) == "terminal_code")
+        fl.addWidget(terminal_label)
         heading = QLabel("Вход в программу")
         heading.setObjectName("LoginTitle")
         fl.addWidget(heading)

@@ -62,7 +62,12 @@ def _migrate_settings(settings: QSettings):
         else:
             legacy = QSettings("LinkVideo", "VPNHelper")
             legacy_theme = str(legacy.value("ui/theme", "", str) or "").lower()
-            settings.setValue("ui/theme_v2", "dark" if "dark" in legacy_theme else "linkvideo_2026")
+            # Fresh installations get the terminal workspace. Existing saved
+            # preferences and older VPNHelper themes remain untouched.
+            if legacy_theme:
+                settings.setValue("ui/theme_v2", "dark" if "dark" in legacy_theme else "linkvideo_2026")
+            else:
+                settings.setValue("ui/theme_v2", "terminal_code")
 
     # Migrate the old RouterOS login only once. A logout must never re-import
     # the former VPNHelper password and automatically sign the user in again.
