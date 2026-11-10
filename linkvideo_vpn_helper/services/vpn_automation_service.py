@@ -384,6 +384,27 @@ class VPNAutomationService(_CoreVPNAutomationService):
             if rid:
                 api.remove("/system/logging/action", rid)
 
+    def _sources_for_routeros(self, api):
+        """Install v6-compatible epoch-day sources on RouterOS 6.x.
+
+        The regular 2.1.2 scripts use v7-only :timestamp/:tonsec.
+        The version is read from /system/resource on the SAME connection
+        before any LV scripts are created.
+        """
+        sources = super()._sources_for_routeros(api)
+        try:
+            info = api.print("/system/resource", {".proplist": "version"})
+        except Exception:
+            info = api.print("/system/resource")
+        version = str((info[0] if info else {}).get("version", "") or "")
+        if not version.startswith("6."):
+            return sources
+        from linkvideo_vpn_helper.services.routeros6_lv_clock import adapt_script_for_routeros6
+        return {
+            name: (lambda f=factory: adapt_script_for_routeros6(f()))
+            for name, factory in sources.items()
+        }
+
     def _ensure_components(self, api, *, preserve_pause: bool = True) -> None:
         # Repair named LV scripts and schedulers, preserving operator settings.
         super()._ensure_components(api, preserve_pause=preserve_pause)
