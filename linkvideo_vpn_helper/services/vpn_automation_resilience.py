@@ -36,32 +36,26 @@ def install_vpn_automation_resilience() -> None:
 
     @classmethod
     def find_ids(cls, api, path: str, field: str, value: str):
-        # Prefer exact/broad print because every supported RouterOS menu returns
-        # stable internal .id there. /find is retained only as a last fallback
-        # and uses an API query word rather than an assignment word.
-        rows = []
+        # CRITICAL: RouterOS API query words are valid ONLY for /print.
+        # Never fall back to /find: it can return the first, unrelated ID
+        # and overwrite LV-Activity with LV-Aging or LV-AutoRestore.
+        # A full name/id-only /print is small and works on RouterOS 6/7.
         try:
-            rows = api.print(path, {".proplist": f".id,{field}", f"?{field}=": value})
+            rows = api.print(path, {".proplist": f".id,{field}"})
         except Exception:
-            try:
-                rows = api.print(path)
-            except Exception:
-                rows = []
-        result = []
-        for row in rows or []:
-            if str(row.get(field, "") or "").strip() != str(value).strip():
-                continue
-            rid = str(row.get(".id", "") or "").strip()
-            if rid and rid not in result:
-                result.append(rid)
-        if result:
-            return result
-        try:
-            replies = api.talk(f"{path}/find", {f"?{field}=": value})
-            return cls._ret_ids(replies)
-        except Exception:
-            return []
+            # Legacy implementations may reject .proplist; retry once with
+            # plain print, but propagate a genuine read failure.
+            rows = api.print(path)
+        expected = str(value).strip()
+        return list(dict.fromkeys(
+            str(row.get(".id", "") or "").strip()
+            for row in (rows or [])
+            if str(row.get(field, "") or "").strip() == expected
+            and str(row.get(".id", "") or "").strip()
+        ))
 
     VPNAutomationService._apply_optional_fields = apply_optional_fields
+    # This runtime monkeypatch is installed at app startup. Keep its name
+    # lookup semantics identical to the public service, never a weaker /find.
     VPNAutomationService._find_ids = find_ids
     _INSTALLED = True
