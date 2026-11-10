@@ -31,7 +31,6 @@ class CreateClientPage(QWidget):
         self.search = search
         self.credentials = credentials
         self.registry = registry
-        self._ip_start_host = ""
         self._last_records: list[ClientRecord] = []
         self._retry_action = None
         self._cancel_event = None
@@ -122,26 +121,9 @@ class CreateClientPage(QWidget):
         pl.addLayout(ports_box, 1); pl.addLayout(accounts_box, 1)
         fl.addWidget(params)
 
-        ip_row = QHBoxLayout()
-        ip_row.setSpacing(12)
-        ip_caption = QLabel("Начальный Remote Address")
-        ip_caption.setObjectName("TinyMuted")
-        ip_row.addWidget(ip_caption)
-        self.ip_start = QLineEdit()
-        self.ip_start.setObjectName("VPNCreateStartIP")
-        self.ip_start.setPlaceholderText(DEFAULT_START_IP)
-        self.ip_start.setMaximumWidth(170)
-        self.ip_start.setToolTip(
-            "Начало поиска первого свободного адреса для выбранного VPN. "
-            "Высокие IP, заданные вручную, не сдвигают диапазон. "
-            "Адрес сохраняется отдельно для каждого сервера."
-        )
-        ip_row.addWidget(self.ip_start)
-        ip_row.addStretch(1)
-        fl.addLayout(ip_row)
-        self.ip_start.editingFinished.connect(self._save_ip_start)
-        self.server_picker.changed.connect(self._load_ip_start)
-        self._load_ip_start(self.server_picker.host())
+        # Address selection is automatic. Per-server starts from previous
+        # versions remain honored internally, but no IP tuning is shown in
+        # the ordinary client-creation workflow.
 
         self.actions_row = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         self.actions_row.setSpacing(8)
@@ -229,29 +211,10 @@ class CreateClientPage(QWidget):
         # untouched defaults; preserve any other operator-defined start.
         if not stored or stored == "172.16.1.176":
             return DEFAULT_START_IP
-        return stored
-
-    def _save_ip_start(self):
-        host = self._ip_start_host
-        if not host or not hasattr(self, "ip_start"):
-            return
         try:
-            value = validate_start_ip(self.ip_start.text())
+            return validate_start_ip(stored)
         except ValueError:
-            # Keep the input visible so the operator can correct it. Never
-            # persist an invalid pool start.
-            return
-        self.registry.settings.setValue(self._ip_start_key(host), value)
-        self.registry.settings.sync()
-
-    def _load_ip_start(self, host: str):
-        if not hasattr(self, "ip_start"):
-            return
-        # Save an edited start for the previously selected server, not the new
-        # one. Each VPN may use a different local address plan.
-        self._save_ip_start()
-        self._ip_start_host = str(host or "").strip()
-        self.ip_start.setText(self._ip_start_for_server(host) if host else DEFAULT_START_IP)
+            return DEFAULT_START_IP
 
     def _begin_operation(self):
         event = threading.Event()
@@ -399,13 +362,6 @@ class CreateClientPage(QWidget):
             self.task.show()
             self.task.warning("Введите логин", "Поле логина не может быть пустым.")
             return
-        try:
-            requested_start = validate_start_ip(self.ip_start.text())
-        except ValueError as exc:
-            self.task.show()
-            self.task.warning("Проверьте начальный Remote Address", str(exc))
-            return
-        self._save_ip_start()
         # Snapshot preferences on the GUI thread; the background worker must
         # not read QSettings created in a different thread.
         server_starts = {
@@ -456,7 +412,7 @@ class CreateClientPage(QWidget):
                 except Exception:
                     planned_login = login
 
-                chosen_start = requested_start if chosen == selected else server_starts.get(chosen, DEFAULT_START_IP)
+                chosen_start = server_starts.get(chosen, DEFAULT_START_IP)
                 self.progressReady.emit(
                     "Создаю клиента",
                     f"{chosen} · ищу свободный IP от {chosen_start} и проверяю NAT-порты…", 30,

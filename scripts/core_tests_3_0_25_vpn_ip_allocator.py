@@ -11,7 +11,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from PySide6.QtCore import QSettings
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLineEdit
 
 from linkvideo_vpn_helper.services.vpn_address_allocator import (
     DEFAULT_START_IP, next_free_address, used_remote_addresses, validate_start_ip,
@@ -106,23 +106,18 @@ with TemporaryDirectory() as directory:
     settings = QSettings(str(Path(directory) / "test.ini"), QSettings.Format.IniFormat)
     registry = ServerRegistry(settings)
     page = CreateClientPage(VPNService(), None, SessionCredentials("admin", "placeholder"), registry)
-    assert page.ip_start.text() == DEFAULT_START_IP
+    assert page.findChild(QLineEdit, "VPNCreateStartIP") is None
+    assert page._ip_start_for_server(page.server_picker.host()) == DEFAULT_START_IP
     one = page.server_picker.host()
-    page.ip_start.setText("172.16.0.5")
-    page._save_ip_start()
-    assert settings.value(page._ip_start_key(one)) == "172.16.0.5"
-
     other = next(host for host in registry.hosts() if host != one)
-    # The legacy default may have been implicitly persisted on another server.
+    # Legacy per-server preferences remain honored, but no start-IP input is
+    # displayed in the ordinary creation form.
+    settings.setValue(page._ip_start_key(one), "172.16.0.5")
     settings.setValue(page._ip_start_key(other), "172.16.1.176")
-    page.server_picker.setHost(other)
-    assert page.ip_start.text() == DEFAULT_START_IP
-    page.ip_start.setText("172.16.0.9")
-    page._save_ip_start()
-    page.server_picker.setHost(one)
-    assert page.ip_start.text() == "172.16.0.5"
-    page.server_picker.setHost(other)
-    assert page.ip_start.text() == "172.16.0.9"
+    assert page._ip_start_for_server(one) == "172.16.0.5"
+    assert page._ip_start_for_server(other) == DEFAULT_START_IP
+    settings.setValue(page._ip_start_key(other), "INVALID")
+    assert page._ip_start_for_server(other) == DEFAULT_START_IP
     page.close()
 
-print("CORE TESTS 3.0.25 REMOTE ADDRESS PER SERVER FIRST FREE HIGH OUTLIER OK")
+print("CORE TESTS REMOTE ADDRESS AUTO-ALLOCATION (NO UI FIELD) OK")
