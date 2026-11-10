@@ -261,11 +261,6 @@ class VPNAutomationService(_CoreVPNAutomationService):
         )
         chosen = ""
         for action in candidates:
-            if action == "memory" and "memory" not in actions:
-                # Verify the fallback only when it is actually necessary.
-                # A valid LVAuth setup does not depend on the memory action
-                # appearing in API's readback (older RouterOS/test variants).
-                raise RuntimeError("RouterOS не подтвердил стандартное действие логирования memory")
             try:
                 if row:
                     # Existing row was selected by its topics already. Change
@@ -395,8 +390,14 @@ class VPNAutomationService(_CoreVPNAutomationService):
             managed = [row for row in (ppp, l2tp) if row]
             status.logging_ready = (
                 len(managed) == 2
-                and all(str(row.get("action", "") or "").strip() in installed_actions
-                        for row in managed)
+                and all(
+                    # RouterOS guarantees the built-in "memory" action; some
+                    # versions omit built-in actions in the API list. A rule
+                    # which already references "memory" is sufficient proof.
+                    (str(row.get("action", "") or "").strip() == "memory")
+                    or str(row.get("action", "") or "").strip() in installed_actions
+                    for row in managed
+                )
             )
             status.logging_enabled = bool(managed) and all(
                 not self._bool(row.get("disabled", "no")) for row in managed
