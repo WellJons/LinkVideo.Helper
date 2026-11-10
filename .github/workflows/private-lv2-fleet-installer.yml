@@ -1,0 +1,52 @@
+name: Private LV2 fleet QA installer (PR 39 only)
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-lv2-fleet-pr-39
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.event.pull_request.number == 39
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact PR source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Set up Go 1.24
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.x'
+          cache-dependency-path: |
+            installer_next/go.mod
+            patcher/go.mod
+            silent_updater/go.mod
+
+      - name: Full offline regression and verified Windows Setup
+        shell: pwsh
+        run: ./scripts/verify_release.ps1
+
+      - name: Save downloadable QA installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinkVideo-Helper-LV2-Fleet-TEST
+          path: |
+            release_candidate/LinkVideo.Helper_Setup_3.0.25_RC.exe
+            release_candidate/verification.json
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
