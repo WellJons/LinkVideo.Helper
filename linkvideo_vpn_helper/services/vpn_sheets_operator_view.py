@@ -89,7 +89,13 @@ def install_vpn_sheets_operator_view() -> None:
             record.row.update(_normalize_visible_row(record.row))
             meta = parse_extended_comment(str(record.row.get("Комментарий RouterOS", "") or ""))
             if record.login not in active_names and meta.last_ns <= 0:
-                record.row["Последняя активность"] = "Никогда"
+                # The RouterOS 1970 sentinel is not evidence of no previous
+                # connection. Only LV2 creation/never-active provenance proves
+                # that claim. Legacy accounts must remain unknown.
+                confirmed_never = meta.reason in {"created", "never_active_30"}
+                record.row["Последняя активность"] = (
+                    "Никогда" if confirmed_never else "Неизвестна"
+                )
                 record.row["Дней без связи"] = ""
         return current
 
