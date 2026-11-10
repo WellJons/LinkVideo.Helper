@@ -51,6 +51,14 @@ class FakeRouterOS:
         return [dict(r) for r in self.rows[path]]
 
     def talk(self, command, params=None, raise_on_trap=True):
+        if self.mode == "find_ignores_name" and command in {
+            "/system/script/find", "/system/scheduler/find",
+        }:
+            # An improperly filtered /find returns an unrelated first ID.
+            # Correct Helper code must use /print query + exact name check.
+            path = command[:-5]
+            rows = self.rows.get(path, [])
+            return [{"ret": rows[0][".id"]}] if rows else []
         return []
 
     def add(self, path, params):
@@ -108,6 +116,7 @@ for mode, expected_action in (
     ("reject_extended_args", "LVAuth"),
     ("memory_not_listed", "memory"),
     ("memory_no_id", "memory"),
+    ("find_ignores_name", "LVAuth"),
 ):
     api = FakeRouterOS(mode)
     # The new server has an unrelated global default memory rule.
@@ -125,6 +134,12 @@ for mode, expected_action in (
     assert rules[0] == original_default, "Never change unrelated logging rules"
     assert len(api.rows["/system/script"]) == 3
     assert len(api.rows["/system/scheduler"]) == 3
+    assert {row["name"] for row in api.rows["/system/script"]} == {
+        "LV-Activity", "LV-Aging", "LV-AutoRestore",
+    }, (mode, api.rows["/system/script"])
+    assert {row["name"] for row in api.rows["/system/scheduler"]} == {
+        "LV-Activity", "LV-Aging", "LV-AutoRestore",
+    }, (mode, api.rows["/system/scheduler"])
     assert next(s for s in api.rows["/system/scheduler"] if s["name"] == LV_AGING_SCHED)["disabled"] == "yes"
     assert not any(path.startswith("/ppp") for op, path, params in api.mutations)
 
