@@ -251,7 +251,7 @@ class VPNAutomationService(_CoreVPNAutomationService):
 
         current_action = str((row or {}).get("action", "") or "").strip()
         candidates = (
-            [current_action] if row and current_action in {"memory", LV_LOG_ACTION}
+            ["memory"] if row and current_action == "memory"
             else ([LV_LOG_ACTION, "memory"] if LV_LOG_ACTION in actions else ["memory"])
         )
         if "memory" not in actions and "memory" in candidates:
@@ -276,7 +276,6 @@ class VPNAutomationService(_CoreVPNAutomationService):
                 if action == LV_LOG_ACTION and cls._invalid_action_reference(exc):
                     # The LVAuth name may exist in a stale/unsupported action
                     # listing but still be rejected by /system/logging.
-                    candidates = [LV_LOG_ACTION, "memory"]
                     continue
                 raise cls._component_error("/system/logging", topics, "topics/action", exc) from exc
 
