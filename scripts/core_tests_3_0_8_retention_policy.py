@@ -89,7 +89,8 @@ assert len(sheets.SERVER_COLUMNS) == 20
 sheet_compat = (ROOT / "linkvideo_vpn_helper/services/vpn_sheets_retention_compat.py").read_text(encoding="utf-8")
 assert "A2:T1500" in sheet_compat
 assert "A2:T{write_count + 1}" in sheet_compat
-assert "Удалена автоматически" in sheet_compat
+assert "причина удаления не подтверждена" in sheet_compat
+assert "apply_policy_now" not in sheet_compat
 assert "Отключена автоматически: нет активности 90+ дней" in sheet_compat
 
 manual_refresh = (ROOT / "linkvideo_vpn_helper/ui/vpn_servers_manual_refresh.py").read_text(encoding="utf-8")
