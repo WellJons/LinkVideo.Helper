@@ -11,7 +11,8 @@ from unittest.mock import patch
 
 from linkvideo_vpn_helper.services import vpn_automation_service as public
 from linkvideo_vpn_helper.services.vpn_automation_service_core import LV_AGING_SCHED
-from linkvideo_vpn_helper.services.vpn_retention_policy import restore_script_source
+from linkvideo_vpn_helper.services.vpn_retention_policy import restore_script_source, install_retention_policy
+from linkvideo_vpn_helper.services.vpn_automation_resilience import install_vpn_automation_resilience
 from linkvideo_vpn_helper.services.vpn_service import SessionCredentials
 
 
@@ -34,6 +35,7 @@ class FakeRouterOS:
             ],
         }
         self.mutations = []
+        self.commands = []
 
     def __enter__(self):
         return self
@@ -51,6 +53,7 @@ class FakeRouterOS:
         return [dict(r) for r in self.rows[path]]
 
     def talk(self, command, params=None, raise_on_trap=True):
+        self.commands.append(command)
         if self.mode == "find_ignores_name" and command in {
             "/system/script/find", "/system/scheduler/find",
         }:
@@ -106,6 +109,11 @@ class FakeRouterOS:
         self.set(path, rid, {"disabled": "yes"})
 
 
+# Run the same startup monkeypatch order as the real desktop application.
+# The previous regression tested only the base class and missed the broken
+# resilience wrapper that silently restored /find at application startup.
+install_vpn_automation_resilience()
+install_retention_policy()
 svc = public.VPNAutomationService()
 creds = SessionCredentials("fake-operator", "fake-password")
 for mode, expected_action in (
@@ -142,6 +150,7 @@ for mode, expected_action in (
     }, (mode, api.rows["/system/scheduler"])
     assert next(s for s in api.rows["/system/scheduler"] if s["name"] == LV_AGING_SCHED)["disabled"] == "yes"
     assert not any(path.startswith("/ppp") for op, path, params in api.mutations)
+    assert not any("/find" in cmd for cmd in getattr(api, "commands", [])), mode
 
     if expected_action == "memory" and mode != "memory_no_id":
         assert {r.get("prefix") for r in managed} == {"LV-AUTH-PPP", "LV-AUTH-L2TP"}
