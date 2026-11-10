@@ -246,7 +246,9 @@ def aging_script_source() -> str:
                 :if ($state = "Q") do={{
                     /ppp secret set $sid comment=($base . "{LV_MARKER}s=Q|l=" . $last . "|c=" . $created . "|r=q|")
                 }} else={{
-                    /ppp secret set $sid comment=($base . "{LV_MARKER}s=M|l=" . $last . "|c=" . $created . "|r=m|")
+                    :local code "m"
+                    :if (($last = 0) && ($verifiedNever)) do={{ :set code "b" }}
+                    /ppp secret set $sid comment=($base . "{LV_MARKER}s=M|l=" . $last . "|c=" . $created . "|r=" . $code . "|")
                 }}
             }} else={{
                 :if ($age >= {QUARANTINE_DAYS}) do={{
@@ -298,6 +300,8 @@ def _desired_state(last_ns: int, created_ns: int, disabled: bool, was_quarantine
     if last_ns <= 0:
         if verified_never and age >= NEVER_ACTIVE_DELETE_DAYS:
             return "R", "never_active_30"
+        if verified_never:
+            return ("M", "created") if disabled else ("U", "created")
         return ("M", "manual_or_external_disabled") if disabled else ("U", "never_active_tracking")
     if last_ns > 0 and age >= DELETE_DAYS:
         return "R", "inactive_365"
@@ -515,7 +519,7 @@ def apply_policy_now(server, creds) -> dict[str, int]:
 
             if disabled:
                 state = "Q" if meta.state == "Q" else "M"
-                reason = "inactive_90" if state == "Q" else "manual_or_external_disabled"
+                reason = "inactive_90" if state == "Q" else ("created" if last_ns <= 0 and meta.reason == "created" else "manual_or_external_disabled")
                 api.set("/ppp/secret", rid, {
                     "comment": compose_extended_comment(meta.base_comment, state, last_ns, created_ns, reason)
                 })
@@ -536,7 +540,7 @@ def apply_policy_now(server, creds) -> dict[str, int]:
                 counts["sleeping"] += 1
             else:
                 state = "U" if last_ns <= 0 else "A"
-                reason = "never_active_tracking" if state == "U" else "tracked"
+                reason = ("created" if meta.reason == "created" else "never_active_tracking") if state == "U" else "tracked"
                 api.set("/ppp/secret", rid, {
                     "comment": compose_extended_comment(meta.base_comment, state, last_ns, created_ns, reason)
                 })
@@ -676,9 +680,11 @@ def install_retention_policy() -> None:
                     rid = str(row.get(".id", "") or "").strip()
                     meta = parse_extended_comment(str(row.get("comment", "") or ""))
                     created = int(meta.created_ns or now_ns)
-                    reason = "manual_enabled" if enabled else "manual_disabled"
-                    state = "A" if enabled else "M"
-                    last_ns = now_ns if enabled else int(meta.last_ns or 0)
+                    has_no_login = int(meta.last_ns or 0) <= 0 and meta.reason == "created"
+                    reason = "created" if has_no_login else ("manual_enabled" if enabled else "manual_disabled")
+                    state = ("U" if has_no_login else "A") if enabled else "M"
+                    # Changing the admin toggle is not a successful VPN connection.
+                    last_ns = int(meta.last_ns or 0)
                     if rid:
                         api.set("/ppp/secret", rid, {
                             "comment": compose_extended_comment(meta.base_comment, state, last_ns, created, reason)
