@@ -353,6 +353,7 @@ def install_vpn_sheets_operator_view() -> None:
         return None
 
     original_sync_server = sheets.VPNSheetsSyncService.sync_server
+    archive_repair_gate = threading.RLock()
 
     def repair_deleted_archive(self) -> int:
         """Backfill archived last-seen dates only from saved RouterOS evidence.
@@ -389,7 +390,7 @@ def install_vpn_sheets_operator_view() -> None:
             if callable(repair):
                 # Full backup uses several workers, so only one repairs the
                 # shared archive; the backend lock protects concurrent writes.
-                with self.backend._lv_deleted_lock if hasattr(self.backend, "_lv_deleted_lock") else threading.RLock():
+                with archive_repair_gate:
                     if not getattr(self.backend, "_lv_archived_activity_repaired", False):
                         try:
                             changed = repair()
