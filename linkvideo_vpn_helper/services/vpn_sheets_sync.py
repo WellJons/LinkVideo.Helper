@@ -616,7 +616,11 @@ def build_current_clients(service: VPNService, snapshot: dict[str, list[dict]]) 
         has_lv = has_lv_metadata(comment)
         raw_last = str(secret.get("last-logged-out", "") or secret.get("last_logged_out", "") or "").strip()
         fallback_dt = service.parse_router_datetime(raw_last)
-        last_ns = int(meta.last_ns or 0)
+        native_ns = int(fallback_dt.timestamp() * 1_000_000_000) if fallback_dt else 0
+        # Preserve the newest *observed* activity, even when an LV2 marker
+        # exists with l=0 (migrated account) or has a stale last day. The old
+        # code only considered native RouterOS dates for non-LV clients.
+        last_ns = max(int(meta.last_ns or 0), native_ns)
         if active:
             state = "A"
             last_activity = now.replace(microsecond=0).isoformat(sep=" ")
@@ -625,10 +629,7 @@ def build_current_clients(service: VPNService, snapshot: dict[str, list[dict]]) 
             if has_lv:
                 state = str(meta.state or "U")
             else:
-                fallback_ns = int(fallback_dt.timestamp() * 1_000_000_000) if fallback_dt else 0
-                state = classify_state(fallback_ns, disabled, False)
-                if last_ns <= 0:
-                    last_ns = fallback_ns
+                state = classify_state(last_ns, disabled, False)
             if last_ns > 0:
                 last_dt = datetime.fromtimestamp(last_ns / 1_000_000_000)
                 last_activity = last_dt.replace(microsecond=0).isoformat(sep=" ")
