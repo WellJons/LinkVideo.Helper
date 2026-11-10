@@ -27,7 +27,9 @@ VPNAutomationService._apply_optional_fields(
 assert len(fake.calls) == 2
 
 resilience = (ROOT / "linkvideo_vpn_helper/services/vpn_automation_resilience.py").read_text(encoding="utf-8")
-assert 'f"?{field}=": value' in resilience
+assert 'api.print(path, {".proplist": f".id,{field}"})' in resilience
+assert 'api.print(path)' in resilience
+assert 'api.talk(f"{path}/find"' not in resilience
 assert "except Exception:" in resilience
 
 # Manual VPN client scan must yield to the Qt event loop before the real network
