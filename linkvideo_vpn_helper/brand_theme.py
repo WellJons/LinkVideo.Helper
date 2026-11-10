@@ -101,6 +101,9 @@ def install_linkvideo_brand_theme() -> None:
     def themed_style(key: str = "rose_milk") -> str:
         # The application and MainWindow both obtain their stylesheet through
         # this function, including every live theme switch in Settings.
+        if theme_module.normalize_theme(key) == "terminal_code":
+            # The terminal skin owns its editor-like combo boxes too.
+            return original_get_theme_style(key)
         return original_get_theme_style(key) + _combo_box_theme_qss(key)
 
     theme_module.get_theme_style = themed_style
