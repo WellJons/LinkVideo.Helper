@@ -61,7 +61,7 @@ def main() -> int:
 
     # Current local RouterOS automation is 2.1.1; an installed 2.0.0
     # must be reported as requiring an update rather than as an UI error.
-    assert 'RETENTION_VERSION = "2.1.1"' in policy
+    assert 'RETENTION_VERSION = "2.1.2"' in policy
     assert "public.LV_AUTOMATION_VERSION = RETENTION_VERSION" in policy
 
     print("LV_CONTROLS_RESTORED_OK")
