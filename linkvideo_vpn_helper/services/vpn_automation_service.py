@@ -177,8 +177,9 @@ class VPNAutomationService(_CoreVPNAutomationService):
         tagged = bool(prefix) and str(row.get("prefix", "") or "").strip() == prefix
 
         if action == LV_LOG_ACTION:
-            # Existing dedicated-buffer rules may lack the optional prefix.
-            return same_topics or tagged
+            # Exact topic identity is mandatory for any automatic cleanup.
+            # A mismatched prefix alone must never target another log rule.
+            return same_topics
         if action == "memory":
             # Do not confuse a system/default memory rule with a managed LV
             # rule: fallback identity REQUIRES our exact, unique prefix.
