@@ -51,7 +51,7 @@ def _external_ports_text(value: str) -> str:
 def _reason_text(reason: str, state: str = "") -> str:
     mapping = {
         "created": "Создана; ожидается первая активность",
-        "never_active_tracking": "Ни одной активности; удаление через 30 дней от создания",
+        "never_active_tracking": "История подключений неизвестна; удаление по возрасту запрещено",
         "tracked": "Активность была менее 30 дней назад",
         "activity": "Активность подтверждена RouterOS",
         "inactive_30": "Нет активности 30+ дней",
@@ -70,7 +70,7 @@ def _reason_text(reason: str, state: str = "") -> str:
         "Q": "Отключена автоматически: нет активности 90+ дней",
         "S": "Нет активности 30+ дней",
         "M": "Отключена вручную или напрямую в RouterOS",
-        "U": "Ни одной подтверждённой активности; удаление через 30 дней",
+        "U": "История подключений неизвестна; удаление без подтверждения запрещено",
         "R": "Подлежит автоматическому удалению: 365+ дней без активности",
         "A": "Активна",
     }
@@ -78,36 +78,45 @@ def _reason_text(reason: str, state: str = "") -> str:
 
 
 def _deleted_reason(old: dict[str, str], source: str, now: datetime) -> str:
+    """Describe evidence without guessing the actor or deletion mechanism.
+
+    A missing PPP Secret only proves that it disappeared. Neither a Google
+    first-seen date nor an inactivity threshold proves LV-Aging deleted it.
+    """
     low_source = str(source or "").lower()
-    if "helper" in low_source and "удален" in low_source:
+    if "helper" in low_source and (
+        "удаление клиента" in low_source or "удален" in low_source
+    ):
         return "Удалена вручную через Helper"
 
-    # Prefer the LV marker because it is the exact reference used by LV-Aging.
     meta = parse_extended_comment(str(old.get("Комментарий RouterOS", "") or ""))
     now_ns = int(now.timestamp() * 1_000_000_000)
+
     if meta.last_ns > 0:
         days = max(0, int((now_ns - meta.last_ns) // DAY_NS))
-        if days >= 365:
-            return f"Удалена автоматически: {days} дн. без активности"
-    if meta.last_ns <= 0 and meta.created_ns > 0:
+        return (
+            f"Удалена в RouterOS; последняя активность {days} дн. назад "
+            "(причина удаления не подтверждена)"
+        )
+
+    # Only a Helper-created account carries a trusted never-active baseline.
+    # Legacy accounts with r=c or missing metadata have *unknown* history.
+    if meta.created_ns > 0 and meta.reason in {"created", "never_active_30"}:
         days = max(0, int((now_ns - meta.created_ns) // DAY_NS))
-        if days >= 30:
-            return f"Удалена автоматически: {days} дн. без единой активности"
+        return (
+            f"Удалена в RouterOS; без подтверждённых подключений {days} дн. "
+            "(причина удаления не подтверждена)"
+        )
 
     last_dt = _parse_dt(old.get("Последняя активность", ""))
-    first_dt = _parse_dt(old.get("Первое обнаружение", ""))
     if last_dt is not None:
         days = max(0, (now - last_dt).days)
-        if days >= 365:
-            return f"Удалена автоматически: {days} дн. без активности"
-    if last_dt is None and first_dt is not None:
-        days = max(0, (now - first_dt).days)
-        if days >= 30:
-            return f"Удалена автоматически: {days} дн. без единой активности"
-    old_reason = str(old.get("Причина", "") or "").strip()
-    if "365+" in old_reason or "30+" in old_reason:
-        return old_reason.replace("Подлежит автоматическому удалению", "Удалена автоматически")
-    return "Удалена в RouterOS; причина не подтверждена"
+        return (
+            f"Удалена в RouterOS; последняя активность {days} дн. назад "
+            "(причина удаления не подтверждена)"
+        )
+
+    return "Удалена в RouterOS; история подключений и причина удаления неизвестны"
 
 
 def _history_event(reason: str, row: dict[str, str], source: str) -> str | None:
@@ -227,7 +236,19 @@ def install_vpn_sheets_retention_compat() -> None:
             if not was_deleted and login not in current_by_login:
                 reason = _deleted_reason(old, source, moment)
                 row["Причина"] = reason
-                row["Кто удалил"] = str(initiator or "RouterOS")
+                known_operator = "helper" in str(source or "").lower() and (
+                    "удаление клиента" in str(source or "").lower()
+                    or "удален" in str(source or "").lower()
+                )
+                row["Кто удалил"] = (
+                    str(initiator or "Оператор Helper")
+                    if known_operator
+                    else "Неизвестно (обнаружено при сверке)"
+                )
+                # Preserve recovery data in RouterOS snapshot. Lifecycle in
+                # the deleted tab describes the fact of deletion, not an
+                # obsolete pre-deletion "365+" candidate label.
+                row["Lifecycle"] = "Удалена"
                 newly_deleted[login] = reason
                 event("SHEETS", "Причина удаления VPN", f"{server} · {login} · {reason}")
             elif not row.get("Причина"):
@@ -243,8 +264,13 @@ def install_vpn_sheets_retention_compat() -> None:
             login = str(history_row[2] or "").strip()
             if login in newly_deleted:
                 history_row[3] = newly_deleted[login]
-                if str(newly_deleted[login]).startswith("Удалена автоматически"):
-                    history_row[8] = "LV Automation / RouterOS"
+                history_row[8] = str(
+                    next(
+                        (row.get("Кто удалил", "") for row in result.archived
+                         if str(row.get("Логин", "") or "").strip() == login),
+                        "Неизвестно (обнаружено при сверке)",
+                    )
+                )
                 continue
 
             item = current_by_login.get(login)
@@ -348,66 +374,19 @@ def install_vpn_sheets_retention_compat() -> None:
         return None
 
     def sync_server(self, server, creds, *, source="RouterOS sync", initiator=""):
-        # Mirror to Google when available, then catch up missed daily RouterOS
-        # cleanup. RouterOS LV-Aging does not depend on this mirror.
-        result = original_sync_server(
+        """Mirror RouterOS to Sheets; never trigger an implicit retention sweep.
+
+        A manual backup, startup sync or periodic export must never delete PPP
+        Secrets/NAT. Expiration is owned only by the explicitly enabled
+        RouterOS LV-Aging scheduler and guarded LV controls.
+        """
+        return original_sync_server(
             self,
             server,
             creds,
             source=source,
             initiator=initiator,
         )
-        if not result.success:
-            return result
-        try:
-            rows = self.backend.read_server_rows(server)
-            overdue = _retention_overdue(rows)
-            if not overdue:
-                return result
-
-            # Respect an operator-disabled LV-Aging switch. The safety sweep only
-            # compensates for a missed/failed daily scheduler when retention itself
-            # is actually enabled on this server.
-            from linkvideo_vpn_helper.services.vpn_automation_service import VPNAutomationService
-            from linkvideo_vpn_helper.services.vpn_retention_policy import apply_policy_now
-
-            status = VPNAutomationService().get_status(server, creds)
-            if not status.aging_enabled:
-                event(
-                    "LV",
-                    "Просрочено retention-удаление",
-                    f"{server} · {len(overdue)} учёток 365+/never-active 30+, но LV-Aging выключен",
-                    level=30,
-                )
-                return result
-
-            counts = apply_policy_now(server, creds)
-            if int(counts.get("deleted", 0) or 0) <= 0:
-                event(
-                    "LV",
-                    "Retention safety sweep не удалил просроченные учётки",
-                    f"{server} · найдено {len(overdue)}: {', '.join(overdue[:8])}",
-                    level=30,
-                )
-                return result
-
-            # Re-read after cleanup so disappeared accounts are listed in
-            # LV Удалённые immediately, when Sheets is available.
-            return original_sync_server(
-                self,
-                server,
-                creds,
-                source=source,
-                initiator=initiator,
-            )
-        except Exception as exc:
-            event(
-                "LV",
-                "Ошибка retention safety sweep",
-                f"{server} · {str(exc)[:220]}",
-                level=30,
-            )
-            return result
 
     sheets.GoogleSheetsBackend.ensure_sheet_columns = ensure_sheet_columns
     sheets.GoogleSheetsBackend.read_server_rows = read_server_rows
