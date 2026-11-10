@@ -97,7 +97,11 @@ THEMES = {key: _to_dict(key, row) for key, row in _RAW_THEMES.items()}
 
 
 def theme_names() -> list[tuple[str, str]]:
-    return [(key, data["name"]) for key, data in THEMES.items()]
+    # Place the new full-workspace theme first in Appearance, while preserving
+    # all previous palettes and their saved configuration keys.
+    return [("terminal_code", THEMES["terminal_code"]["name"])] + [
+        (key, data["name"]) for key, data in THEMES.items() if key != "terminal_code"
+    ]
 
 
 def system_theme_key() -> str:
