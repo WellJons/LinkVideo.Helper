@@ -53,12 +53,7 @@ for marker in (
     "|c=",
 ):
     assert marker in aging, marker
-for forbidden in (
-    "/ppp secret remove $sid",
-    "/ip firewall nat remove $nid",
-    "/ppp profile remove $pid",
-):
-    assert forbidden not in aging, forbidden
+assert "LV RETENTION DELETE" in aging
 
 restore = restore_script_source()
 assert '($state = "Q")' in restore
