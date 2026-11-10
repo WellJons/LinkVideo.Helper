@@ -54,6 +54,8 @@ class FakeRouterOS:
                 raise RuntimeError("input does not match any value of action")
             if self.mode == "ack_without_action":
                 return ""
+        if path == "/system/logging" and self.mode == "reject_extended_args":
+            assert set(params) == {"topics", "action"}, "No extra logging params in add"
         if path == "/system/logging" and params.get("action") == "LVAuth":
             if self.mode == "reject_reference":
                 raise RuntimeError("input does not match any value of action")
@@ -67,6 +69,10 @@ class FakeRouterOS:
         self.mutations.append(("set", path, dict(params)))
         if path == "/system/logging" and params.get("action") == "LVAuth" and self.mode == "reject_reference":
             raise RuntimeError("input does not match any value of action")
+        if path == "/system/logging" and self.mode == "reject_extended_args":
+            if "regex" in params:
+                raise RuntimeError("unknown parameter")
+            assert not ({"topics", "action"} <= set(params)), "No combined updates"
         row = next(r for r in self.rows[path] if r.get(".id") == rid)
         row.update(params)
 
@@ -84,6 +90,7 @@ for mode, expected_action in (
     ("reject_create", "memory"),
     ("ack_without_action", "memory"),
     ("reject_reference", "memory"),
+    ("reject_extended_args", "LVAuth"),
 ):
     api = FakeRouterOS(mode)
     # The new server has an unrelated global default memory rule.
