@@ -1,0 +1,42 @@
+name: Private LV Logging Hotfix Windows Installer
+
+on:
+  push:
+    branches:
+      - fix/lv-logging-dashboard-2026-11-10
+    paths:
+      - .github/workflows/private-lv-logging-installer.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.x'
+          cache-dependency-path: |
+            installer_next/go.mod
+            patcher/go.mod
+            silent_updater/go.mod
+      - name: Validate and build private installer
+        shell: pwsh
+        run: ./scripts/verify_release.ps1
+      - name: Upload manual-install hotfix (not publicly released)
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinkVideo.Helper_3.0.25_LV_LOGGING_HOTFIX_PRIVATE
+          path: |
+            release_candidate/LinkVideo.Helper_Setup_3.0.25_RC.exe
+            release_candidate/verification.json
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
