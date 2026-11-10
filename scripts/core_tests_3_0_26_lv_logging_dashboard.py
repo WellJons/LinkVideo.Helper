@@ -42,6 +42,10 @@ class FakeRouterOS:
         return False
 
     def print(self, path, params=None):
+        if self.mode == "memory_not_listed" and path == "/system/logging/action":
+            # Matches a real RouterOS issue: the standard action exists but
+            # the action inventory does not expose it through this account.
+            return [dict(r) for r in self.rows[path] if r.get("name") != "memory"]
         return [dict(r) for r in self.rows[path]]
 
     def talk(self, command, params=None, raise_on_trap=True):
@@ -50,7 +54,7 @@ class FakeRouterOS:
     def add(self, path, params):
         self.mutations.append(("add", path, dict(params)))
         if path == "/system/logging/action" and params["name"] == "LVAuth":
-            if self.mode == "reject_create":
+            if self.mode in {"reject_create", "memory_not_listed"}:
                 raise RuntimeError("input does not match any value of action")
             if self.mode == "ack_without_action":
                 return ""
@@ -91,6 +95,7 @@ for mode, expected_action in (
     ("ack_without_action", "memory"),
     ("reject_reference", "memory"),
     ("reject_extended_args", "LVAuth"),
+    ("memory_not_listed", "memory"),
 ):
     api = FakeRouterOS(mode)
     # The new server has an unrelated global default memory rule.
