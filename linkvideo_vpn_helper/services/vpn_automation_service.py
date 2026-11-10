@@ -85,24 +85,38 @@ class VPNAutomationService(_CoreVPNAutomationService):
 
     @classmethod
     def _find_ids(cls, api, path: str, field: str, value: str) -> list[str]:
-        # Some menus expose find through API, some do not. Prefer it, then use
-        # an exact filtered print and finally a broad print as compatibility.
+        """Resolve IDs by an EXACT property match, never by an unverified find.
+
+        RouterOS API query words (?name=...) are only documented for /print.
+        The previous /find with =name=... could return unrelated IDs. This
+        caused repeated LV script/scheduler creation to overwrite the first
+        object and leave the server at 1/3 components.
+        """
+        expected = str(value).strip()
+        # A filtered print is efficient; inspect returned row values even if
+        # a RouterOS build or fake API ignores the query.
         try:
-            ids = cls._ret_ids(api.talk(f"{path}/find", {field: value}))
-            if ids:
-                return ids
+            rows = api.print(path, {".proplist": f".id,{field}", f"?{field}=": expected})
         except Exception:
-            pass
-        try:
-            rows = api.print(path, {".proplist": f".id,{field}", f"?{field}=": value})
-        except Exception:
-            try:
-                rows = api.print(path)
-            except Exception:
-                rows = []
-        row = cls._find(rows, field, value)
-        rid = str((row or {}).get(".id", "") or "").strip()
-        return [rid] if rid else []
+            rows = []
+        matches = [
+            str(row.get(".id", "") or "").strip()
+            for row in rows
+            if str(row.get(field, "") or "").strip() == expected
+            and str(row.get(".id", "") or "").strip()
+        ]
+        if matches:
+            return list(dict.fromkeys(matches))
+
+        # Fall back to full enumeration: some RouterOS builds ignore or do
+        # not support print query/proplist combinations on specific menus.
+        rows = api.print(path)
+        return list(dict.fromkeys(
+            str(row.get(".id", "") or "").strip()
+            for row in rows
+            if str(row.get(field, "") or "").strip() == expected
+            and str(row.get(".id", "") or "").strip()
+        ))
 
     @classmethod
     def _find_id(cls, api, path: str, field: str, value: str) -> str:
