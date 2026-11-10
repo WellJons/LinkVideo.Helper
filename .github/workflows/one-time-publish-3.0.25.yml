@@ -1,0 +1,92 @@
+name: One-time publish LinkVideo.Helper 3.0.25
+
+on:
+  push:
+    branches:
+      - rc/3.0.25
+    paths:
+      - .github/workflows/one-time-publish-3.0.25.yml
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: one-time-v3.0.25
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_SOURCE_SHA: b3924ea64d7a85f0a9da8618c790b479365d0c6a
+      SOURCE_TAG: v3.0.25
+    steps:
+      - name: Check out canonical main release source
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Require exact verified release source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          grep -qx 'APP_VERSION = "3.0.25"' linkvideo_vpn_helper/version.py
+          test -f RELEASE_3.0.25_RU.txt
+          if git ls-remote --exit-code --tags origin "refs/tags/$SOURCE_TAG" >/dev/null 2>&1; then
+            echo "Release tag already exists; refusing an automatic retag." >&2
+            exit 1
+          fi
+
+      - name: Create immutable final version tag and request canonical verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$SOURCE_TAG" -m "LinkVideo.Helper 3.0.25" "$EXPECTED_SOURCE_SHA"
+          git push origin "refs/tags/$SOURCE_TAG"
+          gh workflow run windows-build.yml --ref "$SOURCE_TAG"
+
+      - name: Require successful canonical tagged Windows release build
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 160); do
+            runs="$(gh run list --workflow windows-build.yml --limit 60 --json databaseId,headSha,status,conclusion,event)"
+            matched="$(printf '%s' "$runs" | jq -c --arg sha "$EXPECTED_SOURCE_SHA" '[.[] | select(.event=="workflow_dispatch" and .headSha==$sha)] | first // empty')"
+            if [ -n "$matched" ]; then
+              state="$(printf '%s' "$matched" | jq -r '.status')"
+              outcome="$(printf '%s' "$matched" | jq -r '.conclusion // ""')"
+              runid="$(printf '%s' "$matched" | jq -r '.databaseId')"
+              echo "Canonical final build: $runid, $state, $outcome"
+              if [ "$state" = "completed" ]; then
+                test "$outcome" = "success"
+                break
+              fi
+            fi
+            sleep 15
+          done
+          test -n "${runid:-}" && test "${outcome:-}" = "success"
+          test "$(gh release view "$SOURCE_TAG" --json isDraft --jq .isDraft)" = "true"
+          assets="$(gh release view "$SOURCE_TAG" --json assets --jq '.assets[].name')"
+          for name in LinkVideo.Helper_Setup.exe Uninstall.exe LinkVideo.Helper_Payload_3.0.25.zip LinkVideo.Helper_Payload_3.0.25.json verification.json; do
+            printf '%s\n' "$assets" | grep -Fxq "$name"
+          done
+
+      - name: Publish verified final source release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release edit "$SOURCE_TAG" --draft=false --prerelease=false
+          test "$(gh release view "$SOURCE_TAG" --json isDraft --jq .isDraft)" = "false"
+
+      - name: Dispatch existing verified public updater
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run publish-public-update.yml --ref main -f tag="$SOURCE_TAG"
