@@ -32,7 +32,7 @@ from linkvideo_vpn_helper.theme import get_theme_style
 
 app.setStyleSheet(get_theme_style("terminal_code"))
 
-out = Path("release_candidate")
+out = Path("terminal_preview")
 out.mkdir(parents=True, exist_ok=True)
 
 with tempfile.TemporaryDirectory() as folder:
