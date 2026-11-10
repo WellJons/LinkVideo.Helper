@@ -247,6 +247,11 @@ class VPNAutomationService(_CoreVPNAutomationService):
         if row and not rid:
             rid = cls._find_id(api, "/system/logging", "prefix", prefix)
             if not rid:
+                # Legacy RouterOS accepts a logging rule yet exposes neither
+                # ret nor .id. An exact functional match is already present,
+                # so do not attempt to create duplicates just to obtain an ID.
+                if cls._topic_set(row.get("topics")) == cls._topic_set(topics):
+                    return
                 raise RuntimeError(f"RouterOS не вернул ID логирования LV для темы {topics}")
 
         current_action = str((row or {}).get("action", "") or "").strip()
@@ -298,9 +303,20 @@ class VPNAutomationService(_CoreVPNAutomationService):
             rid = str((found or {}).get(".id", "") or "").strip()
 
         if chosen == "memory" and not rid:
-            raise RuntimeError(
-                f"RouterOS не подтвердил уникальное правило LV {topics} в стандартном буфере memory"
+            # Some RouterOS variants omit internal IDs for successful add.
+            # Verified prefix + topics + action is sufficient to recognize the
+            # fallback rule, even though optional edits cannot be applied.
+            found = next(
+                (item for item in cls._logging_rows(api)
+                 if str(item.get("action", "") or "").strip() == "memory"
+                 and str(item.get("prefix", "") or "").strip() == prefix
+                 and cls._topic_set(item.get("topics")) == cls._topic_set(topics)),
+                None,
             )
+            if not found:
+                raise RuntimeError(
+                    f"RouterOS не подтвердил уникальное правило LV {topics} в стандартном буфере memory"
+                )
 
         if rid:
             for field, value in (("prefix", prefix), ("regex", "login failure for user")):
