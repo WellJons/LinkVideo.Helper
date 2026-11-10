@@ -43,9 +43,11 @@ class FakeRouterOS:
 
     def print(self, path, params=None):
         if self.mode == "memory_not_listed" and path == "/system/logging/action":
-            # Matches a real RouterOS issue: the standard action exists but
-            # the action inventory does not expose it through this account.
             return [dict(r) for r in self.rows[path] if r.get("name") != "memory"]
+        if self.mode == "memory_no_id" and path == "/system/logging/action":
+            return [dict(r) for r in self.rows[path] if r.get("name") != "LVAuth"]
+        if self.mode == "memory_no_id" and path == "/system/logging":
+            return [{k: v for k, v in r.items() if k != ".id"} for r in self.rows[path]]
         return [dict(r) for r in self.rows[path]]
 
     def talk(self, command, params=None, raise_on_trap=True):
@@ -54,7 +56,7 @@ class FakeRouterOS:
     def add(self, path, params):
         self.mutations.append(("add", path, dict(params)))
         if path == "/system/logging/action" and params["name"] == "LVAuth":
-            if self.mode in {"reject_create", "memory_not_listed"}:
+            if self.mode in {"reject_create", "memory_not_listed", "memory_no_id"}:
                 raise RuntimeError("input does not match any value of action")
             if self.mode == "ack_without_action":
                 return ""
@@ -67,6 +69,8 @@ class FakeRouterOS:
         rid = "*" + str(self._next_id)
         self._next_id += 1
         self.rows[path].append({".id": rid, **params})
+        if self.mode == "memory_no_id" and path == "/system/logging":
+            return ""
         return rid
 
     def set(self, path, rid, params):
@@ -96,6 +100,7 @@ for mode, expected_action in (
     ("reject_reference", "memory"),
     ("reject_extended_args", "LVAuth"),
     ("memory_not_listed", "memory"),
+    ("memory_no_id", "memory"),
 ):
     api = FakeRouterOS(mode)
     # The new server has an unrelated global default memory rule.
@@ -116,7 +121,7 @@ for mode, expected_action in (
     assert next(s for s in api.rows["/system/scheduler"] if s["name"] == LV_AGING_SCHED)["disabled"] == "yes"
     assert not any(path.startswith("/ppp") for op, path, params in api.mutations)
 
-    if expected_action == "memory":
+    if expected_action == "memory" and mode != "memory_no_id":
         assert {r.get("prefix") for r in managed} == {"LV-AUTH-PPP", "LV-AUTH-L2TP"}
 
     # A second install must repair, not append duplicate LV objects.
@@ -131,6 +136,26 @@ for mode, expected_action in (
     assert status.installed, (mode, status.installation_detail)
     assert status.unknown == 1
     assert status.active == 0  # no LV marker yet, not an assertion of zero L2TP online
+
+
+# A crashed previous install may have created duplicate LV rules, but the
+# recovery removes ONLY exact LV-owned duplicates and keeps stock logging.
+api = FakeRouterOS("normal")
+svc._ensure_components(api)
+original = dict(api.rows["/system/logging"][0])
+extra = dict(next(r for r in api.rows["/system/logging"]
+                  if r.get("topics") == "ppp" and r.get("action") == "LVAuth"))
+extra[".id"] = "*extra-lv"
+api.rows["/system/logging"].append(extra)
+foreign = {".id": "*foreign", "topics": "ppp", "action": "memory", "prefix": "OTHER"}
+api.rows["/system/logging"].append(foreign)
+svc._ensure_components(api)
+assert api.rows["/system/logging"][0] == original
+assert foreign in api.rows["/system/logging"]
+assert len([r for r in api.rows["/system/logging"] if r.get("topics") == "ppp"
+            and r.get("action") == "LVAuth"]) == 1
+assert not any(path == "/ppp/secret" for _, path, _ in api.mutations)
+assert not any(path == "/ip/firewall/nat" for _, path, _ in api.mutations)
 
 script = restore_script_source()
 assert ':local lvBuffer "LVAuth"' in script
