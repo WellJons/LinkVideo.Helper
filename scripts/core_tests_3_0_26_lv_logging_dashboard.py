@@ -160,6 +160,44 @@ for mode, expected_action in (
     assert status.active == 0  # no LV marker yet, not an assertion of zero L2TP online
 
 
+# Actual vpn02 failure state: one overwritten LV script and one scheduler
+# remain after /find returned the same incorrect ID for all three names.
+api = FakeRouterOS("find_ignores_name")
+api.rows["/system/script"] = [{
+    ".id": "*oldscript", "name": "LV-Activity",
+    "source": "BROKEN_OLD_SOURCE", "comment": "incomplete",
+}]
+api.rows["/system/scheduler"] = [{
+    ".id": "*oldsched", "name": "LV-Activity", "on-event": "LV-AutoRestore",
+    "disabled": "yes",
+}]
+api.rows["/system/script"].append({
+    ".id": "*unrelatedscript", "name": "Unrelated-Customer-Script",
+    "source": "customer code",
+})
+api.rows["/system/scheduler"].append({
+    ".id": "*unrelatedsched", "name": "Unrelated-Customer-Scheduler",
+    "disabled": "no",
+})
+svc._ensure_components(api)
+assert {r["name"] for r in api.rows["/system/script"] if r["name"].startswith("LV-")} == {
+    "LV-Activity", "LV-Aging", "LV-AutoRestore"
+}
+assert {r["name"] for r in api.rows["/system/scheduler"] if r["name"].startswith("LV-")} == {
+    "LV-Activity", "LV-Aging", "LV-AutoRestore"
+}
+assert next(row for row in api.rows["/system/script"]
+            if row["name"] == "LV-Activity")["source"] != "BROKEN_OLD_SOURCE"
+assert next(row for row in api.rows["/system/scheduler"]
+            if row["name"] == "LV-Activity")["on-event"] == "LV-Activity"
+assert next(row for row in api.rows["/system/script"]
+            if row["name"] == "Unrelated-Customer-Script")["source"] == "customer code"
+assert next(row for row in api.rows["/system/scheduler"]
+            if row["name"] == "Unrelated-Customer-Scheduler")["disabled"] == "no"
+assert not any(op == "remove" and path in {"/system/script", "/system/scheduler"}
+               for op, path, _ in api.mutations)
+
+
 # A crashed previous install may have created duplicate LV rules, but the
 # recovery removes ONLY exact LV-owned duplicates and keeps stock logging.
 api = FakeRouterOS("normal")
