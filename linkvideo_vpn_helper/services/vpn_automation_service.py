@@ -268,13 +268,18 @@ class VPNAutomationService(_CoreVPNAutomationService):
                 raise RuntimeError("RouterOS не подтвердил стандартное действие логирования memory")
             try:
                 if row:
-                    api.set("/system/logging", rid, {"topics": topics, "action": action})
+                    # Existing row was selected by its topics already. Change
+                    # only the action when needed: on some RouterOS builds an
+                    # unnecessary combined topics/action set is rejected.
+                    if current_action != action:
+                        api.set("/system/logging", rid, {"action": action})
                 else:
+                    # Only documented core properties are required for add.
+                    # Previously the memory fallback passed regex/prefix in
+                    # the same add, causing "unknown parameter" on some builds.
+                    # Those fields are applied as optional individual sets
+                    # below and never prevent installation.
                     parameters = {"topics": topics, "action": action}
-                    if action == "memory":
-                        # Unique fallback identity even on RouterOS builds
-                        # returning !done without an internal .id.
-                        parameters.update({"prefix": prefix, "regex": "login failure for user"})
                     rid = str(api.add("/system/logging", parameters) or "").strip()
                 chosen = action
                 break
@@ -303,20 +308,11 @@ class VPNAutomationService(_CoreVPNAutomationService):
             rid = str((found or {}).get(".id", "") or "").strip()
 
         if chosen == "memory" and not rid:
-            # Some RouterOS variants omit internal IDs for successful add.
-            # Verified prefix + topics + action is sufficient to recognize the
-            # fallback rule, even though optional edits cannot be applied.
-            found = next(
-                (item for item in cls._logging_rows(api)
-                 if str(item.get("action", "") or "").strip() == "memory"
-                 and str(item.get("prefix", "") or "").strip() == prefix
-                 and cls._topic_set(item.get("topics")) == cls._topic_set(topics)),
-                None,
+            # No ID to assign a unique prefix; never declare an unmanaged
+            # memory rule to be LV automation by accident.
+            raise RuntimeError(
+                f"RouterOS не вернул ID правила LV {topics} для безопасной настройки memory"
             )
-            if not found:
-                raise RuntimeError(
-                    f"RouterOS не подтвердил уникальное правило LV {topics} в стандартном буфере memory"
-                )
 
         if rid:
             for field, value in (("prefix", prefix), ("regex", "login failure for user")):
