@@ -36,14 +36,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "$(gh release view v3.0.25 --json isDraft --jq .isDraft)" = "true" ]; then
-            gh release edit v3.0.25 --draft=false --prerelease=false
+          if [ "$(gh release view v3.0.25 --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = "true" ]; then
+            gh release edit v3.0.25 --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false
           fi
-          test "$(gh release view v3.0.25 --json isDraft --jq .isDraft)" = "false"
-          test "$(gh release view v3.0.25 --json isPrerelease --jq .isPrerelease)" = "false"
+          test "$(gh release view v3.0.25 --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = "false"
+          test "$(gh release view v3.0.25 --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease)" = "false"
 
       - name: Run canonical public update publisher
         shell: bash
         run: |
           set -euo pipefail
-          gh workflow run publish-public-update.yml --ref main -f tag=v3.0.25
+          gh workflow run publish-public-update.yml --repo "$GITHUB_REPOSITORY" --ref main -f tag=v3.0.25
