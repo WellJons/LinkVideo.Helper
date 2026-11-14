@@ -39,7 +39,7 @@
  }
  async function client(host,login){S.client=null;S.plan=null;S.outcome=null;await run(async()=>{S.client=await op('client_detail',{host,login})})}
  function renderClient(root){
-  const c=S.client;if(!c)return;
+  const c=S.client;if(!c){if(currentPlan())previewNotice(root,currentPlan());resultNote(root);return;}
   section(root,'Карточка VPN · '+c.login);
   const panel=el('div','panel');keyValue(panel,[['Сервер',c.server],['VPN IP',c.remote_address],['Статус',c.is_online?'В сети':'Не в сети'],['Учётка',c.is_enabled?'Включена':'Отключена'],['Uptime',c.uptime],['RX, байт',c.rx_bytes],['TX, байт',c.tx_bytes]]);
   panel.append(table(['Порт','Статус','Конфликты'],c.ports.map(p=>[p,c.disabled_ports.includes(p)?'Выключен':c.active_ports.includes(p)?'Активен':'Настроен',c.port_conflicts?.[p]||'—'])));
@@ -141,11 +141,11 @@
   previewNotice(root,currentPlan());resultNote(root);
  }
  function activity(root){
-  root.append(hero('VPN / ACTIVITY','История VPN','Отдельное подключение к VPNSync. Источник — существующий CloudVPNSyncClient.'));
-  if(!preview&&identity?.role!=='sysadmin'){root.append(notice('Доступно системному администратору.'));return}
+  root.append(hero('VPN / ACTIVITY','VPNSync','Отдельное подключение к VPNSync для архива PostgreSQL и аудита действий.'));
   const host=field('DNS или IPv4','text',S.cloudHost||''),port=field('Порт','number',S.cloudPort||443),u=field('Логин облака','text'),pw=field('Пароль облака','password'),scheme=field('Протокол','select','https',[['https','HTTPS'],['http','HTTP в доверенной сети']]);form(root,host,port,u,pw,scheme);
   action(root,live('Подключить',()=>{const password=pw.input.value;pw.input.value='';if(value(scheme)==='http'&&!confirm('HTTP не защищает пароль при передаче. Продолжить только в доверенной сети?'))return;run(async()=>{S.cloudHost=value(host);S.cloudPort=num(port);S.cloud=await op('cloud_connect',{host:S.cloudHost,port:S.cloudPort,username:value(u),password,tls:value(scheme)==='https',allow_http:value(scheme)==='http'})})},'primary'));
   if(S.cloud?.connected)root.append(notice('Подключение подтверждено.'));
+  if(!preview&&identity?.role!=='sysadmin')return;
   const login=field('Фильтр логина','text',S.activityLogin||''),source=field('Источник','text',S.activitySource||'');form(root,login,source);
   action(root,live('Обновить историю',()=>run(async()=>{S.activityLogin=value(login);S.activitySource=value(source);S.historyVpn=await op('activity',{login:S.activityLogin,source:S.activitySource})}),'primary'));
   if(S.historyVpn)root.append(table(['Время','Событие','Сервер','Логин','Источник','Оператор'],S.historyVpn.map(r=>[r.created_at||r.timestamp,r.action,r.server,r.login,r.source,r.username||r.actor])));
@@ -183,5 +183,5 @@
   if(S.background)keyValue(root,[['Установлено',S.background.installed?'Да':'Нет'],['Период, ч',S.background.interval_hours],['Статус',S.background.status]]);
   root.append(notice('4.0 не создаёт вторую системную задачу параллельно с 3.x. Автоматический запуск 4.0 требует отдельной защищённой миграции.'))
  }
- window.lvModules=Object.freeze({reset,client,dashboard,settings:workspaceSettings,clearClient:()=>{S.client=null;S.plan=null;S.outcome=null},renderClient,render:(name,root)=>{({create,inactive,lv,recovery,activity,admin,billing,archives:r=>archive(r,false),diagnostics:r=>archive(r,true),agent,camera,templates})[name]?.(root)}});
+ window.lvModules=Object.freeze({reset,client,cloudRestore:c=>stage("cloud_restore_preview",{host:c.server,login:c.login}),dashboard,settings:workspaceSettings,clearClient:()=>{S.client=null;S.plan=null;S.outcome=null},renderClient,render:(name,root)=>{({create,inactive,lv,recovery,activity,admin,billing,archives:r=>archive(r,false),diagnostics:r=>archive(r,true),agent,camera,templates})[name]?.(root)}});
 })();

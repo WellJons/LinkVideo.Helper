@@ -330,7 +330,13 @@ class Operations:
             self.writes_enabled()
             _,_,kind,params,revision=plan
             if cancel.is_set(): raise InputError("Операция отменена.")
-            return self.execute(kind,params,revision,cancel,emit)
+            try:
+                result=self.execute(kind,params,revision,cancel,emit)
+            except Exception:
+                self.extra.audit(kind,params,False)
+                raise
+            self.extra.audit(kind,params,True,result)
+            return result
         raise InputError("Неизвестная операция.")
 
     @staticmethod
@@ -348,7 +354,7 @@ class Operations:
 
     def execute(self,kind,p,revision,cancel,emit):
         svc=self.w.service;creds=self.w.session
-        if kind in ("delete","restore","sheets","b2o","transfer"):
+        if kind in ("delete","restore","sheets","b2o","transfer","cloud_restore"):
             return self.extra.execute(kind,p,revision,cancel,emit)
         if kind=="create":
             h,login,ports,count=p

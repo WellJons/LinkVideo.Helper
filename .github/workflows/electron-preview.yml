@@ -51,6 +51,7 @@ jobs:
         shell: pwsh
         env:
           LV4_SMOKE: '1'
+          LV4_METRICS_PATH: ${{ github.workspace }}/dist-v4/performance.json
         run: |
           $app = Resolve-Path 'dist-v4/LinkVideo.Helper.4-win32-x64/LinkVideo.Helper.4.exe'
           $p = Start-Process -FilePath $app -ArgumentList '--lv4-smoke' -PassThru -Wait
@@ -69,6 +70,7 @@ jobs:
           path: |
             dist-v4/*-Setup.exe
             dist-v4/SHA256.txt
+            dist-v4/performance.json
           if-no-files-found: error
           retention-days: 14
       - uses: actions/upload-artifact@v4

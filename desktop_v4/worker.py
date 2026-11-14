@@ -69,12 +69,16 @@ class Workspace:
             report = self.search.search_port_all(list(self.hosts), self.session, int(query), cancel_event=cancel)
         else:
             raise Rejected("Введите порт от 1 до 65535 или выберите поиск по логину.")
+        deleted,archive_error=[],None
+        if mode=="login" and not report.matches and not (cancel and cancel.is_set()):
+            if emit: emit("Проверяю архив PostgreSQL")
+            deleted,archive_error=self.ops.extra.search_cloud_archive(query)
         # Explicit public projection: do not send passwords, raw snapshots,
         # credentials, internal IDs or raw exception details to Electron.
         fields = ("server", "login", "remote_address", "ports", "active_ports", "disabled_ports", "is_online", "is_enabled", "uptime", "last_logged_out")
         return {"matches": [{key: getattr(row,key) for key in fields} for row in report.matches],
                 "checked": report.checked, "total": report.total,
-                "errors": [{"server": err.server} for err in report.errors]}
+                "errors": [{"server": err.server} for err in report.errors], "deleted":deleted, "archive_error":archive_error}
 
 def build():
     from linkvideo_vpn_helper.services.server_registry import ServerRegistry

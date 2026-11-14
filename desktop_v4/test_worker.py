@@ -47,6 +47,18 @@ class TestWorkspace(unittest.TestCase):
             with self.assertRaises(InputError): self.w.dispatch("commit",{"token":plan["token"]})
         with patch.dict("os.environ",{"LV4_ENABLE_WRITES":"0"}):
             with self.assertRaises(InputError): self.w.dispatch("create_preview",{"host":"trusted.example","login":"test","ports":2,"count":1})
+    def test_archive_fallback_and_secret_projection(self):
+        self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
+        calls=[]
+        self.w.ops.extra.cloud=NS(request=lambda *a,**k:(calls.append(a) or [{"server":"trusted.example","login":"old","password":"NEVER","password_saved":True,"ports":[{"external_port":12000,"internal_port":80}]}]))
+        self.w.dispatch("search",{"query":"client","mode":"login"})
+        self.assertEqual(calls,[])
+        self.w.search.search_login_all=lambda *a,**k:NS(matches=[],checked=1,total=1,errors=[])
+        result=self.w.dispatch("search",{"query":"old","mode":"login"})
+        self.assertEqual(calls,[("GET","/v1/deleted/search")])
+        self.assertNotIn("password",result["deleted"][0])
+        self.assertEqual(result["deleted"][0]["ports"],["12000 → 80"])
+        with self.assertRaises(InputError): self.w.dispatch("cloud_restore_preview",{"host":"trusted.example","login":"old"})
     def test_separate_admin_auth(self):
         self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
         self.assertEqual(self.w.dispatch("admin_status",{}),{"username":"","b2o":False,"crm":False})

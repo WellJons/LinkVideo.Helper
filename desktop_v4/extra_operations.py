@@ -10,10 +10,10 @@ import re
 import subprocess
 import shutil
 
-METHODS=frozenset(("copy_vpn","backup","delete_preview","backup_status","sheets_load","deleted_search","restore_preview","sheets_preview","cloud_connect","activity","camera_inspect","b2o_read","b2o_create_preview","billing_recipient","billing_transfer_preview","templates_import","templates_attach","templates_images","templates_detach","winbox","registry_list","registry_update"))
+METHODS=frozenset(("copy_vpn","backup","delete_preview","backup_status","sheets_load","deleted_search","restore_preview","sheets_preview","cloud_connect","cloud_restore_preview","activity","camera_inspect","b2o_read","b2o_create_preview","billing_recipient","billing_transfer_preview","templates_import","templates_attach","templates_images","templates_detach","winbox","registry_list","registry_update"))
 class Extended:
     def __init__(self,ops):
-        self.o=ops;self.cloud=None;self.sheets=None;self.deleted={};self.recipients={}
+        self.o=ops;self.cloud=None;self.sheets=None;self.deleted={};self.cloud_deleted={};self.recipients={}
     def backup_service(self):
         from linkvideo_vpn_helper.services.vpn_backup_service import VPNBackupService
         class PrivateBackup(VPNBackupService):
@@ -62,6 +62,63 @@ class Extended:
         if ids(narrow.get("nat_rules",[]))!=ids(own) or ids(narrow.get("secrets",[]))!=[target[".id"]]:
             raise InputError("Снимки конфигурации расходятся. Повторите проверку.")
         return hashlib.sha256(json.dumps([target,matches[0],sorted(own,key=lambda r:r[".id"])],sort_keys=True,default=str).encode()).hexdigest()
+    def search_cloud_archive(self,query):
+        self.cloud_deleted={}
+        if self.cloud is None:
+            return [],"VPNSync не подключён. Настройте отдельное подключение в разделе VPN."
+        try:
+            rows=self.cloud.request("GET","/v1/deleted/search",params={"q":query,"limit":50})
+            clean=[]
+            for row in rows or []:
+                if not isinstance(row,dict): continue
+                host=str(row.get("server") or "");login=str(row.get("login") or "")
+                if host not in self.o.w.hosts or not login: continue
+                ports=[]
+                for rule in row.get("ports") or []:
+                    if not isinstance(rule,dict): continue
+                    try: ext=int(rule.get("external_port") or 0);internal=int(rule.get("internal_port") or ext)
+                    except (ValueError,TypeError): continue
+                    if 1<=ext<=65535 and 1<=internal<=65535:
+                        ports.append(str(ext)+" → "+str(internal))
+                record={"server":host,"login":login,"password_saved":bool(row.get("password_saved")),
+                        "remote_address":str(row.get("remote_address") or ""),"deleted_at":str(row.get("deleted_at") or ""),"ports":ports}
+                self.cloud_deleted[(host,login)]=record;clean.append(record)
+            return clean,None
+        except Exception:
+            return [],"Архив VPNSync недоступен. Резерв Google Sheets не использован автоматически."
+    def cloud_preflight(self,h,login):
+        from desktop_v4.operations import InputError
+        if self.cloud is None: raise InputError("VPNSync не подключён.")
+        result=self.cloud.request("GET","/v1/archive/restore/preflight",params={"server":h,"login":login},timeout=20.0)
+        if not isinstance(result,dict) or result.get("ok") is not True or result.get("conflicts"):
+            raise InputError("Восстановление заблокировано VPNSync: обнаружен конфликт или проверка не завершена.")
+        return result
+    def audit(self,kind,params,success,result=None):
+        if self.cloud is None or kind not in ("create","vpn","delete"): return
+        from threading import Thread
+        from linkvideo_vpn_helper.services.cloud_vpnsync import CloudVPNSyncClient
+        config=self.cloud.config
+        employee=str(self.o.w.identity.get("username") or "")
+        h,login=params[:2]
+        action="client.delete" if kind=="delete" else "client.create"
+        details={"employee":employee}
+        if kind=="vpn":
+            act,value=params[2:]
+            action={"add":"nat.add_ports","enable":"client.enabled_change","disable":"client.enabled_change","port_enable":"nat.enabled_change","port_disable":"nat.enabled_change","disconnect":"client.disconnect","remove_port":"nat.remove_port","recreate_port":"nat.recreate","password":"client.password_change"}[act]
+            if type(value) is int: details["count" if act=="add" else "port"]=value
+            if act in ("enable","disable","port_enable","port_disable"): details["enabled"]=act in ("enable","port_enable")
+            if act=="password": details["password_changed"]=True
+        if kind=="create": details.update(ports_per_client=params[2],accounts_count=params[3])
+        records=(result or {}).get("clients",[]) if success and kind=="create" else []
+        targets=[str(x.get("login") or login) for x in records] or [login]
+        def send():
+            try:
+                client=CloudVPNSyncClient(self.o.settings);client.set_config(config,save=False)
+                for target in targets: client.record_activity(action,server=h,login=target,success=success,details=details)
+            except Exception:
+                # Never repeat the actual RouterOS mutation after an audit error.
+                pass
+        Thread(target=send,daemon=True,name="lv4-vpnsync-audit").start()
     def dispatch(self,m,a,cancel,emit):
         from desktop_v4.operations import InputError,text,number
         o=self.o;svc=o.w.service;creds=o.w.session
@@ -136,8 +193,13 @@ class Extended:
         if m=="sheets_preview":
             o.admin_only();self.sheets_service();h=o.host(a)
             return o.stage("sheets",(h,),f"Аварийная выгрузка конфигурации {h} в Google Sheets.")
+        if m=="cloud_restore_preview":
+            o.admin_only();o.writes_enabled();self.destructive_enabled();h=o.host(a);login=text(a,"login")
+            row=self.cloud_deleted.get((h,login))
+            if not row or not row["password_saved"]: raise InputError("Найдите удалённую учётку с сохранённым паролем в PostgreSQL.")
+            self.cloud_preflight(h,login)
+            return o.stage("cloud_restore",(h,login),f"Восстановить {h}/{login} из PostgreSQL без замены занятых портов.")
         if m=="cloud_connect":
-            o.admin_only()
             from linkvideo_vpn_helper.services.cloud_vpnsync import CloudVPNSyncClient,CloudServerConfig
             host=text(a,"host",253)
             if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}",host): raise InputError("Укажите только DNS-имя или IPv4 облачного сервера.")
@@ -207,6 +269,14 @@ class Extended:
     def execute(self,kind,p,revision,cancel,emit):
         from desktop_v4.operations import InputError
         o=self.o;svc=o.w.service;creds=o.w.session
+        if kind=="cloud_restore":
+            o.admin_only();self.destructive_enabled();h,login=p
+            self.cloud_preflight(h,login)
+            if cancel.is_set(): raise InputError("Операция отменена.")
+            result=self.cloud.request("POST","/v1/archive/restore",json={"server":h,"login":login},timeout=45.0)
+            if not isinstance(result,dict) or result.get("ok") is not True: raise InputError("Восстановление не подтверждено. Проверьте MikroTik.")
+            self.cloud_deleted.pop((h,login),None)
+            return {"restored":True,"server":h,"login":login}
         if kind in ("delete","restore"):
             o.admin_only();self.destructive_enabled();h,login=p
             if kind=="delete" and self.delete_revision(h,login)!=revision: raise InputError("Конфигурация изменилась.")
