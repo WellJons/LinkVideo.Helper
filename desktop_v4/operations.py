@@ -47,7 +47,7 @@ class MemorySettings:
     def sync(self): pass
 
 class Operations:
-    METHODS=frozenset(("client_detail","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","admin_login","admin_logout","admin_status","billing_search","billing_select","billing_catalog","billing_history","billing_preview","archive_discover","archive_diagnose","archive_download","agent_search","agent_preview","templates_list","templates_save","templates_favorite","templates_delete","background_status")) | EXTRA_METHODS
+    METHODS=frozenset(("client_detail","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","admin_login","admin_logout","admin_status","billing_search","billing_select","billing_catalog","billing_history","billing_preview","archive_discover","archive_diagnose","archive_download","agent_search","agent_settings","agent_preview","templates_list","templates_save","templates_favorite","templates_delete","background_status")) | EXTRA_METHODS
     def __init__(self,workspace):
         self.w=workspace
         self.settings=MemorySettings()
@@ -82,7 +82,7 @@ class Operations:
 
     def operator(self,args):
         op=number(args,"operator",1,9999)
-        if op not in (241,1721,1741): raise InputError("Выберите доступный кластер B2O.")
+        if op not in (241,1721,1741,1442,621): raise InputError("Выберите доступный кластер B2O.")
         return op
 
     def admin_only(self):
@@ -248,7 +248,7 @@ class Operations:
             return self.stage("billing",(act,camera,value,when,comment),f"CRM: {c.login} / камера {camera} / {detail} / {when}",self.billing_revision(c))
         if method in ("archive_discover","archive_diagnose"):
             archive=self.archives();self.discovery=None
-            cam=text(a,"camera",128);operator=self.operator(a)
+            cam=text(a,"camera",128);operator=archive.b2o.resolve_operator_id(cam,self.operator(a))
             try: start=datetime.fromisoformat(text(a,"start",25));end=datetime.fromisoformat(text(a,"end",25))
             except ValueError: raise InputError("Введите период.")
             if start.tzinfo or end.tzinfo or not 0<(end-start).total_seconds()<=7*86400: raise InputError("Период от 1 секунды до 7 суток, локальное время камеры.")
@@ -259,20 +259,38 @@ class Operations:
                 from linkvideo_vpn_helper.services.archive_diagnosis_engine import ArchiveDiagnosisEngine
                 ids=a.get("compare",[]);server_ids=a.get("server_compare",[])
                 if any(not isinstance(group,list) or len(group)>8 or any(not isinstance(x,str) or not x.strip() or len(x)>128 for x in group) for group in (ids,server_ids)): raise InputError("Не более 8 камер в каждой группе.")
-                def compare(group):
+                def canonical(raw):
+                    try: return str(archive.b2o.normalize_camera_id(raw,operator)[0])
+                    except Exception: return str(raw).strip()
+                main_id=canonical(d.camera.camera_id)
+                address_ids={canonical(x) for x in ids}
+                auto_error=False
+                if not server_ids:
+                    emit("Подбираю другие камеры vcore")
+                    try:
+                        candidates,_=archive.b2o.cameras_on_server(operator,d.camera.server,15)
+                        server_ids=[str(row.get("id_camera") or "") for row in candidates if isinstance(row,dict)]
+                    except Exception:
+                        auto_error=True;server_ids=[]
+                def compare(group,fast=False):
                     out=[]
-                    clean=list(dict.fromkeys(x.strip() for x in group if x.strip()!=cam))
+                    clean=list(dict.fromkeys(canonical(x) for x in group if x and canonical(x)!=main_id and (not fast or canonical(x) not in address_ids)))[:15 if fast else 8]
                     with ThreadPoolExecutor(max_workers=4) as pool:
-                        tasks={pool.submit(archive.diagnose_epoch,x,operator,d.requested_start,d.requested_end,fast=False,cancel_event=cancel):x for x in clean}
+                        tasks={pool.submit(archive.diagnose_epoch,x,operator,d.requested_start,d.requested_end,fast=fast,cancel_event=cancel):x for x in clean}
                         for task in as_completed(tasks):
                             x=tasks[task]
                             try: out.append((x,task.result(),None))
                             except Exception: out.append((x,None,RuntimeError("Не удалось проверить камеру")))
                     return out
-                addr=compare(ids);other=compare(server_ids)
+                emit("Сравниваю камеры адреса");addr=compare(ids)
+                if cancel.is_set(): raise InputError("Операция отменена.")
+                emit("Проверяю массовость на vcore");other=compare(server_ids,True)
+                if cancel.is_set(): raise InputError("Операция отменена.")
                 dx=ArchiveDiagnosisEngine().analyze(d,addr,other)
                 out["diagnosis"]={"title":dx.title,"summary":dx.summary,"confidence":dx.confidence_text,"side":dx.side_text,"cautions":dx.cautions}
-                out["compared"]={"address":len(addr),"server":len(other),"failed":sum(row[1] is None for row in addr+other)}
+                out["compared"]={"address":len(addr),"server":len(other),"failed":sum(row[1] is None for row in addr+other),"auto_error":auto_error}
+                out["diagnosis"]["evidence"]=[asdict(x) for x in dx.evidence]
+                out["diagnosis"]["gaps"]=[{"start":x.start,"end":x.end,"title":x.title,"summary":x.summary} for x in dx.gaps]
             return out
         if method=="archive_download":
             archive=self.archives()
@@ -293,17 +311,22 @@ class Operations:
             self.agent=AgentService(self.settings,creds)
             self.camera=self.agent.find_camera(text(a,"serial",96));self.plan=None
             return {**asdict(self.camera),"version":self.camera.version_text}
+        if method=="agent_settings":
+            if self.camera is None: raise InputError("Сначала найдите камеру.")
+            image=self.agent.get_image_enhance(self.camera)
+            streams=self.agent.get_video_streams(self.camera)
+            return {"rotation":int(image["ImageRotation"]),"bitrate":str(self.agent._main_video_encode_info(streams).get("BitRate",""))}
         if method=="agent_preview":
             self.writes_enabled()
             if self.camera is None: raise InputError("Сначала найдите камеру.")
             action=text(a,"action",24)
             if action=="timezone": value=number(a,"value",-12,14)
             elif action=="rotation":
-                value=number(a,"value",0,270)
-                if value not in (0,90,180,270): raise InputError("Выберите угол 0, 90, 180 или 270.")
-            elif action=="bitrate": value=number(a,"value",128,16384)
+                value=number(a,"value",0,3)
+            elif action=="bitrate": value=number(a,"value",1,100000)
             else: raise InputError("Неизвестная настройка.")
-            return self.stage("agent",(action,value),f"Камера {self.camera.serial_number}: {action} = {value}",self.camera.serial_number)
+            label={0:"Обычное изображение",1:"Вертикальное отражение",2:"Горизонтальное отражение",3:"Поворот на 180°"}.get(value) if action=="rotation" else str(value)
+            return self.stage("agent",(action,value),f"Камера {self.camera.serial_number}: {action} = {label}",self.camera.serial_number)
         if method=="templates_list":
             store=self.template_store()
             return {"categories":store.categories(),"items":[asdict(row) for row in store.list(text(a,"query",256,False),text(a,"category",70,False),a.get("favorites") is True)]}
@@ -346,7 +369,7 @@ class Operations:
     @staticmethod
     def archive_public(d):
         return {"camera":d.camera.label,"server":d.camera.server,"timezone":d.camera.timezone_offset,
-                "requested_seconds":d.requested_duration,"covered_seconds":d.covered_duration,
+                "requested_start":d.requested_start,"requested_end":d.requested_end,"requested_seconds":d.requested_duration,"covered_seconds":d.covered_duration,
                 "coverage":d.coverage_percent,"downloadable":d.has_downloadable_archive,
                 "exact_timeline":bool(d.slices),"checked":len(d.checked_hosts),"error_count":len(d.errors),
                 "gaps":[{"start":x.start,"end":x.end} for x in d.gaps],
