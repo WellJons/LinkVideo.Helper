@@ -10,7 +10,7 @@ import re
 import subprocess
 import shutil
 
-METHODS=frozenset(("copy_vpn","backup","delete_preview","backup_status","sheets_load","deleted_search","restore_preview","sheets_preview","cloud_connect","cloud_restore_preview","activity","camera_inspect","camera_live","agent_image","b2o_read","b2o_create_preview","billing_recipient","billing_transfer_preview","templates_import","templates_attach","templates_images","templates_detach","winbox","registry_list","registry_update"))
+METHODS=frozenset(("copy_vpn","backup","delete_preview","backup_status","sheets_load","deleted_search","restore_preview","sheets_preview","cloud_connect","cloud_restore_preview","activity","camera_inspect","camera_live","agent_image","b2o_read","b2o_create_preview","billing_recipient","billing_transfer_preview","templates_import","templates_attach","templates_reply","templates_images","templates_detach","winbox","registry_list","registry_update"))
 class Extended:
     def __init__(self,ops):
         self.o=ops;self.cloud=None;self.sheets=None;self.deleted={};self.cloud_deleted={};self.recipients={};self.camera_report=None
@@ -284,6 +284,40 @@ class Extended:
             if not path.is_absolute(): raise InputError("Выберите изображение.")
             o.template_store().attach_image(tid,path)
             return {"ok":True}
+        if m=="templates_reply":
+            from PySide6.QtCore import QByteArray,QBuffer,QIODevice,Qt
+            from PySide6.QtGui import QImageReader
+            store=o.template_store();tid=number(a,"id",1,2**31-1)
+            item=store.get(tid)
+            if item is None: raise InputError("Шаблон не найден.")
+            selected=a.get("image")
+            if selected is not None and (type(selected) is not int or selected<1): raise InputError("Некорректное изображение.")
+            rows=store.images(tid)
+            if selected is not None:
+                rows=[(i,p) for i,p in rows if i==selected]
+                if not rows: raise InputError("Изображение не принадлежит шаблону.")
+            images=[];skipped=0;total=0
+            for i,p in rows:
+                if len(images)>=12 or cancel.is_set(): skipped+=1;continue
+                try:
+                    if not p.is_file() or p.stat().st_size>20*1024*1024: raise ValueError()
+                    reader=QImageReader(str(p));reader.setAutoTransform(True)
+                    size=reader.size()
+                    if not size.isValid(): raise ValueError()
+                    if max(size.width(),size.height())>1600:
+                        size.scale(1600,1600,Qt.AspectRatioMode.KeepAspectRatio);reader.setScaledSize(size)
+                    image=reader.read()
+                    if image.isNull(): raise ValueError()
+                    if max(image.width(),image.height())>1600: image=image.scaled(1600,1600,Qt.AspectRatioMode.KeepAspectRatio,Qt.TransformationMode.SmoothTransformation)
+                    raw=QByteArray();buf=QBuffer(raw)
+                    if not buf.open(QIODevice.OpenModeFlag.WriteOnly): raise ValueError()
+                    saved=image.save(buf,"PNG");buf.close()
+                    if not saved or total+len(raw)>18*1024*1024: raise ValueError()
+                    total+=len(raw);images.append("data:image/png;base64,"+base64.b64encode(bytes(raw)).decode("ascii"))
+                except Exception: skipped+=1
+            if cancel.is_set(): raise InputError("Копирование отменено.")
+            if selected is not None and not images: raise InputError("Изображение недоступно.")
+            return {"text":item.body if selected is None else "","images":images,"skipped":skipped}
         if m=="templates_images":
             tid=number(a,"id",1,2**31-1)
             mime={".png":"image/png",".jpg":"image/jpeg",".jpeg":"image/jpeg",".webp":"image/webp",".gif":"image/gif"}

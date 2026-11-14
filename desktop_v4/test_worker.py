@@ -98,6 +98,14 @@ class TestWorkspace(unittest.TestCase):
     def test_camera_lookup_requires_independent_b2o(self):
         self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
         with self.assertRaises(InputError): self.w.dispatch("camera_lookup",{"query":"client"})
+    def test_manual_archive_command(self):
+        from desktop_v4.archive_command import validate_command
+        from linkvideo_vpn_helper.services.archive_download_methods import MANUAL_FFMPEG_TEMPLATE
+        self.assertEqual(validate_command(MANUAL_FFMPEG_TEMPLATE),MANUAL_FFMPEG_TEMPLATE)
+        with self.assertRaises(ValueError):
+            validate_command('ffmpeg -i "{input}" -vf movie=secret.mp4 "{output}"')
+        with self.assertRaises(ValueError):
+            validate_command('ffmpeg -i "{input}" extra.mp4 "{output}"')
     def test_separate_admin_auth(self):
         self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
         self.assertEqual(self.w.dispatch("admin_status",{}),{"username":"","b2o":False,"crm":False})

@@ -1,5 +1,5 @@
 'use strict';
-const {app,BrowserWindow,ipcMain,dialog,clipboard,safeStorage,shell}=require('electron');
+const {app,BrowserWindow,ipcMain,dialog,clipboard,safeStorage,shell,nativeImage}=require('electron');
 const path=require('node:path');
 const {pathToFileURL}=require('node:url');
 const {Bridge}=require('./bridge.cjs');
@@ -11,7 +11,7 @@ const {version:appVersion}=require('./package.json');
 app.setName('LinkVideo.Helper 4 Preview');
 app.setPath('userData',process.argv.includes('--lv4-smoke')&&process.env.LV4_SMOKE==='1'?require('node:fs').mkdtempSync(path.join(require('node:os').tmpdir(),'lv4-smoke-')):path.join(app.getPath('appData'),'LinkVideo.Helper.v4-preview'));
 if(!app.requestSingleInstanceLock()){app.quit()}else{
-let win=null,approved=null,updateAbort=null,installBusy=false;
+let win=null,approved=null,updateAbort=null,installBusy=false,lastArchive=null;
 const updater=new Updater(appVersion);
 const vault=new CredentialVault(app.getPath('userData'),safeStorage);
 const runtimeLog=new RuntimeLog(path.join(app.getPath('userData'),'logs'));
@@ -82,9 +82,28 @@ handle('helper:admin-login',adminLogin);
 handle('helper:admin-saved',async()=>{const c=vault.load('admin');if(!c)throw Error('Сохранённого входа админки нет.');return adminLogin({...c,remember:true})});
 handle('helper:archive-download',async a=>{
  if(!['ffmpeg','ffmpeg_no_audio','curl'].includes(a?.mode))throw Error('Выберите метод.');
+ const manual=clean(a?.manual??'',4000);if(manual===null)throw Error('Слишком длинная команда FFmpeg.');
  const result=await dialog.showSaveDialog(win,{title:'Сохранить архив',defaultPath:'archive.mp4',filters:[{name:'Видео MP4',extensions:['mp4']}]});
  if(result.canceled||!result.filePath)throw Error('Сохранение отменено.');
- return bridge.request('archive_download',{output:result.filePath,mode:a.mode});
+ const out=await bridge.request('archive_download',{output:result.filePath,mode:a.mode,manual});lastArchive=out?.output===result.filePath?result.filePath:null;return out;
+});
+handle('helper:archive-location',async()=>{
+ if(!lastArchive)throw Error('Нет сохранённого архива текущего сеанса.');
+ const stat=await fsp.stat(lastArchive);if(!stat.isFile())throw Error('Файл недоступен.');
+ shell.showItemInFolder(lastArchive);return true;
+});
+handle('helper:template-copy',async a=>{
+ if(!Number.isSafeInteger(a?.id)||a.id<1||a.image!=null&&(!Number.isSafeInteger(a.image)||a.image<1))throw Error('Выберите шаблон.');
+ const reply=await bridge.request('templates_reply',{id:a.id,image:a.image??null});
+ const text=typeof reply?.text==='string'?reply.text:'';
+ const images=Array.isArray(reply?.images)?reply.images.filter(s=>typeof s==='string'&&/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(s)).slice(0,12):[];
+ const decoded=images.map(s=>[s,nativeImage.createFromDataURL(s)]).filter(x=>!x[1].isEmpty());
+ if(!decoded.length){clipboard.writeText(text);return {count:0,skipped:reply.skipped||0}}
+ if(a.image!=null){clipboard.writeImage(decoded[0][1]);return {count:1,skipped:0}}
+ const escaped=text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+ const html='<html><body><div style="white-space:pre-wrap">'+escaped+'</div>'+decoded.map(([src])=>'<p><img src="'+src+'" style="max-width:100%;height:auto"></p>').join('')+'</body></html>';
+ clipboard.write({text,html,image:decoded[0][1]});
+ return {count:decoded.length,skipped:(reply.skipped||0)+images.length-decoded.length};
 });
 handle('helper:copy-vpn',async a=>{
  const host=clean(a?.host,253),login=clean(a?.login,128);
@@ -135,7 +154,7 @@ handle('helper:update-install',async()=>{
 });
 handle('helper:cancel',()=>{if(updateAbort){updateAbort.abort();return true}return bridge.cancel()});
 handle('helper:copy',a=>{const value=clean(a?.text,50000);if(value===null)throw Error('Слишком длинный текст.');clipboard.writeText(value);return null});
-handle('helper:logout',()=>{if(bridge.pending)throw Error('Сначала дождитесь завершения операции или отмените её.');approved=null;bridge.stop();try{vault.clear('work');vault.clear('admin')}catch{}return null});
+handle('helper:logout',()=>{if(bridge.pending)throw Error('Сначала дождитесь завершения операции или отмените её.');approved=null;lastArchive=null;bridge.stop();try{vault.clear('work');vault.clear('admin')}catch{}return null});
 function open(){
  win=new BrowserWindow({width:1320,height:850,minWidth:820,minHeight:600,show:false,backgroundColor:'#171a20',title:'LinkVideo.Helper 4 — Preview',webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,sandbox:true,nodeIntegration:false,webSecurity:true,devTools:!app.isPackaged}});
  win.webContents.setWindowOpenHandler(()=>({action:'deny'}));

@@ -482,12 +482,20 @@ class Operations:
             if not path.is_absolute() or path.suffix.lower()!=".mp4" or path.exists(): raise InputError("Выберите новый MP4-файл без перезаписи.")
             mode=text(a,"mode",20)
             if mode not in ("ffmpeg","ffmpeg_no_audio","curl"): raise InputError("Выберите метод загрузки.")
+            manual=text(a,"manual",4000,False)
+            if manual:
+                if mode=="curl": raise InputError("Ручная команда применяется только к FFmpeg.")
+                from desktop_v4.archive_command import validate_command
+                try: manual=validate_command(manual)
+                except ValueError as ex: raise InputError(str(ex))
             archive._lv_archive_download_method=mode
+            archive._lv_archive_manual_command=manual
             def progress(p):
                 if isinstance(p,dict):
                     val=p.get("value")
                     emit(str(p.get("title") or "Скачивание архива")[:100],val if type(val) in (int,float) else None)
-            result=archive.download(self.discovery,path,progress,cancel)
+            try: result=archive.download(self.discovery,path,progress,cancel)
+            finally: archive._lv_archive_manual_command=""
             return {"output":str(result.output),"downloaded_seconds":result.downloaded_duration,"failed_seconds":result.failed_duration,"partial":result.partial,"error_count":len(result.errors)}
         if method=="agent_search":
             from linkvideo_vpn_helper.services.agent_service import AgentService
