@@ -1,0 +1,32 @@
+name: Helper 4 Electron Preview
+on:
+  push:
+    branches: ['v4/electron']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  preview:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test Python RPC without production connections
+        run: python -m unittest desktop_v4.test_worker
+      - name: Install dependencies
+        working-directory: desktop_v4
+        run: npm install --no-audit --no-fund
+      - name: Test Electron bridge
+        working-directory: desktop_v4
+        run: npm run check
+      - name: Smoke test Electron workspace (offline preview)
+        working-directory: desktop_v4
+        env:
+          LV4_SMOKE: '1'
+        run: npx electron . --lv4-smoke
