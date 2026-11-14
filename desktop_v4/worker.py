@@ -33,7 +33,7 @@ class Workspace:
 
     def dispatch(self, method, args, cancel=None, emit=None):
         if method == "status":
-            return {"authenticated": self.session is not None, "version": "4.0.0-alpha.5"}
+            return {"authenticated": self.session is not None, "version": "4.0.0-alpha.6"}
         if method == "login":
             self.ops.close()
             self.session = self.identity = None
@@ -92,9 +92,11 @@ def build():
     from linkvideo_vpn_helper.services.vpn_automation_resilience import install_vpn_automation_resilience
     from linkvideo_vpn_helper.services.vpn_retention_policy import install_retention_policy
     from linkvideo_vpn_helper.services.vpn_retention_seed_guard import install_retention_seed_guard
-    install_service_access_policy()
     install_service_runtime_hardening()
     install_routeros_search_compat()
+    # Match release 3.0.27: install service role guards AFTER NAT compatibility,
+    # so its internal rollback can undo newly added rules even for employees.
+    install_service_access_policy()
     install_vpn_automation_resilience()
     install_retention_policy()
     install_retention_seed_guard()

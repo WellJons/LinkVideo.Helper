@@ -60,7 +60,7 @@ class MemorySettings:
     def sync(self): pass
 
 class Operations:
-    METHODS=frozenset(("client_detail","traffic_sample","camera_ports","inactive_fleet","inactive_batch_preview","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","lv_fleet","lv_batch_preview","create_suggest","admin_login","admin_logout","admin_status","billing_search","billing_select","billing_catalog","billing_history","billing_preview","billing_bulk_preview","billing_camera_image","create_auto","archive_discover","archive_diagnose","archive_download","archive_settings","archive_settings_update","agent_search","agent_settings","agent_preview","templates_list","templates_migrate","server_fleet","templates_save","templates_favorite","templates_delete","background_status")) | EXTRA_METHODS
+    METHODS=frozenset(("client_detail","traffic_sample","camera_ports","inactive_fleet","inactive_batch_preview","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","lv_fleet","lv_batch_preview","create_suggest","camera_lookup","admin_login","admin_logout","admin_status","billing_search","billing_select","billing_catalog","billing_history","billing_preview","billing_bulk_preview","billing_camera_image","create_auto","archive_discover","archive_diagnose","archive_download","archive_settings","archive_settings_update","agent_search","agent_settings","agent_preview","templates_list","templates_migrate","server_fleet","templates_save","templates_favorite","templates_delete","background_status")) | EXTRA_METHODS
     def __init__(self,workspace):
         self.w=workspace
         self.settings=MemorySettings(workspace)
@@ -200,6 +200,12 @@ class Operations:
             c=svc.get_client(h,creds,login)
             if c is None: raise InputError("Клиент не найден.")
             return {"server":h,"login":login,"online":bool(c.is_online),"rx":max(0,int(c.rx_bytes or 0)),"tx":max(0,int(c.tx_bytes or 0)),"uptime":str(c.uptime or ""),"interface":str(c.interface_name or ""),"sample_time":time.monotonic()}
+        if method=="camera_lookup":
+            from linkvideo_vpn_helper.services.camera_lookup import search_by_login
+            if self.admin_credentials is None: raise InputError("Выполните независимый вход в Админку.")
+            query=text(a,"query",100)
+            rows=search_by_login(query,self.archives().b2o,self.admin_credentials)
+            return [{k:getattr(c,k) for k in ("camera_id","operator_id","country","label","customer_login","status","tariff")} for c in rows][:200]
         if method=="camera_ports":
             from linkvideo_vpn_helper.services.vpn_camera_port_match import match_vpn_ports
             h=self.host(a);login=text(a,"login")

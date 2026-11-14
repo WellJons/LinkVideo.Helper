@@ -95,6 +95,9 @@ class TestWorkspace(unittest.TestCase):
             plan=self.w.dispatch("create_preview",{"host":"trusted.example","login":"test","ports":2,"count":1,"start_ip":"172.18.1.1"})
             self.assertIn("172.18.1.1",plan["label"])
             with self.assertRaises(InputError): self.w.dispatch("create_preview",{"host":"trusted.example","login":"test","ports":2,"count":1,"start_ip":"127.0.0.1"})
+    def test_camera_lookup_requires_independent_b2o(self):
+        self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
+        with self.assertRaises(InputError): self.w.dispatch("camera_lookup",{"query":"client"})
     def test_separate_admin_auth(self):
         self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
         self.assertEqual(self.w.dispatch("admin_status",{}),{"username":"","b2o":False,"crm":False})
