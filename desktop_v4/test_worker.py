@@ -59,6 +59,17 @@ class TestWorkspace(unittest.TestCase):
         self.assertNotIn("password",result["deleted"][0])
         self.assertEqual(result["deleted"][0]["ports"],["12000 → 80"])
         with self.assertRaises(InputError): self.w.dispatch("cloud_restore_preview",{"host":"trusted.example","login":"old"})
+    def test_nonsecret_archive_settings(self):
+        from desktop_v4.operations import MemorySettings
+        saved={}
+        disk=NS(value=lambda key,default,*args:saved.get(key,default),setValue=lambda key,val:saved.update({key:val}),sync=lambda:None)
+        settings=MemorySettings(NS(registry=NS(settings=disk)))
+        settings.setValue("archive/extra_cluster_enabled/provzor",True)
+        settings.setValue("b2o/token","secret")
+        self.assertTrue(settings.value("archive/extra_cluster_enabled/provzor",False,bool))
+        self.assertNotIn("b2o/token",saved)
+        settings.remove("b2o")
+        self.assertFalse(settings.value("b2o/token",""))
     def test_rotation_wire_value_and_permission(self):
         self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
         self.w.ops.camera=NS(serial_number="cam")

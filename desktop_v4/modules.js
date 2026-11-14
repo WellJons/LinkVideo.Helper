@@ -173,6 +173,12 @@
  function workspaceSettings(root){
   if(preview){root.append(notice('Настройки корпоративных серверов доступны после входа.'));return}
   section(root,'Защищённые учётные данные');action(root,live('Очистить сохранённый вход',()=>run(()=>rpc('clearSaved','work'))));
+  section(root,'Архив · кластеры и серверы');
+  action(root,live('Настройки архива',()=>run(async()=>{S.archiveSettings=await op('archive_settings')}),'primary'));
+  if(S.archiveSettings){
+   for(const item of S.archiveSettings.clusters){const b=el('div','panel setting-row');const sw=btn('','switch',()=>run(async()=>{S.archiveSettings=await op('archive_settings_update',{action:'cluster',cluster:item.key,enabled:!item.enabled})}));sw.setAttribute('role','switch');sw.setAttribute('aria-label',item.name);sw.setAttribute('aria-checked',String(item.enabled));sw.append(el('span'));b.append(add(el('div'),el('h3','',item.name),el('p','','Operator '+item.operator)),sw);root.append(b)}
+   if(identity?.role==='sysadmin'){for(const group of S.archiveSettings.hosts){if(!group.custom.length)continue;section(root,group.country+' · '+group.operator);root.append(table(['Сервер',''],group.custom.map(host=>[host,live('Удалить',()=>run(async()=>{S.archiveSettings=await op('archive_settings_update',{action:'remove_host',operator:group.operator,host})}))])))}const operator=field('Оператор','select','241',S.archiveSettings.hosts.map(x=>[x.operator,x.country+' · '+x.operator])),host=field('Дополнительный архивный сервер','text');form(root,operator,host);action(root,live('Добавить сервер архива',()=>run(async()=>{S.archiveSettings=await op('archive_settings_update',{action:'add_host',operator:num(operator),host:value(host)})})))}
+  }
   if(identity?.role!=='sysadmin')return;
   section(root,'Реестр VPN-серверов');
   const load=async()=>{S.registry=await op('registry_list');S.hosts=await rpc('servers');serverState=null;searchState=null};

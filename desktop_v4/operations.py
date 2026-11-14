@@ -34,23 +34,36 @@ def public_client(c):
     return out
 
 class MemorySettings:
-    """Qt-compatible ephemeral settings, never persist B2O session or secrets."""
-    def __init__(self): self.data={}
+    """Only explicit non-secret archive preferences persist in the 4.0 profile."""
+    PREFIXES=("archive/extra_cluster_enabled/","archive/custom_servers/")
+    def __init__(self,workspace=None): self.data={};self.workspace=workspace
+    def disk(self,key):
+        registry=getattr(self.workspace,"registry",None)
+        return registry.settings if registry is not None and key.startswith(self.PREFIXES) else None
     def value(self,key,default=None,type=None):
+        disk=self.disk(key)
+        if disk is not None: return disk.value(key,default,type) if type is not None else disk.value(key,default)
         val=self.data.get(key,default)
         return type(val) if type is not None and val is not None else val
-    def setValue(self,key,value): self.data[key]=value
+    def setValue(self,key,value):
+        disk=self.disk(key)
+        if disk is not None: disk.setValue(key,value);disk.sync()
+        else: self.data[key]=value
     def remove(self,key):
+        disk=self.disk(key)
+        if disk is not None: disk.remove(key);disk.sync()
         for k in list(self.data):
             if k==key or k.startswith(key+"/"): self.data.pop(k,None)
-    def contains(self,key): return key in self.data
+    def contains(self,key):
+        disk=self.disk(key)
+        return disk.contains(key) if disk is not None else key in self.data
     def sync(self): pass
 
 class Operations:
-    METHODS=frozenset(("client_detail","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","admin_login","admin_logout","admin_status","billing_search","billing_select","billing_catalog","billing_history","billing_preview","billing_bulk_preview","billing_camera_image","create_auto","archive_discover","archive_diagnose","archive_download","agent_search","agent_settings","agent_preview","templates_list","templates_save","templates_favorite","templates_delete","background_status")) | EXTRA_METHODS
+    METHODS=frozenset(("client_detail","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","admin_login","admin_logout","admin_status","billing_search","billing_select","billing_catalog","billing_history","billing_preview","billing_bulk_preview","billing_camera_image","create_auto","archive_discover","archive_diagnose","archive_download","archive_settings","archive_settings_update","agent_search","agent_settings","agent_preview","templates_list","templates_save","templates_favorite","templates_delete","background_status")) | EXTRA_METHODS
     def __init__(self,workspace):
         self.w=workspace
-        self.settings=MemorySettings()
+        self.settings=MemorySettings(workspace)
         self.billing=None
         self.transport=None
         self.hits={}
@@ -84,6 +97,9 @@ class Operations:
     def operator(self,args):
         op=number(args,"operator",1,9999)
         if op not in (241,1721,1741,1442,621): raise InputError("Выберите доступный кластер B2O.")
+        if op in (1442,621):
+            from linkvideo_vpn_helper.services.archive_service_core import B2OService
+            if not B2OService(self.settings).is_operator_enabled(op): raise InputError("Включите дополнительный кластер в Настройках → Архив.")
         return op
 
     def admin_only(self):
@@ -118,7 +134,7 @@ class Operations:
         return self.client
 
     def archives(self):
-        if not self.b2o_ready or self.archive is None: raise InputError("Выполните независимый вход в B2O.")
+        if not self.b2o_ready or self.archive is None or not self.archive.b2o.token(): raise InputError("Выполните независимый вход в B2O.")
         return self.archive
 
     def template_store(self):
@@ -135,6 +151,24 @@ class Operations:
         creds=self.w.session
         if method in EXTRA_METHODS:
             return self.extra.dispatch(method,a,cancel,emit)
+        if method in ("archive_settings","archive_settings_update"):
+            from linkvideo_vpn_helper.services.archive_service_core import B2OService
+            service=B2OService(self.settings)
+            if method=="archive_settings_update":
+                action=text(a,"action",24)
+                if action=="cluster":
+                    key=text(a,"cluster",32)
+                    if key not in {x[0] for x in service.EXTRA_CLUSTERS} or type(a.get("enabled")) is not bool: raise InputError("Неизвестный кластер.")
+                    service.set_extra_cluster_enabled(key,a["enabled"])
+                elif action in ("add_host","remove_host"):
+                    self.admin_only()
+                    operator=number(a,"operator",1,9999)
+                    if operator not in service.OPERATOR_PROFILES: raise InputError("Неизвестный оператор.")
+                    host=text(a,"host",253)
+                    if action=="add_host": service.add_custom_archive_server(operator,host)
+                    else: service.remove_custom_archive_server(operator,host)
+                else: raise InputError("Неизвестная настройка архива.")
+            return {"clusters":[{"key":k,"name":n,"operator":op,"enabled":service.extra_cluster_enabled(k)} for k,n,op in service.EXTRA_CLUSTERS],"hosts":[{"operator":op,"country":service.operator_country(op),"custom":service.custom_archive_servers(op)} for op in service.OPERATOR_PROFILES]}
         if method=="client_detail":
             return public_client(self.get_client(self.host(a),text(a,"login")))
         if method=="create_auto":
@@ -162,7 +196,9 @@ class Operations:
             if act in ("port_enable","port_disable","remove_port","recreate_port"):
                 value=number(a,"port",1,65535)
                 if value not in c.ports: raise InputError("Порт не принадлежит клиенту.")
-                if c.port_conflicts.get(value): raise InputError("Обнаружен конфликт NAT. Операция заблокирована.")
+                try: conflicts=svc.inspect_port_conflicts(h,creds,c)
+                except Exception: raise InputError("Проверка конфликтов NAT не завершилась. Изменение заблокировано.")
+                if conflicts.get(value): raise InputError("Обнаружен конфликт NAT. Операция заблокирована.")
             if act=="password":
                 value=text(a,"password",128)
                 if len(value)<8: raise InputError("Пароль должен быть не короче 8 символов.")
@@ -336,7 +372,7 @@ class Operations:
             def progress(p):
                 if isinstance(p,dict):
                     val=p.get("value")
-                    emit("Скачивание архива",val if type(val) in (int,float) else None)
+                    emit(str(p.get("title") or "Скачивание архива")[:100],val if type(val) in (int,float) else None)
             result=archive.download(self.discovery,path,progress,cancel)
             return {"output":str(result.output),"downloaded_seconds":result.downloaded_duration,"failed_seconds":result.failed_duration,"partial":result.partial,"error_count":len(result.errors)}
         if method=="agent_search":
@@ -421,6 +457,10 @@ class Operations:
             if act not in ("add","disconnect"): self.admin_only()
             current=self.get_client(h,login)
             if self.client_revision(current)!=revision: raise InputError("Данные клиента изменились. Повторите подготовку.")
+            if act in ("port_enable","port_disable","remove_port","recreate_port"):
+                try: conflicts=svc.inspect_port_conflicts(h,creds,current)
+                except Exception: raise InputError("Проверка конфликтов NAT не завершилась. Изменение заблокировано.")
+                if conflicts.get(value): raise InputError("Обнаружен конфликт NAT. Операция заблокирована.")
             if act=="add": result=svc.add_ports(h,creds,login,value)
             elif act in ("enable","disable"): result=svc.set_secret_enabled(h,creds,login,act=="enable")
             elif act in ("port_enable","port_disable"): result=svc.set_port_enabled(h,creds,login,value,act=="port_enable")
