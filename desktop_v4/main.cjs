@@ -4,10 +4,13 @@ const path=require('node:path');
 const {pathToFileURL}=require('node:url');
 const {Bridge}=require('./bridge.cjs');
 const {CredentialVault}=require('./credentials.cjs');
+const {Updater}=require('./updater.cjs');
+const {version:appVersion}=require('./package.json');
 app.setName('LinkVideo.Helper 4 Preview');
 app.setPath('userData',process.argv.includes('--lv4-smoke')&&process.env.LV4_SMOKE==='1'?require('node:fs').mkdtempSync(path.join(require('node:os').tmpdir(),'lv4-smoke-')):path.join(app.getPath('appData'),'LinkVideo.Helper.v4-preview'));
 if(!app.requestSingleInstanceLock()){app.quit()}else{
-let win=null,approved=null;
+let win=null,approved=null,updateAbort=null;
+const updater=new Updater(appVersion);
 const vault=new CredentialVault(app.getPath('userData'),safeStorage);
 const bridge=new Bridge({root:app.isPackaged?process.resourcesPath:path.resolve(__dirname,'..'),profile:app.getPath('userData'),command:app.isPackaged?path.join(process.resourcesPath,'worker','helper-core.exe'):null,onProgress:p=>{if(win&&!win.isDestroyed())win.webContents.send('helper:progress',p)}});
 const smokeMode=process.argv.includes('--lv4-smoke')&&process.env.LV4_SMOKE==='1';
@@ -81,7 +84,16 @@ handle('helper:file-action',async a=>{
  if(choice.canceled||!choice.filePaths[0])throw Error('Выбор отменён.');
  return bridge.request(a.method,{path:choice.filePaths[0],id:a?.id,category:clean(a?.category,70)||''});
 });
-handle('helper:cancel',()=>bridge.cancel());
+handle('helper:update-check',()=>updater.check());
+handle('helper:update-download',async()=>{
+ if(bridge.pending||updater.active)throw Error('Сначала завершите текущую операцию.');
+ if(!updater.release)throw Error('Сначала проверьте обновления.');
+ const r=await dialog.showSaveDialog(win,{title:'Сохранить проверенный установщик 4.0',defaultPath:updater.release.name,filters:[{name:'Установщик Windows',extensions:['exe']}]});
+ if(r.canceled||!r.filePath)throw Error('Сохранение отменено.');
+ updateAbort=new AbortController();
+ try{return await updater.download(r.filePath,n=>{if(win&&!win.isDestroyed())win.webContents.send('helper:progress',{label:'Скачивание обновления 4.0',value:n})},updateAbort.signal)}finally{updateAbort=null}
+});
+handle('helper:cancel',()=>{if(updateAbort){updateAbort.abort();return true}return bridge.cancel()});
 handle('helper:copy',a=>{const value=clean(a?.text,50000);if(value===null)throw Error('Слишком длинный текст.');clipboard.writeText(value);return null});
 handle('helper:logout',()=>{if(bridge.pending)throw Error('Сначала дождитесь завершения операции или отмените её.');approved=null;bridge.stop();try{vault.clear('work');vault.clear('admin')}catch{}return null});
 function open(){
@@ -92,7 +104,7 @@ function open(){
  win.webContents.session.setPermissionRequestHandler((_wc,_permission,callback)=>callback(false));
  win.webContents.session.setPermissionCheckHandler(()=>false);
  win.once('ready-to-show',()=>win.show());
- win.on('close',e=>{if(bridge.pending&&!smokeMode){e.preventDefault();bridge.cancel();void dialog.showMessageBox(win,{type:'info',message:'Запрошена отмена. Дождитесь окончания операции перед закрытием.'})}});
+ win.on('close',e=>{if((bridge.pending||updater.active)&&!smokeMode){e.preventDefault();if(updateAbort)updateAbort.abort();else bridge.cancel();void dialog.showMessageBox(win,{type:'info',message:'Запрошена отмена. Дождитесь окончания операции перед закрытием.'})}});
  win.on('closed',()=>{bridge.stop();win=null});
  if(smokeMode)win.webContents.once('did-finish-load',()=>{smoke().then(()=>{console.log('Electron UI smoke passed');app.exit(0)},err=>{console.error(err.message);app.exit(1)})});
  win.loadFile(path.join(__dirname,'index.html'));
@@ -101,7 +113,7 @@ function open(){
 async function smoke(){
  const cold=performance.now();await bridge.request('status');const coldMs=performance.now()-cold;
  const timings=[];for(let i=0;i<15;i++){const started=performance.now();await bridge.request('status');timings.push(performance.now()-started)}
- const attempt=await win.webContents.executeJavaScript(`(async()=>{const wait=()=>new Promise(r=>setTimeout(r,300));const get=id=>document.getElementById(id);if(!window.helper||get('login').hidden)throw Error('Missing login');const core=await window.helper.status();if(!core.ok||core.data.authenticated||core.data.version!=='4.0.0-alpha.3')throw Error('Worker not reachable');get('preview').click();await wait();if(get('workspace').hidden||!get('page').innerText.includes('Демонстрационный режим'))throw Error('Preview missing');const nav=label=>[...get('nav').querySelectorAll('button')].find(b=>b.innerText.includes(label));nav('Поиск клиентов').click();await wait();if(!get('page').querySelector('button[type=submit]').disabled)throw Error('Preview search active');nav('Настройки').click();await wait();const sw=get('page').querySelector('[role=switch]');const before=sw.getAttribute('aria-checked');sw.click();if(get('page').querySelector('[role=switch]').getAttribute('aria-checked')===before)throw Error('Motion switch failed');for(const label of ['Создание VPN','Неактивные VPN','LV-автоматика','Резерв / восстановление','История VPN','Биллинг','Архивы','Диагностика','Новый Агент','Камеры / B2O','Шаблоны','CRM / B2O']){nav(label).click();await wait();if(!get('page').querySelector('h1'))throw Error('Missing view: '+label)}nav('Настройки').click();get('theme').click();await wait();if(!document.documentElement.classList.contains('light'))throw Error('Theme failed');get('logout').click();await wait();if(get('login').hidden||!get('workspace').hidden)throw Error('Logout failed');return true})()`);
+ const attempt=await win.webContents.executeJavaScript(`(async()=>{const wait=()=>new Promise(r=>setTimeout(r,300));const get=id=>document.getElementById(id);if(!window.helper||get('login').hidden)throw Error('Missing login');const core=await window.helper.status();if(!core.ok||core.data.authenticated||core.data.version!=='4.0.0-alpha.4')throw Error('Worker not reachable');get('preview').click();await wait();if(get('workspace').hidden||!get('page').innerText.includes('Демонстрационный режим'))throw Error('Preview missing');const nav=label=>[...get('nav').querySelectorAll('button')].find(b=>b.innerText.includes(label));nav('Поиск клиентов').click();await wait();if(!get('page').querySelector('button[type=submit]').disabled)throw Error('Preview search active');nav('Настройки').click();await wait();const sw=get('page').querySelector('[role=switch]');const before=sw.getAttribute('aria-checked');sw.click();if(get('page').querySelector('[role=switch]').getAttribute('aria-checked')===before)throw Error('Motion switch failed');for(const label of ['Создание VPN','Неактивные VPN','LV-автоматика','Резерв / восстановление','История VPN','Биллинг','Архивы','Диагностика','Новый Агент','Камеры / B2O','Шаблоны','CRM / B2O']){nav(label).click();await wait();if(!get('page').querySelector('h1'))throw Error('Missing view: '+label)}nav('Настройки').click();get('theme').click();await wait();if(!document.documentElement.classList.contains('light'))throw Error('Theme failed');get('logout').click();await wait();if(get('login').hidden||!get('workspace').hidden)throw Error('Logout failed');return true})()`);
  if(!attempt)throw Error('Smoke test failed');
  const metrics={coldCoreMs:Math.round(coldMs),warmRpcMeanMs:Math.round(timings.reduce((a,b)=>a+b,0)/timings.length*100)/100,electronProcesses:app.getAppMetrics().map(x=>({type:x.type,workingSetKB:x.memory?.workingSetSize||0}))};
  console.log('LV4_METRICS '+JSON.stringify(metrics));if(process.env.LV4_METRICS_PATH)require('node:fs').writeFileSync(process.env.LV4_METRICS_PATH,JSON.stringify(metrics,null,2));

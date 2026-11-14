@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('helper',Object.freeze({
  clearSaved:kind=>ipcRenderer.invoke('helper:clear-saved',{kind}),
  adminLogin:(username,password,target,remember)=>ipcRenderer.invoke('helper:admin-login',{username,password,target,remember}),
  adminSaved:()=>ipcRenderer.invoke('helper:admin-saved'),
+ updateCheck:()=>ipcRenderer.invoke('helper:update-check'),
+ updateDownload:()=>ipcRenderer.invoke('helper:update-download'),
  status:()=>ipcRenderer.invoke('helper:status'),
  search:(query,mode)=>ipcRenderer.invoke('helper:search',{query,mode}),
  servers:()=>ipcRenderer.invoke('helper:servers'),

@@ -2,12 +2,13 @@ name: Helper 4 Electron Preview
 on:
   push:
     branches: ['v4/electron']
+    tags: ['v4.*-alpha.*', 'v4.*-beta.*', 'v4.*-rc.*']
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
   group: helper-v4-preview
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   preview:
     runs-on: windows-latest
@@ -20,6 +21,87 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Verify release tag matches packaged version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $v = (Get-Content desktop_v4/package.json -Raw | ConvertFrom-Json).version
+          if ($env:GITHUB_REF_NAME -cne ('v' + $v) -or $v -notmatch '^4\.\d+\.\d+-(alpha|beta|rc)\.\d+
+        run: python -m pip install -r requirements.txt pyinstaller
+      - name: Test Python RPC without production connections
+        run: python -m unittest desktop_v4.test_worker
+      - name: Compile Python adapters
+        run: python -m compileall -q desktop_v4
+      - name: Install Electron dependencies
+        working-directory: desktop_v4
+        run: npm install --no-audit --no-fund
+      - name: Test Electron bridge
+        working-directory: desktop_v4
+        run: npm run check
+      - name: Smoke test Electron workspace (offline preview)
+        working-directory: desktop_v4
+        env:
+          LV4_SMOKE: '1'
+        run: npx electron . --lv4-smoke
+      - name: Build self-contained Python core
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build-v4-core | Out-Null
+          python -m PyInstaller --noconfirm --clean --onedir --console --name helper-core --distpath dist-v4-core --workpath build-v4-core --specpath build-v4-core --paths . --exclude-module PySide6.QtWebEngine --exclude-module PySide6.QtQml desktop_v4/worker.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Move-Item dist-v4-core/helper-core dist-v4-core/worker
+      - name: Package Windows Electron application
+        working-directory: desktop_v4
+        run: npm run package:win
+      - name: Smoke test packaged executable with bundled Python
+        shell: pwsh
+        env:
+          LV4_SMOKE: '1'
+          LV4_METRICS_PATH: ${{ github.workspace }}/dist-v4/performance.json
+        run: |
+          $app = Resolve-Path 'dist-v4/LinkVideo.Helper.4-win32-x64/LinkVideo.Helper.4.exe'
+          $p = Start-Process -FilePath $app -ArgumentList '--lv4-smoke' -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "Packaged smoke test failed: $($p.ExitCode)" }
+      - name: Build isolated Windows installer
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Inno Setup 6\ISCC.exe'
+          if (!(Test-Path $iscc)) { choco install innosetup --yes --no-progress; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
+          & ./desktop_v4/installer-brand.ps1
+          & $iscc desktop_v4/installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-FileHash dist-v4/*-Setup.exe -Algorithm SHA256 | Format-List | Out-File dist-v4/SHA256.txt
+      - name: Smoke test actual installed application
+        shell: pwsh
+        env:
+          LV4_SMOKE: '1'
+        run: |
+          $dest = Join-Path $env:RUNNER_TEMP 'LV4-Installer-Smoke'
+          $installer = (Get-ChildItem dist-v4/*-Setup.exe | Select-Object -First 1).FullName
+          $p = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOICONS',('/DIR="' + $dest + '"')) -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "Setup failed: $($p.ExitCode)" }
+          $p = Start-Process -FilePath (Join-Path $dest 'LinkVideo.Helper.4.exe') -ArgumentList '--lv4-smoke' -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "Installed app failed: $($p.ExitCode)" }
+          $uninstaller = Get-ChildItem $dest/unins*.exe | Select-Object -First 1
+          if (!$uninstaller) { throw 'Missing uninstaller' }
+          $p = Start-Process -FilePath $uninstaller.FullName -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "Uninstall failed: $($p.ExitCode)" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LinkVideo.Helper-4.0.0-alpha.4-Windows-Setup
+          path: |
+            dist-v4/*-Setup.exe
+            dist-v4/SHA256.txt
+            dist-v4/performance.json
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LinkVideo.Helper-4.0.0-alpha.4-Portable
+          path: dist-v4/LinkVideo.Helper.4-win32-x64/
+          if-no-files-found: error
+          retention-days: 14
+) { throw 'Invalid Helper 4 release tag' }
       - name: Install Python runtime build dependencies
         run: python -m pip install -r requirements.txt pyinstaller
       - name: Test Python RPC without production connections
@@ -67,7 +149,7 @@ jobs:
           Get-FileHash dist-v4/*-Setup.exe -Algorithm SHA256 | Format-List | Out-File dist-v4/SHA256.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: LinkVideo.Helper-4.0.0-alpha.3-Windows-Setup
+          name: LinkVideo.Helper-4.0.0-alpha.4-Windows-Setup
           path: |
             dist-v4/*-Setup.exe
             dist-v4/SHA256.txt
@@ -76,7 +158,28 @@ jobs:
           retention-days: 14
       - uses: actions/upload-artifact@v4
         with:
-          name: LinkVideo.Helper-4.0.0-alpha.3-Portable
+          name: LinkVideo.Helper-4.0.0-alpha.4-Portable
           path: dist-v4/LinkVideo.Helper.4-win32-x64/
           if-no-files-found: error
           retention-days: 14
+
+  publish-preview:
+    if: startsWith(github.ref, 'refs/tags/v4.')
+    needs: preview
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: LinkVideo.Helper-4.0.0-alpha.4-Windows-Setup
+          path: release
+      - name: Publish isolated prerelease (only explicit tag push)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          v="${GITHUB_REF_NAME#v}"
+          [[ "$v" =~ ^4\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[0-9]+$ ]]
+          test -f "release/LinkVideo.Helper.${v}-Setup.exe"
+          gh release create "$GITHUB_REF_NAME" "release/LinkVideo.Helper.${v}-Setup.exe" release/SHA256.txt release/performance.json -R "$GITHUB_REPOSITORY" --verify-tag --prerelease --latest=false --title "LinkVideo.Helper ${v}" --notes 'Preview 4.0. Isolated from 3.x. Production writes disabled by default.'
