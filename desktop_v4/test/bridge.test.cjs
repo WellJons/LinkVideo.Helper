@@ -1,0 +1,5 @@
+const test=require('node:test');const assert=require('node:assert/strict');const {EventEmitter}=require('node:events');const {PassThrough}=require('node:stream');const {Bridge}=require('../bridge.cjs');
+function fake(){const c=new EventEmitter();c.stdin=new PassThrough();c.stdout=new PassThrough();c.kill=()=>{c.killed=true;c.emit('exit')};return c}
+test('RPC correlates responses and rejects concurrent requests',async()=>{let c=fake();let b=new Bridge({spawnFn:()=>c,timeout:1000});let p=b.request('status');await assert.rejects(b.request('search'),/Дождитесь/);c.stdout.write('{"id":1,"ok":true,"result":{"authenticated":false}}\n');assert.deepEqual(await p,{authenticated:false});b.stop();assert.equal(c.killed,true)});
+test('logout kills worker and rejects outstanding operation',async()=>{let c=fake();let b=new Bridge({spawnFn:()=>c});let p=b.request('login');b.stop();await assert.rejects(p,/Сессия/);assert.equal(c.killed,true)});
+test('malformed response closes worker',async()=>{let c=fake();let b=new Bridge({spawnFn:()=>c});let p=b.request('status');c.stdout.write('not json\n');await assert.rejects(p,/Некорректный/);assert.equal(c.killed,true)});
