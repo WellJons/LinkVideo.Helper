@@ -98,6 +98,12 @@ def build():
     install_vpn_automation_resilience()
     install_retention_policy()
     install_retention_seed_guard()
+    from linkvideo_vpn_helper.services.vpn_sheets_retention_compat import install_vpn_sheets_retention_compat
+    from linkvideo_vpn_helper.services.vpn_sheets_resilience import install_vpn_sheets_resilience
+    from linkvideo_vpn_helper.services.vpn_sheets_operator_view import install_vpn_sheets_operator_view
+    install_vpn_sheets_retention_compat()
+    install_vpn_sheets_resilience()
+    install_vpn_sheets_operator_view()
     service = VPNService()
     workspace=Workspace(ServerRegistry, verify_routeros_user, service, FastSearchService(service), SessionCredentials, is_employee_username)
     import os

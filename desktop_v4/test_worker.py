@@ -78,6 +78,17 @@ class TestWorkspace(unittest.TestCase):
             self.assertIn("180",plan["label"])
             with self.assertRaises(InputError):
                 self.w.dispatch("agent_preview",{"action":"rotation","value":90})
+    def test_traffic_projection(self):
+        self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
+        self.w.service=NS(get_client=lambda *a,**kw:NS(is_online=True,rx_bytes=100,tx_bytes=20,uptime="1h",interface_name="l2tp",password="not-exported"))
+        out=self.w.dispatch("traffic_sample",{"host":"trusted.example","login":"test"})
+        self.assertEqual((out["rx"],out["tx"]),(100,20))
+        self.assertNotIn("password",out)
+        with self.assertRaises(InputError): self.w.dispatch("traffic_sample",{"host":"evil.example","login":"test"})
+    def test_inactive_batch_employee_denied(self):
+        self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
+        with patch.dict("os.environ",{"LV4_ENABLE_WRITES":"1"}):
+            with self.assertRaises(InputError): self.w.dispatch("inactive_batch_preview",{"action":"disable","targets":[]})
     def test_separate_admin_auth(self):
         self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
         self.assertEqual(self.w.dispatch("admin_status",{}),{"username":"","b2o":False,"crm":False})

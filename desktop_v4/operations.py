@@ -60,7 +60,7 @@ class MemorySettings:
     def sync(self): pass
 
 class Operations:
-    METHODS=frozenset(("client_detail","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","admin_login","admin_logout","admin_status","billing_search","billing_select","billing_catalog","billing_history","billing_preview","billing_bulk_preview","billing_camera_image","create_auto","archive_discover","archive_diagnose","archive_download","archive_settings","archive_settings_update","agent_search","agent_settings","agent_preview","templates_list","templates_migrate","server_fleet","templates_save","templates_favorite","templates_delete","background_status")) | EXTRA_METHODS
+    METHODS=frozenset(("client_detail","traffic_sample","camera_ports","inactive_fleet","inactive_batch_preview","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","admin_login","admin_logout","admin_status","billing_search","billing_select","billing_catalog","billing_history","billing_preview","billing_bulk_preview","billing_camera_image","create_auto","archive_discover","archive_diagnose","archive_download","archive_settings","archive_settings_update","agent_search","agent_settings","agent_preview","templates_list","templates_migrate","server_fleet","templates_save","templates_favorite","templates_delete","background_status")) | EXTRA_METHODS
     def __init__(self,workspace):
         self.w=workspace
         self.settings=MemorySettings(workspace)
@@ -75,6 +75,8 @@ class Operations:
         self.templates=None
         self.plan=None
         self.admin_name=""
+        self.admin_credentials=None
+        self.inactive_records={}
         self.b2o_ready=False
         self.uncertain=set()
         self.extra=Extended(self)
@@ -82,7 +84,7 @@ class Operations:
     def clear_admin(self):
         if self.transport: self.transport.close()
         self.transport=self.billing=self.archive=self.discovery=self.client=None
-        self.hits={};self.extra.recipients={};self.extra.camera_report=None;self.b2o_ready=False;self.admin_name='';self.plan=None
+        self.hits={};self.extra.recipients={};self.extra.camera_report=None;self.b2o_ready=False;self.admin_name='';self.admin_credentials=None;self.plan=None
         self.settings.remove('b2o')
 
     def close(self):
@@ -188,6 +190,54 @@ class Operations:
             return {"rows":[{"host":h,"country":self.w.hosts[h].country,"metrics":results.get(h),"error":failed.get(h)} for h in hosts],"checked":len(results)+len(failed),"cancelled":cancel.is_set()}
         if method=="client_detail":
             return public_client(self.get_client(self.host(a),text(a,"login")))
+        if method=="traffic_sample":
+            h=self.host(a);login=text(a,"login")
+            c=svc.get_client(h,creds,login)
+            if c is None: raise InputError("Клиент не найден.")
+            return {"server":h,"login":login,"online":bool(c.is_online),"rx":max(0,int(c.rx_bytes or 0)),"tx":max(0,int(c.tx_bytes or 0)),"uptime":str(c.uptime or ""),"interface":str(c.interface_name or ""),"sample_time":time.monotonic()}
+        if method=="camera_ports":
+            from linkvideo_vpn_helper.services.vpn_camera_port_match import match_vpn_ports
+            h=self.host(a);login=text(a,"login")
+            b2o=self.archives().b2o
+            if self.admin_credentials is None: raise InputError("Выполните независимый вход в Админку.")
+            c=self.get_client(h,login)
+            report=match_vpn_ports(c.login,tuple(c.ports),b2o,self.admin_credentials,vpn_server=h,override_login=text(a,"override",100,False),country=self.w.hosts[h].country)
+            return {**asdict(report),"matched_camera_count":report.matched_camera_count}
+        if method=="inactive_fleet":
+            days=number(a,"days",1,3650);hosts=list(self.w.hosts) if a.get("all") is True else [self.host(a)]
+            rows=[];errors=[];self.inactive_records={}
+            with ThreadPoolExecutor(max_workers=min(8,max(1,len(hosts)))) as pool:
+                tasks={pool.submit(svc.list_lifecycle_clients,h,creds,days,a.get("unknown") is not False):h for h in hosts}
+                checked=0
+                for future in as_completed(tasks):
+                    if cancel.is_set():
+                        for x in tasks: x.cancel()
+                        break
+                    h=tasks[future]
+                    try: rows.extend(future.result())
+                    except Exception: errors.append(h)
+                    checked+=1;emit("Проверено "+str(checked)+"/"+str(len(hosts)),round(checked*100/max(1,len(hosts))))
+            if not cancel.is_set(): self.inactive_records={(c.server,c.login):c for c in rows if not c.is_online}
+            return {"rows":[{**{k:getattr(c,k) for k in ("server","login","last_logged_out","is_enabled","remote_address","lifecycle_state","is_online","lifecycle_source")},"last_seen":c.last_logged_out_dt.isoformat() if c.last_logged_out_dt else None} for c in svc.sort_inactive_records(rows,"old")],"errors":errors,"total":len(hosts),"cancelled":cancel.is_set()}
+        if method=="inactive_batch_preview":
+            self.admin_only();self.writes_enabled()
+            action=text(a,"action",16)
+            if action not in ("enable","disable"): raise InputError("Недопустимое массовое действие.")
+            targets=a.get("targets")
+            if not isinstance(targets,list) or not 1<=len(targets)<=50: raise InputError("Выберите от 1 до 50 учёток.")
+            prepared=[];seen=set()
+            for i,item in enumerate(targets):
+                if not isinstance(item,dict): raise InputError("Некорректная учётка.")
+                h=self.host(item);login=text(item,"login")
+                if (h,login) in seen or (h,login) not in self.inactive_records: raise InputError("Повторите проверку неактивных учёток.")
+                seen.add((h,login))
+                if cancel.is_set(): raise InputError("Операция отменена.")
+                c=self.get_client(h,login)
+                if c.is_online or c.is_enabled==(action=="enable"): raise InputError("Состояние "+login+" изменилось или уже соответствует действию. Повторите проверку.")
+                prepared.append((h,login,self.client_revision(c)))
+                emit("Проверка учёток",round((i+1)*100/len(targets)))
+            verb="Включить" if action=="enable" else "Отключить"
+            return self.stage("inactive_batch",(action,tuple(prepared)),f"{verb} {len(prepared)} неактивных VPN: "+", ".join(h+"/"+login for h,login,_ in prepared[:5])+("…" if len(prepared)>5 else "")+". Отдельные операции без автоматического отката.")
         if method=="create_auto":
             region=text(a,"country",50)
             hosts=[h for h,row in self.w.hosts.items() if row.country==region]
@@ -271,6 +321,9 @@ class Operations:
                     if self.transport: self.transport.close()
                     self.transport=self.billing=None;errors.append("CRM: вход или защищённый запрос не подтверждён.")
             self.admin_name=username if self.b2o_ready or self.billing else ""
+            if self.b2o_ready:
+                from types import SimpleNamespace
+                self.admin_credentials=SimpleNamespace(username=username,password=password)
             return {"username":self.admin_name,"b2o":self.b2o_ready,"crm":self.billing is not None,"errors":errors}
         if method=="billing_search":
             g=self.crm();self.client=None;self.hits={};self.plan=None
@@ -432,11 +485,11 @@ class Operations:
             else: store.delete(tid)
             return {"ok":True}
         if method=="background_status":
-            from linkvideo_vpn_helper.services.vpn_background_service import read_status, read_task_receipt
+            from linkvideo_vpn_helper.services.vpn_background_service import read_status, read_task_receipt, task_inspection
             self.admin_only()
-            status=read_status();receipt=read_task_receipt()
+            status=read_status();receipt=read_task_receipt();inspection=task_inspection()
             # Never serialize task secrets or arbitrary status payload.
-            return {"installed":bool(receipt.get("installed")),"interval_hours":receipt.get("interval_hours"),"status":str(status.get("state") or status.get("status") or "")[:80]}
+            return {"installed":bool(inspection.get("installed")),"verified":bool(inspection.get("verified")),"source":inspection.get("source"),"interval_hours":receipt.get("interval_hours"),"status":str(status.get("state") or status.get("status") or "")[:80],"checked_utc":str(status.get("checked_utc") or "")[:60],"servers":status.get("servers"),"successful":status.get("successful"),"failed":status.get("failed"),"mode":"manual_emergency_only"}
         if method=="commit":
             token=text(a,"token",128)
             plan=self.plan;self.plan=None
@@ -471,6 +524,25 @@ class Operations:
         svc=self.w.service;creds=self.w.session
         if kind in ("delete","restore","sheets","b2o","transfer","cloud_restore"):
             return self.extra.execute(kind,p,revision,cancel,emit)
+        if kind=="inactive_batch":
+            self.admin_only();action,targets=p;results=[]
+            for i,(h,login,revision) in enumerate(targets):
+                if cancel.is_set(): break
+                emit("Обработка "+str(i+1)+"/"+str(len(targets)),round(i*100/len(targets)))
+                try:
+                    current=self.get_client(h,login)
+                    if current.is_online or self.client_revision(current)!=revision:
+                        results.append({"server":h,"login":login,"status":"changed"});break
+                    modified=svc.set_secret_enabled(h,creds,login,action=="enable")
+                    confirmed=modified is not None and modified.is_enabled==(action=="enable")
+                    results.append({"server":h,"login":login,"status":"confirmed" if confirmed else "unknown"})
+                    self.extra.audit("vpn",(h,login,action,None),confirmed)
+                    if not confirmed: break
+                except Exception:
+                    results.append({"server":h,"login":login,"status":"unknown"});self.extra.audit("vpn",(h,login,action,None),False);break
+            for h,login,_ in targets[len(results):]: results.append({"server":h,"login":login,"status":"not_attempted"})
+            self.inactive_records={}
+            return {"items":results}
         if kind=="create":
             h,login,ports,count=p
             rows=svc.create_clients_batch(h,creds,login,ports,count,progress_callback=lambda done,total,name:emit("Создание VPN "+str(name),round(done*100/max(total,1))),cancel_event=cancel)

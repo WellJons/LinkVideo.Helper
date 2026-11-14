@@ -191,8 +191,9 @@ class Extended:
             if not row or not row.password_saved: raise InputError("Найдите подтверждённую удалённую учётку с recovery-данными.")
             return o.stage("restore",(h,login),f"Восстановить VPN {h}/{login} после FULL backup")
         if m=="sheets_preview":
-            o.admin_only();self.sheets_service();h=o.host(a)
-            return o.stage("sheets",(h,),f"Аварийная выгрузка конфигурации {h} в Google Sheets.")
+            o.admin_only();self.sheets_service();hosts=tuple(o.w.hosts) if a.get("all") is True else (o.host(a),)
+            if not hosts: raise InputError("Нет доверенных серверов.")
+            return o.stage("sheets",(hosts,),f"Аварийная выгрузка конфигурации в Google Sheets: {len(hosts)} серверов. Это ручная резервная копия, не основной PostgreSQL.")
         if m=="cloud_restore_preview":
             o.admin_only();o.writes_enabled();self.destructive_enabled();h=o.host(a);login=text(a,"login")
             row=self.cloud_deleted.get((h,login))
@@ -310,9 +311,17 @@ class Extended:
         if kind=="sheets":
             o.admin_only()
             from linkvideo_vpn_helper.services.vpn_sheets_sync import VPNSheetsSyncService
-            h,=p
-            result=VPNSheetsSyncService(svc,self.sheets_service()).sync_server(h,creds,source="Helper 4 explicit emergency export")
-            return {"server":result.server,"success":result.success,"clients":result.clients,"added":result.added,"changed":result.changed,"deleted":result.deleted}
+            hosts,=p
+            sync=VPNSheetsSyncService(svc,self.sheets_service());rows=[]
+            for index,h in enumerate(hosts):
+                if cancel.is_set(): break
+                emit("Аварийный экспорт "+str(index+1)+"/"+str(len(hosts)),round(index*100/len(hosts)))
+                try:
+                    result=sync.sync_server(h,creds,source="Helper 4 explicit emergency export")
+                    rows.append({"server":h,"success":bool(result.success),"clients":result.clients,"added":result.added,"changed":result.changed,"deleted":result.deleted})
+                except Exception:
+                    rows.append({"server":h,"success":False})
+            return {"sheets_results":rows,"total":len(hosts),"cancelled":cancel.is_set()}
         if kind=="b2o":
             from linkvideo_vpn_helper.services.b2o_client_admin import B2OOperatorClientManager
             draft,=p
