@@ -1,6 +1,6 @@
 'use strict';
 const $=id=>document.getElementById(id);
-const pages=[['home','⌂','Обзор'],['search','⌕','Поиск клиентов'],['servers','▤','VPN-серверы'],['create','＋','Создание VPN'],['inactive','◷','Неактивные VPN'],['lv','⚡','LV-автоматика'],['billing','₽','Биллинг'],['archives','▣','Архивы'],['diagnostics','⌁','Диагностика'],['agent','◉','Новый Агент'],['templates','≡','Шаблоны'],['admin','♙','CRM / B2O'],['settings','⚙','Настройки']];
+const pages=[['home','⌂','Обзор'],['search','⌕','Поиск клиентов'],['servers','▤','VPN-серверы'],['create','＋','Создание VPN'],['inactive','◷','Неактивные VPN'],['lv','⚡','LV-автоматика'],['recovery','↺','Резерв / восстановление'],['activity','◷','История VPN'],['billing','₽','Биллинг'],['archives','▣','Архивы'],['diagnostics','⌁','Диагностика'],['agent','◉','Новый Агент'],['camera','◉','Камеры / B2O'],['templates','≡','Шаблоны'],['admin','♙','CRM / B2O'],['settings','⚙','Настройки']];
 let identity=null,preview=false,page='home',epoch=0,toastTimer,searchState=null,serverState=null; let taskBusy=false;
 const preference=(key,fallback)=>{try{return localStorage.getItem(key)||fallback}catch{return fallback}};
 const save=(key,value)=>{try{localStorage.setItem(key,value)}catch{}};

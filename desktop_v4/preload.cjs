@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('helper',Object.freeze({
  servers:()=>ipcRenderer.invoke('helper:servers'),
  analyze:host=>ipcRenderer.invoke('helper:analyze',{host}),
  operation:(method,args)=>ipcRenderer.invoke('helper:operation',{method,args}),
+ copyVpn:(host,login)=>ipcRenderer.invoke('helper:copy-vpn',{host,login}),
+ fileAction:(method,args={})=>ipcRenderer.invoke('helper:file-action',{method,...args}),
  archiveDownload:mode=>ipcRenderer.invoke('helper:archive-download',{mode}),
  cancel:()=>ipcRenderer.invoke('helper:cancel'),
  copy:text=>ipcRenderer.invoke('helper:copy',{text}),

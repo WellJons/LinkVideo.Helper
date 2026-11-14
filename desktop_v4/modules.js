@@ -41,12 +41,15 @@
  function renderClient(root){
   const c=S.client;if(!c)return;
   section(root,'Карточка VPN · '+c.login);
-  const panel=el('div','panel');keyValue(panel,[['Сервер',c.server],['VPN IP',c.remote_address],['Статус',c.is_online?'В сети':'Не в сети'],['Учётка',c.is_enabled?'Включена':'Отключена'],['Uptime',c.uptime]]);
+  const panel=el('div','panel');keyValue(panel,[['Сервер',c.server],['VPN IP',c.remote_address],['Статус',c.is_online?'В сети':'Не в сети'],['Учётка',c.is_enabled?'Включена':'Отключена'],['Uptime',c.uptime],['RX, байт',c.rx_bytes],['TX, байт',c.tx_bytes]]);
   panel.append(table(['Порт','Статус','Конфликты'],c.ports.map(p=>[p,c.disabled_ports.includes(p)?'Выключен':c.active_ports.includes(p)?'Активен':'Настроен',c.port_conflicts?.[p]||'—'])));
   root.append(panel);
+  action(root,live('Копировать VPN',()=>rpc('copyVpn',c.server,c.login).then(()=>toast('Конфигурация скопирована')).catch(error)));
+  if(identity?.role==='sysadmin')action(root,live('WinBox',()=>run(()=>op('winbox',{host:c.server}))));
   const a=field('Действие','select','add',[['add','Добавить порты'],['disconnect','Разорвать сессию'],...(identity?.role==='sysadmin'?[['enable','Включить VPN'],['disable','Отключить VPN'],['port_enable','Включить порт'],['port_disable','Отключить порт'],['remove_port','Удалить порт'],['recreate_port','Пересоздать порт'],['password','Сменить пароль']]:[])]),p=field('Порт / количество','number',1),pw=field('Новый пароль','password');
   form(root,a,p,pw);action(root,live('Подготовить действие',()=>{const args={host:c.server,login:c.login,action:value(a),count:num(p),port:num(p),password:pw.input.value};pw.input.value='';stage('vpn_preview',args)},'primary'));action(root,live('Обновить карточку',()=>client(c.server,c.login)));
-  previewNotice(root,currentPlan(),out=>{if(out?.login)S.client=out});resultNote(root);
+  if(identity?.role==='sysadmin'){const d=field('Для удаления: точный server/login','text');form(root,d);action(root,live('Подготовить удаление',()=>stage('delete_preview',{host:c.server,login:c.login,confirm:value(d)})))}
+  previewNotice(root,currentPlan(),out=>{if(out?.login)S.client=out;else if(out?.deleted){S.client=null;searchState=null}});resultNote(root);
  }
  function inactive(root){
   root.append(hero('VPN / LIFECYCLE','Неактивные VPN','Жизненный цикл учёток, состояния LV и дата последнего отключения.'));
@@ -83,6 +86,7 @@
    action(root,live('Тарифы клиента',()=>run(async()=>{S.catalog=await op('billing_catalog',{scope:'client'})})));
    if(c.services.length){const cam=field('Камера','select','',c.services.map(x=>[x.id,x.camera_name+' · '+x.id])),a=field('Изменение','select','tariff',[['tariff','Сменить тариф'],['status','Изменить статус']]),t=field('ID тарифа','text'),st=field('Статус','select','1',[[1,'Включить'],[0,'Отключить']]),date=field('Дата','date'),comment=field('Комментарий','text');form(root,cam,a,t,st,date,comment);action(root,live('Подготовить изменение',()=>stage('billing_preview',{camera:value(cam),action:value(a),tariff:value(t),status:num(st),date:value(date),comment:value(comment)}),'primary'))}
   }
+  if(c?.services.length){const recipient=field('Логин получателя','text',S.recipientQuery||'');form(root,recipient);action(root,live('Найти получателя CRM',()=>run(async()=>{S.recipientQuery=value(recipient);S.recipients=await op('billing_recipient',{query:S.recipientQuery})})));if(S.recipients?.length){const to=field('Получатель','select','',S.recipients.map(r=>[r.id,r.login+' · '+r.country+' · '+r.account_name])),camera=field('Камера для переноса','select','',c.services.map(x=>[x.id,x.camera_name+' · '+x.id]));form(root,to,camera);action(root,live('Подготовить перенос',()=>stage('billing_transfer_preview',{recipient:value(to),camera:value(camera)}))) }}
   if(S.catalog){section(root,'Каталог тарифов');root.append(table(['ID','Название','Страна','Тип','Цена'],(S.catalog.tariffs||[]).map(t=>[t.id,t.name,t.country,t.account_type,t.price])))}
   if(S.history){section(root,'История камеры');root.append(table(['Дата','Пользователь','Действие','Поле','До','После'],S.history.map(h=>[h.date,h.user,h.action,h.field_name,h.old_value,h.new_value])))}
   previewNotice(root,currentPlan(),out=>S.billingClient=out);resultNote(root);
@@ -114,8 +118,46 @@
   const q=field('Поиск','text',S.templateQuery||''),cat=field('Категория','select',S.templateCategory||'',[['','Все'],...(S.templates?.categories||[]).map(v=>[v,v])]);form(root,q,cat);
   const load=async()=>{S.templateQuery=value(q);S.templateCategory=value(cat);S.templates=await op('templates_list',{query:S.templateQuery,category:S.templateCategory})};
   action(root,live('Загрузить шаблоны',()=>run(load),'primary'));action(root,live('Новый шаблон',()=>{S.editTemplate={};render(false)}));
-  if(S.templates)for(const t of S.templates.items){const row=el('article','panel template');row.append(el('h3','',t.title),el('small','',t.category+(t.favorite?' · ★':'')),el('p','',t.body),add(el('div','actionbar'),live('Копировать',()=>rpc('copy',t.body).then(()=>toast('Скопировано')).catch(error)),live('Редактировать',()=>{S.editTemplate=t;render(false)}),live(t.favorite?'Убрать из избранного':'В избранное',()=>run(async()=>{await op('templates_favorite',{id:t.id,selected:!t.favorite});await load()})),live('Удалить',()=>{if(confirm('Удалить локальный шаблон?'))run(async()=>{await op('templates_delete',{id:t.id});S.editTemplate=null;await load()})})));root.append(row)}
+  action(root,live('Импорт DOCX',()=>run(async()=>{const r=await rpc('fileAction','templates_import',{category:value(cat)});await load();toast('Импортировано: '+r.count)})));
+  if(S.templates)for(const t of S.templates.items){const row=el('article','panel template');row.append(el('h3','',t.title),el('small','',t.category+(t.favorite?' · ★':'')),el('p','',t.body),add(el('div','actionbar'),live('Копировать',()=>rpc('copy',t.body).then(()=>toast('Скопировано')).catch(error)),live('Редактировать',()=>{S.editTemplate=t;render(false)}),live('Изображения',()=>run(async()=>{S.imageTemplate=t.id;S.images=await op('templates_images',{id:t.id})})),live('Прикрепить',()=>run(async()=>{await rpc('fileAction','templates_attach',{id:t.id});S.imageTemplate=t.id;S.images=await op('templates_images',{id:t.id})})),live(t.favorite?'Убрать из избранного':'В избранное',()=>run(async()=>{await op('templates_favorite',{id:t.id,selected:!t.favorite});await load()})),live('Удалить',()=>{if(confirm('Удалить локальный шаблон?'))run(async()=>{await op('templates_delete',{id:t.id});S.editTemplate=null;await load()})})));root.append(row)}
+  if(S.imageTemplate){section(root,'Изображения шаблона');for(const img of S.images||[]){const im=el('img','template-image');if(/^data:image\/(png|jpeg|webp|gif);base64,/.test(img.src))im.src=img.src;im.alt='Вложение';root.append(add(el('div','panel'),im,live('Открепить',()=>{if(confirm('Убрать изображение из шаблона?'))run(async()=>{await op('templates_detach',{id:S.imageTemplate,image:img.id});S.images=await op('templates_images',{id:S.imageTemplate})})})))}}
   if(S.editTemplate){const t=S.editTemplate,title=field('Название','text',t.title||''),category=field('Категория','text',t.category||''),body=field('Текст','textarea',t.body||'');section(root,t.id?'Редактирование':'Новый шаблон');form(root,title,category,body);action(root,live('Сохранить',()=>run(async()=>{await op('templates_save',{id:t.id||null,title:value(title),category:value(category),body:value(body)});S.editTemplate=null;await load()}),'primary'))}
  }
- window.lvModules=Object.freeze({reset,client,clearClient:()=>{S.client=null;S.plan=null;S.outcome=null},renderClient,render:(name,root)=>{({create,inactive,lv,admin,billing,archives:r=>archive(r,false),diagnostics:r=>archive(r,true),agent,templates})[name]?.(root)}});
+ function recovery(root){
+  root.append(hero('VPN / RECOVERY','Резерв и восстановление','FULL backup хранится локально в приватном профиле. Сценарии восстановления используют прежний аварийный источник Sheets.'));
+  if(!preview&&identity?.role!=='sysadmin'){root.append(notice('Доступно системному администратору.'));return}
+  if(!ensureHosts(root))return;const h=serverField();form(root,h);
+  action(root,live('FULL backup сервера',()=>run(async()=>{S.backup=await op('backup',{host:setHost(h)})}),'primary'));
+  action(root,live('FULL backup всех',()=>run(async()=>{S.backup=await op('backup',{all:true})})));
+  if(S.backup){keyValue(root,[['Успешно',S.backup.success],['Ошибки',S.backup.failed],['Папка',S.backup.folder]]);root.append(table(['Сервер','Результат'],S.backup.servers.map(r=>[r.server,r.ok?'Подтверждён':'Ошибка'])))}
+  section(root,'Google Sheets · Аварийное восстановление');action(root,live('Выбрать JSON-ключ',()=>run(async()=>{S.sheets=await rpc('fileAction','sheets_load')})));
+  if(S.sheets?.configured)root.append(notice('Ключ принят в память текущего процесса.'));
+  const q=field('Удалённый логин','text',S.deletedQuery||'');form(root,q);
+  action(root,live('Искать удалённые',()=>run(async()=>{S.deletedQuery=value(q);S.deleted=await op('deleted_search',{query:S.deletedQuery})}),'primary'));
+  action(root,live('Подготовить экспорт в Sheets',()=>stage('sheets_preview',{host:setHost(h)})));
+  if(S.deleted)root.append(table(['Логин','Сервер','VPN IP','Удалён','Порты',''],S.deleted.map(r=>[r.login,r.server,r.remote_address,r.deleted_at,r.ports,live('Восстановить',()=>stage('restore_preview',{host:r.server,login:r.login}))])));
+  previewNotice(root,currentPlan());resultNote(root);
+ }
+ function activity(root){
+  root.append(hero('VPN / ACTIVITY','История VPN','Отдельное подключение к VPNSync. Источник — существующий CloudVPNSyncClient.'));
+  if(!preview&&identity?.role!=='sysadmin'){root.append(notice('Доступно системному администратору.'));return}
+  const host=field('DNS или IPv4','text',S.cloudHost||''),port=field('Порт','number',S.cloudPort||443),u=field('Логин облака','text'),pw=field('Пароль облака','password'),scheme=field('Протокол','select','https',[['https','HTTPS'],['http','HTTP в доверенной сети']]);form(root,host,port,u,pw,scheme);
+  action(root,live('Подключить',()=>{const password=pw.input.value;pw.input.value='';if(value(scheme)==='http'&&!confirm('HTTP не защищает пароль при передаче. Продолжить только в доверенной сети?'))return;run(async()=>{S.cloudHost=value(host);S.cloudPort=num(port);S.cloud=await op('cloud_connect',{host:S.cloudHost,port:S.cloudPort,username:value(u),password,tls:value(scheme)==='https',allow_http:value(scheme)==='http'})})},'primary'));
+  if(S.cloud?.connected)root.append(notice('Подключение подтверждено.'));
+  const login=field('Фильтр логина','text',S.activityLogin||''),source=field('Источник','text',S.activitySource||'');form(root,login,source);
+  action(root,live('Обновить историю',()=>run(async()=>{S.activityLogin=value(login);S.activitySource=value(source);S.historyVpn=await op('activity',{login:S.activityLogin,source:S.activitySource})}),'primary'));
+  if(S.historyVpn)root.append(table(['Время','Событие','Сервер','Логин','Источник','Оператор'],S.historyVpn.map(r=>[r.created_at||r.timestamp,r.action,r.server,r.login,r.source,r.username||r.actor])));
+ }
+ function camera(root){
+  root.append(hero('B2O / CAMERAS','Камеры и клиенты B2O','Проверка RTSP/TCP, сведения об устройстве, чтение и создание корпоративной учётки.'));
+  const id=field('ID камеры','text',S.cameraId||''),opid=field('Регион','select','241',[[241,'Россия'],[1721,'Казахстан'],[1741,'Беларусь']]);form(root,id,opid);
+  action(root,live('Диагностика камеры',()=>run(async()=>{S.cameraId=value(id);S.cameraInfo=await op('camera_inspect',{camera:S.cameraId,operator:num(opid)})}),'primary'));
+  const c=S.cameraInfo;if(c)keyValue(root,[['Камера',c.name||c.camera_id],['Сервер',c.server],['IP',c.ip],['RTSP-порт',c.rtsp_port],['Ping',c.ping_text],['TCP',c.tcp_text],['Состояние',c.status],['Модель',c.model],['SN',c.serial],['Архив',c.archive_depth],['Последний поток',c.last_stream]]);
+  section(root,'Клиент B2O');const country=field('Страна','select','Россия',[['Россия','Россия'],['Казахстан','Казахстан'],['Беларусь','Беларусь']]),account=field('ID аккаунта','number');form(root,country,account);
+  action(root,live('Проверить клиента',()=>run(async()=>{S.b2oClient=await op('b2o_read',{country:value(country),id:num(account)})})));
+  if(S.b2oClient)keyValue(root,[['ID',S.b2oClient.id_account],['Логин',S.b2oClient.login],['Имя',S.b2oClient.client_name],['Тип',S.b2oClient.account_type]]);
+  section(root,'Создание обычного аккаунта с биллингом');const name=field('Имя клиента'),login=field('Логин'),password=field('Пароль','password'),phone=field('Телефон');form(root,name,login,password,phone);action(root,live('Подготовить создание',()=>{const pw=password.input.value;password.input.value='';stage('b2o_create_preview',{country:value(country),name:value(name),login:value(login),password:pw,phone:value(phone)})},'primary'));
+  previewNotice(root,currentPlan());if(S.outcome?.id_account&&S.planPage===page)keyValue(root,[['Создан ID',S.outcome.id_account],['Проверка чтением',S.outcome.read_back_verified?'Да':'Не подтверждена']]);resultNote(root);
+ }
+ window.lvModules=Object.freeze({reset,client,clearClient:()=>{S.client=null;S.plan=null;S.outcome=null},renderClient,render:(name,root)=>{({create,inactive,lv,recovery,activity,admin,billing,archives:r=>archive(r,false),diagnostics:r=>archive(r,true),agent,camera,templates})[name]?.(root)}});
 })();

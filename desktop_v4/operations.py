@@ -9,6 +9,7 @@ import os
 import re
 import time
 import secrets
+from desktop_v4.extra_operations import Extended, METHODS as EXTRA_METHODS
 
 class InputError(Exception):
     pass
@@ -29,6 +30,7 @@ def public_client(c):
     fields=("server","login","remote_address","ports","active_ports","disabled_ports","is_online","is_enabled","uptime","last_logged_out")
     out={k:getattr(c,k) for k in fields}
     out["port_conflicts"]={str(k):len(v) for k,v in getattr(c,"port_conflicts",{}).items()}
+    out.update(rx_bytes=getattr(c,"rx_bytes",0),tx_bytes=getattr(c,"tx_bytes",0))
     return out
 
 class MemorySettings:
@@ -45,7 +47,7 @@ class MemorySettings:
     def sync(self): pass
 
 class Operations:
-    METHODS=frozenset(("client_detail","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","admin_login","admin_logout","admin_status","billing_search","billing_select","billing_catalog","billing_history","billing_preview","archive_discover","archive_diagnose","archive_download","agent_search","agent_preview","templates_list","templates_save","templates_favorite","templates_delete","background_status"))
+    METHODS=frozenset(("client_detail","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","admin_login","admin_logout","admin_status","billing_search","billing_select","billing_catalog","billing_history","billing_preview","archive_discover","archive_diagnose","archive_download","agent_search","agent_preview","templates_list","templates_save","templates_favorite","templates_delete","background_status")) | EXTRA_METHODS
     def __init__(self,workspace):
         self.w=workspace
         self.settings=MemorySettings()
@@ -61,6 +63,7 @@ class Operations:
         self.plan=None
         self.admin_name=""
         self.b2o_ready=False
+        self.extra=Extended(self)
 
     def close(self):
         if self.transport: self.transport.close()
@@ -123,6 +126,8 @@ class Operations:
         emit=emit or (lambda *_:None)
         svc=self.w.service
         creds=self.w.session
+        if method in EXTRA_METHODS:
+            return self.extra.dispatch(method,a,cancel,emit)
         if method=="client_detail":
             return public_client(self.get_client(self.host(a),text(a,"login")))
         if method=="create_preview":
@@ -337,6 +342,8 @@ class Operations:
 
     def execute(self,kind,p,revision,cancel,emit):
         svc=self.w.service;creds=self.w.session
+        if kind in ("delete","restore","sheets","b2o","transfer"):
+            return self.extra.execute(kind,p,revision,cancel,emit)
         if kind=="create":
             h,login,ports,count=p
             rows=svc.create_clients_batch(h,creds,login,ports,count,cancel_event=cancel)
@@ -361,7 +368,7 @@ class Operations:
             from linkvideo_vpn_helper.services.vpn_backup_service import VPNBackupService
             from linkvideo_vpn_helper.services.vpn_automation_service import VPNAutomationService
             emit("Резервное копирование")
-            backup=VPNBackupService().backup_one(h,creds)
+            backup=self.extra.backup_service().backup_one(h,creds)
             if not backup.ok or cancel.is_set(): raise InputError("FULL backup не подтверждён; изменение не начато.")
             lv=VPNAutomationService()
             if action=="install": lv.install_or_update(h,creds)
