@@ -59,6 +59,14 @@ class TestWorkspace(unittest.TestCase):
         self.assertNotIn("password",result["deleted"][0])
         self.assertEqual(result["deleted"][0]["ports"],["12000 → 80"])
         with self.assertRaises(InputError): self.w.dispatch("cloud_restore_preview",{"host":"trusted.example","login":"old"})
+    def test_rotation_wire_value_and_permission(self):
+        self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
+        self.w.ops.camera=NS(serial_number="cam")
+        with patch.dict("os.environ",{"LV4_ENABLE_WRITES":"1"}):
+            plan=self.w.dispatch("agent_preview",{"action":"rotation","value":3})
+            self.assertIn("180",plan["label"])
+            with self.assertRaises(InputError):
+                self.w.dispatch("agent_preview",{"action":"rotation","value":90})
     def test_separate_admin_auth(self):
         self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
         self.assertEqual(self.w.dispatch("admin_status",{}),{"username":"","b2o":False,"crm":False})

@@ -47,7 +47,7 @@ class MemorySettings:
     def sync(self): pass
 
 class Operations:
-    METHODS=frozenset(("client_detail","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","admin_login","admin_logout","admin_status","billing_search","billing_select","billing_catalog","billing_history","billing_preview","archive_discover","archive_diagnose","archive_download","agent_search","agent_settings","agent_preview","templates_list","templates_save","templates_favorite","templates_delete","background_status")) | EXTRA_METHODS
+    METHODS=frozenset(("client_detail","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","admin_login","admin_logout","admin_status","billing_search","billing_select","billing_catalog","billing_history","billing_preview","billing_bulk_preview","billing_camera_image","create_auto","archive_discover","archive_diagnose","archive_download","agent_search","agent_settings","agent_preview","templates_list","templates_save","templates_favorite","templates_delete","background_status")) | EXTRA_METHODS
     def __init__(self,workspace):
         self.w=workspace
         self.settings=MemorySettings()
@@ -63,12 +63,13 @@ class Operations:
         self.plan=None
         self.admin_name=""
         self.b2o_ready=False
+        self.uncertain=set()
         self.extra=Extended(self)
 
     def clear_admin(self):
         if self.transport: self.transport.close()
         self.transport=self.billing=self.archive=self.discovery=self.client=None
-        self.hits={};self.extra.recipients={};self.b2o_ready=False;self.admin_name='';self.plan=None
+        self.hits={};self.extra.recipients={};self.extra.camera_report=None;self.b2o_ready=False;self.admin_name='';self.plan=None
         self.settings.remove('b2o')
 
     def close(self):
@@ -136,6 +137,12 @@ class Operations:
             return self.extra.dispatch(method,a,cancel,emit)
         if method=="client_detail":
             return public_client(self.get_client(self.host(a),text(a,"login")))
+        if method=="create_auto":
+            region=text(a,"country",50)
+            hosts=[h for h,row in self.w.hosts.items() if row.country==region]
+            if not hosts: raise InputError("Нет активных VPN-серверов выбранного региона.")
+            emit("Сравниваю нагрузку VPN-серверов")
+            return {"host":svc.pick_best_server_parallel(hosts,creds,cancel_event=cancel)}
         if method=="create_preview":
             self.writes_enabled()
             h=self.host(a)
@@ -228,6 +235,32 @@ class Operations:
             return asdict(g.all_tariffs())
         if method=="billing_history":
             return list(self.crm().camera_history(self.source_client(),text(a,"camera",32)))
+        if method=="billing_camera_image":
+            import base64
+            from linkvideo_vpn_helper.services.b2o_camera_preview import fetch_camera_preview
+            c=self.source_client();camera=text(a,"camera",32)
+            service=next((s for s in c.services if s.id==camera and s.camera_id==camera),None)
+            if not service or not service.camera_vc_id: raise InputError("ID камеры для превью не подтверждён.")
+            raw=fetch_camera_preview(c.country,service.camera_vc_id,self.archives().b2o.token())
+            mime="image/jpeg" if raw.startswith(b"\xff\xd8") else "image/png" if raw.startswith(b"\x89PNG\r\n\x1a\n") else "image/webp" if raw[:4]==b"RIFF" and raw[8:12]==b"WEBP" else ""
+            if not mime or len(raw)>5*1024*1024: raise InputError("B2O не вернул допустимое изображение.")
+            return {"camera":camera,"src":"data:"+mime+";base64,"+base64.b64encode(raw).decode("ascii")}
+        if method=="billing_bulk_preview":
+            self.writes_enabled();g=self.crm();c=self.source_client()
+            from linkvideo_vpn_helper.services.billing_catalog import filter_tariffs_for_client
+            from linkvideo_vpn_helper.services.billing_gateway import validate_tariff_change, TariffOption
+            ids=a.get("cameras")
+            if not isinstance(ids,list) or not 1<=len(ids)<=100 or any(not isinstance(x,str) for x in ids) or len(set(ids))!=len(ids): raise InputError("Выберите от 1 до 100 разных камер.")
+            owned={s.id:s for s in c.services if s.id==s.camera_id}
+            if not all(x in owned for x in ids): raise InputError("Одна из камер не принадлежит выбранному клиенту.")
+            tariff=text(a,"tariff",32);when=date.fromisoformat(text(a,"date",10));comment=text(a,"comment",500,False)
+            if when<date.today(): raise InputError("Дата не может быть в прошлом.")
+            options=filter_tariffs_for_client(g.reference_catalog(c).tariffs,c)
+            opt=next((x for x in options if x.id==tariff),None)
+            if opt is None: raise InputError("Тариф недоступен клиенту.")
+            changes=tuple(validate_tariff_change(c,owned[x],TariffOption(opt.id,opt.name),when,comment) for x in ids)
+            if any((c.id,x.service_id,x.tariff_id,x.effective_date) in self.uncertain for x in changes): raise InputError("Есть неподтверждённое изменение. Сначала проверьте CRM.")
+            return self.stage("billing_bulk",(changes,),f"CRM {c.login}: {len(changes)} камер → {opt.name}, {when}. Отдельные PUT, без автоматического отката.",self.billing_revision(c))
         if method=="billing_preview":
             self.writes_enabled();g=self.crm();c=self.source_client()
             act=text(a,"action",24);camera=text(a,"camera",32)
@@ -381,7 +414,7 @@ class Operations:
             return self.extra.execute(kind,p,revision,cancel,emit)
         if kind=="create":
             h,login,ports,count=p
-            rows=svc.create_clients_batch(h,creds,login,ports,count,cancel_event=cancel)
+            rows=svc.create_clients_batch(h,creds,login,ports,count,progress_callback=lambda done,total,name:emit("Создание VPN "+str(name),round(done*100/max(total,1))),cancel_event=cancel)
             return {"clients":[public_client(c) for c in rows]}
         if kind=="vpn":
             h,login,act,value=p
@@ -412,12 +445,39 @@ class Operations:
             else: lv.set_quarantine_enabled(h,creds,action=="quarantine_on")
             s=lv.get_status(h,creds)
             return {**asdict(s),"installed":s.installed,"paused":s.paused}
+        if kind=="billing_bulk":
+            from linkvideo_vpn_helper.services.billing_token_transport import BillingWriteOutcomeUnknown
+            changes,=p;g=self.crm();c=g.refresh_client(self.source_client())
+            if self.billing_revision(c)!=revision: raise InputError("Карточка CRM изменилась. Повторите подготовку.")
+            rows=[]
+            for i,change in enumerate(changes):
+                if cancel.is_set(): break
+                emit("Изменение тарифа "+str(i+1)+"/"+str(len(changes)),round(i*100/len(changes)))
+                key=(c.id,change.service_id,change.tariff_id,change.effective_date)
+                if key in self.uncertain: break
+                try:
+                    g.change_tariff(change,client=c)
+                    rows.append({"camera":change.service_id,"status":"confirmed"})
+                except BillingWriteOutcomeUnknown:
+                    self.uncertain.add(key);rows.append({"camera":change.service_id,"status":"unknown"});break
+                except Exception:
+                    rows.append({"camera":change.service_id,"status":"not_confirmed"});break
+            for change in changes[len(rows):]: rows.append({"camera":change.service_id,"status":"not_attempted"})
+            try: self.client=g.refresh_client(c)
+            except Exception: self.client=None
+            return {"items":rows,"client":asdict(self.client) if self.client else None}
         if kind=="billing":
             from linkvideo_vpn_helper.services.billing_gateway import TariffChange
             act,camera,value,when,comment=p
             g=self.crm();c=g.refresh_client(self.source_client())
             if self.billing_revision(c)!=revision: raise InputError("Карточка CRM изменилась. Повторите подготовку.")
-            if act=="tariff": g.change_tariff(TariffChange(c.id,camera,value,when,comment),client=c)
+            if act=="tariff":
+                from linkvideo_vpn_helper.services.billing_token_transport import BillingWriteOutcomeUnknown
+                key=(c.id,camera,value,when)
+                if key in self.uncertain: raise InputError("Предыдущая запись не подтверждена. Проверьте CRM.")
+                try: g.change_tariff(TariffChange(c.id,camera,value,when,comment),client=c)
+                except BillingWriteOutcomeUnknown:
+                    self.uncertain.add(key);raise InputError("Результат PUT неизвестен. Проверьте CRM перед повтором.")
             else: g.set_camera_status(c,camera,value,when,comment)
             self.client=g.refresh_client(c)
             return asdict(self.client)

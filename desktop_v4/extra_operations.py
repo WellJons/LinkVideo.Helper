@@ -10,10 +10,10 @@ import re
 import subprocess
 import shutil
 
-METHODS=frozenset(("copy_vpn","backup","delete_preview","backup_status","sheets_load","deleted_search","restore_preview","sheets_preview","cloud_connect","cloud_restore_preview","activity","camera_inspect","b2o_read","b2o_create_preview","billing_recipient","billing_transfer_preview","templates_import","templates_attach","templates_images","templates_detach","winbox","registry_list","registry_update"))
+METHODS=frozenset(("copy_vpn","backup","delete_preview","backup_status","sheets_load","deleted_search","restore_preview","sheets_preview","cloud_connect","cloud_restore_preview","activity","camera_inspect","camera_live","agent_image","b2o_read","b2o_create_preview","billing_recipient","billing_transfer_preview","templates_import","templates_attach","templates_images","templates_detach","winbox","registry_list","registry_update"))
 class Extended:
     def __init__(self,ops):
-        self.o=ops;self.cloud=None;self.sheets=None;self.deleted={};self.cloud_deleted={};self.recipients={}
+        self.o=ops;self.cloud=None;self.sheets=None;self.deleted={};self.cloud_deleted={};self.recipients={};self.camera_report=None
     def backup_service(self):
         from linkvideo_vpn_helper.services.vpn_backup_service import VPNBackupService
         class PrivateBackup(VPNBackupService):
@@ -218,8 +218,26 @@ class Extended:
         if m=="camera_inspect":
             from linkvideo_vpn_helper.services.camera_diagnostics import inspect_camera
             b2o=o.archives().b2o
+            self.camera_report=None
             c=inspect_camera(b2o,text(a,"camera"),o.operator(a),with_preview=False,with_network=True)
+            self.camera_report=c
             return {k:getattr(c,k) for k in ("camera_id","server","ip","rtsp_port","ping_text","tcp_text","operator","name","status","serial","account_id","archive_depth","model","port_source","rtsp_host","last_stream")}
+        if m=="camera_live":
+            from linkvideo_vpn_helper.services.camera_live_probe import probe_live_camera
+            o.archives()
+            if self.camera_report is None: raise InputError("Сначала выполните диагностику камеры.")
+            result=probe_live_camera(self.camera_report)
+            return {k:getattr(result,k) for k in ("bitrate_mbps","last_stream","connectivity","detail","video_codec","audio_codec","resolution","fps","source")}
+        if m=="agent_image":
+            from linkvideo_vpn_helper.services.agent_b2o_preview import load_b2o_preview_for_serial
+            if o.camera is None: raise InputError("Сначала найдите камеру агента.")
+            b2o=o.archives().b2o
+            result=load_b2o_preview_for_serial(o.camera.serial_number,b2o.token(),b2o)
+            if not result: raise InputError("Превью B2O не найдено для этого серийного номера.")
+            country,camera,raw=result
+            mime="image/jpeg" if raw.startswith(b"\xff\xd8") else "image/png" if raw.startswith(b"\x89PNG\r\n\x1a\n") else "image/webp" if raw[:4]==b"RIFF" and raw[8:12]==b"WEBP" else ""
+            if not mime or len(raw)>5*1024*1024: raise InputError("Неподдерживаемый формат превью.")
+            return {"country":country,"camera":camera,"src":"data:"+mime+";base64,"+base64.b64encode(raw).decode("ascii")}
         if m=="b2o_read":
             from linkvideo_vpn_helper.services.b2o_client_admin import B2OOperatorReadOnly
             manager=B2OOperatorReadOnly(o.archives().b2o)
