@@ -32,11 +32,11 @@
  function create(root){
   root.append(hero('VPN / PROVISIONING','Создание VPN-клиентов','Используется существующий распределитель адресов и портов RouterOS.'));
   if(!ensureHosts(root))return;
-  const h=serverField(),l=field('Базовый логин','text',S.createLogin||''),p=field('Портов на учётку','number',S.createPorts||2),c=field('Количество учёток','number',S.createCount||1);
+  const h=serverField(),l=field('Базовый логин','text',S.createLogin||''),p=field('Портов на учётку','number',S.createPorts||2),c=field('Количество учёток','number',S.createCount||1),ip=field('Начальный Remote Address','text',S.createIP||'172.16.0.1');
   p.input.min=1;p.input.max=14;c.input.min=1;c.input.max=20;const countries=[...new Set(S.hosts.map(x=>x.country))],region=field('Регион для автоподбора','select',S.createRegion||countries[0],countries.map(x=>[x,x]));
-  form(root,h,l,p,c,region);action(root,live('Подобрать свободный сервер',()=>run(async()=>{S.createLogin=value(l);S.createPorts=num(p);S.createCount=num(c);S.createRegion=value(region);const result=await op('create_auto',{country:S.createRegion});S.host=result.host;toast('Выбран '+result.host)})));action(root,live('Подготовить создание',()=>{S.createLogin=value(l);S.createPorts=num(p);S.createCount=num(c);stage('create_preview',{host:setHost(h),login:S.createLogin,ports:S.createPorts,count:S.createCount})},'primary'));
+  form(root,h,l,p,c,ip,region);action(root,live('Предложить свободный логин',()=>run(async()=>{S.createIP=value(ip);S.createPorts=num(p);S.createCount=num(c);S.createLogin=(await op('create_suggest',{host:setHost(h),login:value(l)})).login})));action(root,live('Подобрать свободный сервер',()=>run(async()=>{S.createLogin=value(l);S.createPorts=num(p);S.createCount=num(c);S.createRegion=value(region);S.createIP=value(ip);const result=await op('create_auto',{country:S.createRegion});S.host=result.host;toast('Выбран '+result.host)})));action(root,live('Подготовить создание',()=>{S.createLogin=value(l);S.createPorts=num(p);S.createCount=num(c);S.createIP=value(ip);stage('create_preview',{host:setHost(h),login:S.createLogin,ports:S.createPorts,count:S.createCount,start_ip:S.createIP})},'primary'));
   previewNotice(root,currentPlan());resultNote(root);
-  if(S.planPage==='create'&&S.outcome?.clients)root.append(table(['Логин','Сервер','VPN IP','Порты'],S.outcome.clients.map(c=>[c.login,c.server,c.remote_address,c.ports.join(', ')])));
+  if(S.planPage==='create'&&S.outcome?.clients)root.append(table(['Логин','Сервер','VPN IP','Порты',''],S.outcome.clients.map(c=>[c.login,c.server,c.remote_address,c.ports.join(', '),live('Копировать VPN',()=>rpc('copyVpn',c.server,c.login).then(()=>toast('Скопировано')).catch(error))])));
  }
  async function client(host,login){stopTraffic();S.camPorts=null;S.cameraLogin='';S.client=null;S.plan=null;S.outcome=null;await run(async()=>{S.client=await op('client_detail',{host,login})})}
  let traffic=null;
@@ -79,8 +79,8 @@
  function renderClient(root){
   const c=S.client;if(!c){if(currentPlan())previewNotice(root,currentPlan());resultNote(root);return;}
   section(root,'Карточка VPN · '+c.login);
-  const panel=el('div','panel');keyValue(panel,[['Сервер',c.server],['VPN IP',c.remote_address],['Статус',c.is_online?'В сети':'Не в сети'],['Учётка',c.is_enabled?'Включена':'Отключена'],['Uptime',c.uptime],['RX, байт',c.rx_bytes],['TX, байт',c.tx_bytes]]);
-  panel.append(table(['Порт','Статус','Конфликты'],c.ports.map(p=>[p,c.disabled_ports.includes(p)?'Выключен':c.active_ports.includes(p)?'Активен':'Настроен',c.port_conflicts?.[p]||'—'])));
+  const panel=el('div','panel');keyValue(panel,[['Сервер',c.server],['VPN IP',c.remote_address],['IP источника',c.tunnel_source_ip],['Статус',c.is_online?'В сети':'Не в сети'],['Учётка',c.is_enabled?'Включена':'Отключена'],['Uptime',c.uptime],['RX, байт',c.rx_bytes],['TX, байт',c.tx_bytes]]);
+  panel.append(table(['Порт','Статус','Байты NAT','Пакеты NAT','Конфликты'],c.ports.map(p=>[p,c.disabled_ports.includes(p)?'Выключен':c.active_ports.includes(p)?'Активен':'Настроен',c.port_nat_bytes?.[p]??'—',c.port_nat_packets?.[p]??'—',c.conflicts_verified===false?'Не проверено':c.port_conflicts?.[p]||'—'])));
   root.append(panel);
   trafficPanel(root,c);
   const cameraLogin=field("Уточнить логин B2O (необязательно)","text",S.cameraLogin||"");form(root,cameraLogin);action(root,live("Сверить NAT с камерами",()=>run(async()=>{S.cameraLogin=value(cameraLogin);S.camPorts=null;S.camPorts=await op("camera_ports",{host:c.server,login:c.login,override:S.cameraLogin})}),"primary"));
@@ -112,8 +112,10 @@
   if(!ensureHosts(root))return;
   const h=serverField(),a=field('Действие','select','install',[['install','Установить / обновить'],['start','Запустить'],['pause','Приостановить'],['seed','Инициализировать'],['quarantine_on','Включить карантин'],['quarantine_off','Выключить карантин']]);
   form(root,h,a);action(root,live('Проверить состояние',()=>run(async()=>{S.lv=await op('lv_status',{host:setHost(h)})}),'primary'));action(root,live('Подготовить изменение',()=>stage('lv_preview',{host:setHost(h),action:value(a)})));
-  const x=S.lv;if(x)keyValue(root,[['Сервер',x.server],['Версия',x.version],['Скрипты',x.scripts_installed+' / '+x.scripts_expected],['Планировщики',x.schedulers_installed+' / '+x.schedulers_expected],['Установка',x.installed?'Подтверждена':'Не полная'],['Пауза',x.paused?'Да':'Нет'],['Активные',x.active],['Сон',x.sleeping],['Карантин',x.quarantine],['Архив',x.archive],['Неизвестные',x.unknown]]);
-  previewNotice(root,currentPlan(),out=>S.lv=out);resultNote(root);
+  action(root,live('Проверить LV на всех серверах',()=>run(async()=>{S.lvFleet=await op('lv_fleet')}),'primary'));
+  if(S.lvFleet){const data=S.lvFleet;root.append(table(['Сервер','Состояние','Версия','Инициализировано','Карантин'],data.rows.map(x=>[x.server,x.error?'Нет данных':x.state_text,x.version,x.initialized,x.error?'—':x.aging_enabled?'Включён':'Выключен'])));if(data.cancelled)root.append(notice('Проверка отменена.'));else for(const [act,label] of [['install','Установить / обновить на всех'],['start','Запустить установленную LV'],['pause','Остановить установленную LV']])action(root,live(label,()=>stage('lv_batch_preview',{action:act,hosts:act==='install'?S.hosts.map(x=>x.host):data.rows.filter(x=>x.installed).map(x=>x.server)})))}
+  const x=S.lv;if(x)keyValue(root,[['Сервер',x.server],['Версия',x.version],['Скрипты',x.scripts_installed+' / '+x.scripts_expected],['Планировщики',x.schedulers_installed+' / '+x.schedulers_expected],['Установка',x.installed?'Подтверждена':'Не полная'],['Пауза',x.paused?'Да':'Нет'],['Инициализировано',x.initialized],['LV-Aging',x.aging_enabled?'Включён':'Выключен'],['Активные',x.active],['Сон',x.sleeping],['Карантин',x.quarantine],['Архив',x.archive],['Неизвестные',x.unknown]]);
+  previewNotice(root,currentPlan(),out=>{if(out.lv_results){S.lvBatch=out.lv_results;S.lvFleet=null}else S.lv=out});if(S.lvBatch)root.append(table(['Сервер','Результат','Статус LV'],S.lvBatch.map(x=>[x.server,({confirmed:'Подтверждено',not_confirmed:'Не подтверждено',not_attempted:'Не отправлено'})[x.status],x.state])));resultNote(root);
  }
  function admin(root){
   root.append(hero('HELPER / WORK ACCOUNTS','CRM / B2O','Две независимые корпоративные сессии. Данные MikroTik автоматически не используются.'));

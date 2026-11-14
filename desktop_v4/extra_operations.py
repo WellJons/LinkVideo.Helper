@@ -215,7 +215,18 @@ class Extended:
             o.admin_only()
             if self.cloud is None: raise InputError("Подключите отдельный облачный аккаунт.")
             rows=self.cloud.activity(200,login=text(a,"login",128,False),source=text(a,"source",80,False))
-            return [{k:str(row.get(k) or "")[:160] for k in ("created_at","timestamp","action","server","login","source","username","actor","success")} for row in rows if isinstance(row,dict)]
+            result=[]
+            for row in rows:
+                if not isinstance(row,dict): continue
+                out={k:str(row.get(k) or "")[:160] for k in ("created_at","timestamp","action","server","login","source","username","actor","success")}
+                detail=row.get("details") or {}
+                if not isinstance(detail,dict): detail={}
+                if out["source"]=="desktop" and isinstance(detail.get("employee"),str): out["actor"]=detail["employee"][:128]
+                # Only allowlisted numeric/boolean parameters; never expose arbitrary payloads.
+                limit={k:v for k,v in detail.items() if k in ("count","port","enabled","ports_per_client","accounts_count","clients","active","added","changed","deleted","restored_objects","session_removed","active_sessions") and type(v) in (int,bool)}
+                out["details"]=limit
+                result.append(out)
+            return result
         if m=="camera_inspect":
             from linkvideo_vpn_helper.services.camera_diagnostics import inspect_camera
             b2o=o.archives().b2o

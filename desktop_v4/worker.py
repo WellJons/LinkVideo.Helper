@@ -104,6 +104,8 @@ def build():
     install_vpn_sheets_retention_compat()
     install_vpn_sheets_resilience()
     install_vpn_sheets_operator_view()
+    from linkvideo_vpn_helper.services.vpn_restore_compact_ports import install_vpn_restore_compact_ports
+    install_vpn_restore_compact_ports()
     service = VPNService()
     workspace=Workspace(ServerRegistry, verify_routeros_user, service, FastSearchService(service), SessionCredentials, is_employee_username)
     import os

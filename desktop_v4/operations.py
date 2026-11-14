@@ -30,7 +30,7 @@ def public_client(c):
     fields=("server","login","remote_address","ports","active_ports","disabled_ports","is_online","is_enabled","uptime","last_logged_out")
     out={k:getattr(c,k) for k in fields}
     out["port_conflicts"]={str(k):len(v) for k,v in getattr(c,"port_conflicts",{}).items()}
-    out.update(rx_bytes=getattr(c,"rx_bytes",0),tx_bytes=getattr(c,"tx_bytes",0))
+    out.update(rx_bytes=getattr(c,"rx_bytes",0),tx_bytes=getattr(c,"tx_bytes",0),tunnel_source_ip=getattr(c,"tunnel_source_ip",""),port_nat_bytes=getattr(c,"port_nat_bytes",{}),port_nat_packets=getattr(c,"port_nat_packets",{}))
     return out
 
 class MemorySettings:
@@ -60,7 +60,7 @@ class MemorySettings:
     def sync(self): pass
 
 class Operations:
-    METHODS=frozenset(("client_detail","traffic_sample","camera_ports","inactive_fleet","inactive_batch_preview","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","admin_login","admin_logout","admin_status","billing_search","billing_select","billing_catalog","billing_history","billing_preview","billing_bulk_preview","billing_camera_image","create_auto","archive_discover","archive_diagnose","archive_download","archive_settings","archive_settings_update","agent_search","agent_settings","agent_preview","templates_list","templates_migrate","server_fleet","templates_save","templates_favorite","templates_delete","background_status")) | EXTRA_METHODS
+    METHODS=frozenset(("client_detail","traffic_sample","camera_ports","inactive_fleet","inactive_batch_preview","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","lv_fleet","lv_batch_preview","create_suggest","admin_login","admin_logout","admin_status","billing_search","billing_select","billing_catalog","billing_history","billing_preview","billing_bulk_preview","billing_camera_image","create_auto","archive_discover","archive_diagnose","archive_download","archive_settings","archive_settings_update","agent_search","agent_settings","agent_preview","templates_list","templates_migrate","server_fleet","templates_save","templates_favorite","templates_delete","background_status")) | EXTRA_METHODS
     def __init__(self,workspace):
         self.w=workspace
         self.settings=MemorySettings(workspace)
@@ -189,7 +189,12 @@ class Operations:
                     completed+=1;emit("Проверено серверов "+str(completed)+"/"+str(len(hosts)),round(completed*100/max(1,len(hosts))))
             return {"rows":[{"host":h,"country":self.w.hosts[h].country,"metrics":results.get(h),"error":failed.get(h)} for h in hosts],"checked":len(results)+len(failed),"cancelled":cancel.is_set()}
         if method=="client_detail":
-            return public_client(self.get_client(self.host(a),text(a,"login")))
+            h=self.host(a);c=self.get_client(h,text(a,"login"))
+            out=public_client(c)
+            if c.ports:
+                try: out["port_conflicts"]={str(k):len(v) for k,v in svc.inspect_port_conflicts(h,creds,c).items()};out["conflicts_verified"]=True
+                except Exception: out["conflicts_verified"]=False
+            return out
         if method=="traffic_sample":
             h=self.host(a);login=text(a,"login")
             c=svc.get_client(h,creds,login)
@@ -244,13 +249,20 @@ class Operations:
             if not hosts: raise InputError("Нет активных VPN-серверов выбранного региона.")
             emit("Сравниваю нагрузку VPN-серверов")
             return {"host":svc.pick_best_server_parallel(hosts,creds,cancel_event=cancel)}
+        if method=="create_suggest":
+            h=self.host(a);login=text(a,"login",64)
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+",login): raise InputError("Недопустимый VPN-логин.")
+            return {"login":svc.suggest_next_login(h,creds,login)}
         if method=="create_preview":
             self.writes_enabled()
             h=self.host(a)
             login=text(a,"login",64)
             if not re.fullmatch(r"[A-Za-z0-9_.-]+",login): raise InputError("Недопустимый VPN-логин.")
             ports=number(a,"ports",1,14);count=number(a,"count",1,20)
-            return self.stage("create",(h,login,ports,count),f"Создать {count} VPN-учёток, по {ports} портов: {h} / {login}.")
+            from linkvideo_vpn_helper.services.vpn_address_allocator import DEFAULT_START_IP, validate_start_ip
+            try: start_ip=validate_start_ip(text(a,"start_ip",32,False) or DEFAULT_START_IP)
+            except ValueError as ex: raise InputError(str(ex))
+            return self.stage("create",(h,login,ports,count,start_ip),f"Создать {count} VPN-учёток, по {ports} портов: {h} / {login}. Начальный IP: {start_ip}.")
         if method=="vpn_preview":
             h=self.host(a);login=text(a,"login");act=text(a,"action",32)
             if act not in ("add","enable","disable","port_enable","port_disable","disconnect","remove_port","recreate_port","password"):
@@ -275,12 +287,38 @@ class Operations:
             h=self.host(a);days=number(a,"days",1,3650)
             rows=svc.list_lifecycle_clients(h,creds,days,True)
             return [{k:getattr(r,k) for k in ("server","login","last_logged_out","is_enabled","remote_address","lifecycle_state","is_online","lifecycle_source")} for r in rows]
+        if method in ("lv_fleet","lv_batch_preview"):
+            from linkvideo_vpn_helper.services.vpn_automation_service import VPNAutomationService
+            self.admin_only()
+            lv=VPNAutomationService();hosts=list(self.w.hosts)
+            if method=="lv_fleet":
+                results={}
+                with ThreadPoolExecutor(max_workers=min(6,max(1,len(hosts)))) as pool:
+                    tasks={pool.submit(lv.get_status,h,creds):h for h in hosts}
+                    for i,f in enumerate(as_completed(tasks)):
+                        if cancel.is_set():
+                            for task in tasks: task.cancel()
+                            break
+                        h=tasks[f]
+                        try:
+                            s=f.result();results[h]={**asdict(s),"installed":s.installed,"paused":s.paused,"state_text":s.state_text}
+                        except Exception: results[h]={"server":h,"error":True}
+                        emit("LV "+str(i+1)+"/"+str(len(hosts)),round((i+1)*100/max(1,len(hosts))))
+                return {"rows":[results[h] for h in hosts if h in results],"total":len(hosts),"cancelled":cancel.is_set()}
+            self.writes_enabled()
+            action=text(a,"action",16)
+            if action not in ("install","start","pause"): raise InputError("Недопустимое массовое действие LV.")
+            selected=a.get("hosts")
+            if not isinstance(selected,list) or not 1<=len(selected)<=100 or any(not isinstance(h,str) or h not in self.w.hosts for h in selected) or len(set(selected))!=len(selected):
+                raise InputError("Выберите доверенные серверы.")
+            label={"install":"Установить/обновить LV","start":"Запустить LV","pause":"Остановить LV"}[action]
+            return self.stage("lv_batch",(action,tuple(selected)),label+": "+", ".join(selected)+". FULL backup перед каждым изменением; карантин отдельно не включается.")
         if method in ("lv_status","lv_preview"):
             from linkvideo_vpn_helper.services.vpn_automation_service import VPNAutomationService
             h=self.host(a); self.admin_only()
             if method=="lv_status":
                 s=VPNAutomationService().get_status(h,creds)
-                return {**asdict(s),"installed":s.installed,"paused":s.paused}
+                return {**asdict(s),"installed":s.installed,"paused":s.paused,"state_text":s.state_text}
             action=text(a,"action",32)
             if action not in ("install","start","pause","seed","quarantine_on","quarantine_off"): raise InputError("Неизвестное LV-действие.")
             labels={"install":"Установить/обновить LV","start":"Запустить LV","pause":"Приостановить LV","seed":"Инициализировать жизненный цикл","quarantine_on":"Включить карантин","quarantine_off":"Отключить карантин"}
@@ -544,8 +582,8 @@ class Operations:
             self.inactive_records={}
             return {"items":results}
         if kind=="create":
-            h,login,ports,count=p
-            rows=svc.create_clients_batch(h,creds,login,ports,count,progress_callback=lambda done,total,name:emit("Создание VPN "+str(name),round(done*100/max(total,1))),cancel_event=cancel)
+            h,login,ports,count,start_ip=p
+            rows=svc.create_clients_batch(h,creds,login,ports,count,progress_callback=lambda done,total,name:emit("Создание VPN "+str(name),round(done*100/max(total,1))),cancel_event=cancel,start_ip=start_ip)
             return {"clients":[public_client(c) for c in rows]}
         if kind=="vpn":
             h,login,act,value=p
@@ -566,6 +604,20 @@ class Operations:
                 if act=="remove_port": result=svc.remove_port(h,creds,login,value)
                 else: result=svc.recreate_port(h,creds,login,value)
             return public_client(result)
+        if kind=="lv_batch":
+            self.admin_only();action,hosts=p;rows=[]
+            for i,h in enumerate(hosts):
+                if cancel.is_set(): break
+                emit("LV "+str(i+1)+"/"+str(len(hosts)),round(i*100/len(hosts)))
+                try:
+                    result=self.execute("lv",(h,action),None,cancel,emit)
+                    rows.append({"server":h,"status":"confirmed","state":result["state_text"]})
+                except Exception:
+                    rows.append({"server":h,"status":"not_confirmed"})
+                    # Do not continue fleet writes after an unknown mutation.
+                    break
+            for h in hosts[len(rows):]: rows.append({"server":h,"status":"not_attempted"})
+            return {"lv_results":rows}
         if kind=="lv":
             self.admin_only();h,action=p
             from linkvideo_vpn_helper.services.vpn_backup_service import VPNBackupService
@@ -577,9 +629,12 @@ class Operations:
             if action=="install": lv.install_or_update(h,creds)
             elif action in ("start","pause"): lv.set_automation_enabled(h,creds,action=="start")
             elif action=="seed": lv.seed_lifecycle(h,creds)
-            else: lv.set_quarantine_enabled(h,creds,action=="quarantine_on")
+            else:
+                state=lv.get_status(h,creds)
+                if not state.installed or (action=="quarantine_on" and state.initialized<=0): raise InputError("Сначала установите LV и инициализируйте активность.")
+                lv.set_quarantine_enabled(h,creds,action=="quarantine_on")
             s=lv.get_status(h,creds)
-            return {**asdict(s),"installed":s.installed,"paused":s.paused}
+            return {**asdict(s),"installed":s.installed,"paused":s.paused,"state_text":s.state_text}
         if kind=="billing_bulk":
             from linkvideo_vpn_helper.services.billing_token_transport import BillingWriteOutcomeUnknown
             changes,=p;g=self.crm();c=g.refresh_client(self.source_client())
