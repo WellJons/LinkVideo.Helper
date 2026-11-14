@@ -15,12 +15,21 @@ class Rejected(Exception):
 
 class Workspace:
     def __init__(self, registry, verify, service, search, credentials, employee):
+        self.registry_type=registry
         self.hosts = {row.host: row for row in registry.defaults()}
+        self.registry=None
+        self.trusted_custom=set()
         self.verify, self.service, self.search = verify, service, search
         self.credentials, self.employee = credentials, employee
         self.session = None
         self.identity = None
         self.ops = Operations(self)
+
+    def refresh_hosts(self):
+        if self.registry is None:
+            self.hosts={r.host:r for r in self.registry_type.defaults()}
+        else:
+            self.hosts={r.host:r for r in self.registry.all(False) if r.builtin or r.host in self.trusted_custom}
 
     def dispatch(self, method, args, cancel=None, emit=None):
         if method == "status":
@@ -31,7 +40,9 @@ class Workspace:
             username, password = args.get("username"), args.get("password")
             if not isinstance(username, str) or not username.strip() or len(username)>128 or not isinstance(password,str) or not password or len(password)>512:
                 raise Rejected("Введите корректный логин и пароль.")
-            user = self.verify(username.strip(), password, list(self.hosts))
+            self.trusted_custom.clear()
+            user = self.verify(username.strip(), password, [row.host for row in self.registry_type.defaults()])
+            self.refresh_hosts()
             self.session = self.credentials(user.username, password, 8728, 4.5)
             self.identity = {"username": user.username, "role": "employee" if self.employee(user.username) else "sysadmin"}
             return dict(self.identity)
@@ -84,7 +95,14 @@ def build():
     install_retention_policy()
     install_retention_seed_guard()
     service = VPNService()
-    return Workspace(ServerRegistry, verify_routeros_user, service, FastSearchService(service), SessionCredentials, is_employee_username)
+    workspace=Workspace(ServerRegistry, verify_routeros_user, service, FastSearchService(service), SessionCredentials, is_employee_username)
+    import os
+    from pathlib import Path
+    from PySide6.QtCore import QSettings
+    profile=Path(os.environ.get('LV4_DATA_DIR') or (Path.home()/'.linkvideo-helper-v4'))
+    profile.mkdir(parents=True,exist_ok=True)
+    workspace.registry=ServerRegistry(QSettings(str(profile/'servers.ini'),QSettings.Format.IniFormat))
+    return workspace
 
 def main():
     from linkvideo_vpn_helper.services.routeros_login_verification import LoginRejected, LoginUnavailable

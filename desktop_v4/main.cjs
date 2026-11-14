@@ -1,32 +1,66 @@
 'use strict';
-const {app,BrowserWindow,ipcMain,dialog,clipboard}=require('electron');
+const {app,BrowserWindow,ipcMain,dialog,clipboard,safeStorage}=require('electron');
 const path=require('node:path');
 const {pathToFileURL}=require('node:url');
 const {Bridge}=require('./bridge.cjs');
+const {CredentialVault}=require('./credentials.cjs');
 app.setName('LinkVideo.Helper 4 Preview');
 app.setPath('userData',process.argv.includes('--lv4-smoke')&&process.env.LV4_SMOKE==='1'?require('node:fs').mkdtempSync(path.join(require('node:os').tmpdir(),'lv4-smoke-')):path.join(app.getPath('appData'),'LinkVideo.Helper.v4-preview'));
 if(!app.requestSingleInstanceLock()){app.quit()}else{
-let win=null;
+let win=null,approved=null;
+const vault=new CredentialVault(app.getPath('userData'),safeStorage);
 const bridge=new Bridge({root:app.isPackaged?process.resourcesPath:path.resolve(__dirname,'..'),profile:app.getPath('userData'),command:app.isPackaged?path.join(process.resourcesPath,'worker','helper-core.exe'):null,onProgress:p=>{if(win&&!win.isDestroyed())win.webContents.send('helper:progress',p)}});
 const smokeMode=process.argv.includes('--lv4-smoke')&&process.env.LV4_SMOKE==='1';
 const home=pathToFileURL(path.join(__dirname,'index.html')).href;
 function trusted(event){return win&&!win.isDestroyed()&&event.sender===win.webContents&&event.senderFrame===win.webContents.mainFrame&&event.senderFrame.url===home}
 function clean(value,max){return typeof value==='string'&&value.length<=max?value:null}
 function handle(channel,fn){ipcMain.handle(channel,async(event,arg)=>{if(!trusted(event))return {ok:false,error:'Запрос отклонён.'};try{return {ok:true,data:await fn(arg)}}catch(e){return {ok:false,error:e.message||'Ошибка операции.'}}})}
-handle('helper:login',a=>{const username=clean(a?.username,128),password=clean(a?.password,512);if(!username?.trim()||!password)throw Error('Введите логин и пароль.');return bridge.request('login',{username:username.trim(),password})});
+async function login(a){
+ const username=clean(a?.username,128),password=clean(a?.password,512);
+ if(!username?.trim()||!password)throw Error('Введите логин и пароль.');
+ approved=null;
+ const result=await bridge.request('login',{username:username.trim(),password});
+ let remembered=false;
+ try{if(a.remember===true){vault.save('work',{username:username.trim(),password});remembered=true}else vault.clear('work')}catch{}
+ return {...result,remembered};
+}
+handle('helper:login',login);
+handle('helper:remember-status',()=>({work:vault.has('work'),admin:vault.has('admin'),available:vault.available()}));
+handle('helper:login-saved',async()=>{const c=vault.load('work');if(!c)throw Error('Сохранённого рабочего входа нет.');try{return await login({...c,remember:true})}catch(e){vault.clear('work');throw e}});
+handle('helper:clear-saved',a=>{if(!['work','admin'].includes(a?.kind))throw Error('Неизвестный аккаунт.');vault.clear(a.kind);return null});
+
 handle('helper:status',()=>bridge.request('status'));
 handle('helper:search',a=>{const query=clean(a?.query,128);if(!query?.trim()||!['login','port'].includes(a?.mode))throw Error('Некорректный запрос.');return bridge.request('search',{query:query.trim(),mode:a.mode})});
 handle('helper:servers',()=>bridge.request('servers'));
 handle('helper:analyze',a=>{const host=clean(a?.host,253);if(!host)throw Error('Выберите сервер.');return bridge.request('analyze',{host})});
-const operations=new Set(['client_detail','create_preview','vpn_preview','commit','inactive','lv_status','lv_preview','admin_login','admin_logout','admin_status','billing_search','billing_select','billing_catalog','billing_history','billing_preview','archive_discover','archive_diagnose','agent_search','agent_preview','templates_list','templates_save','templates_favorite','templates_delete','background_status','backup','delete_preview','backup_status','deleted_search','restore_preview','sheets_preview','cloud_connect','activity','camera_inspect','b2o_read','b2o_create_preview','billing_recipient','billing_transfer_preview','templates_images','templates_detach','winbox']);
+const operations=new Set(['client_detail','create_preview','vpn_preview','commit','inactive','lv_status','lv_preview','admin_logout','admin_status','billing_search','billing_select','billing_catalog','billing_history','billing_preview','archive_discover','archive_diagnose','agent_search','agent_preview','templates_list','templates_save','templates_favorite','templates_delete','background_status','backup','delete_preview','backup_status','deleted_search','restore_preview','sheets_preview','cloud_connect','activity','camera_inspect','b2o_read','b2o_create_preview','billing_recipient','billing_transfer_preview','templates_images','templates_detach','winbox','registry_list','registry_update','background_status']);
 handle('helper:operation',async a=>{
  if(!a||!operations.has(a.method)||!a.args||typeof a.args!=='object'||Array.isArray(a.args)||JSON.stringify(a.args).length>65000)throw Error('Недопустимая операция.');
  if(a.method==='commit'){
-  const answer=await dialog.showMessageBox(win,{type:'warning',buttons:['Отмена','Подтвердить'],defaultId:0,cancelId:0,title:'LinkVideo.Helper 4',message:'Подтвердить ранее подготовленное изменение на рабочей системе?',detail:'Проверьте выбранные данные. При неизвестном результате не повторяйте запрос автоматически.'});
+  if(!approved||approved.token!==a.args.token||Date.now()>approved.deadline){approved=null;throw Error('Подтверждение устарело.');}
+  const confirmed=approved;approved=null;
+  const answer=await dialog.showMessageBox(win,{type:'warning',buttons:['Отмена','Подтвердить'],defaultId:0,cancelId:0,title:'LinkVideo.Helper 4',message:confirmed.label,detail:'Проверьте выбранные данные. При неизвестном результате не повторяйте запрос автоматически.'});
   if(answer.response!==1)throw Error('Подтверждение отменено.');
  }
- return bridge.request(a.method,a.args);
+ if(a.method==='registry_update'&&a.args.action==='trust'){
+ const target=clean(a.args.host,253);if(!target)throw Error('Некорректный сервер.');
+ const answer=await dialog.showMessageBox(win,{type:'warning',message:'Разрешить подключение к '+target+'?',detail:'Рабочие данные MikroTik передаются этому серверу. Добавляйте только проверенные корпоративные адреса. Доверие действует текущий сеанс.',buttons:['Отмена','Разрешить'],defaultId:0,cancelId:0});if(answer.response!==1)throw Error('Доверие не подтверждено.');}
+ const data=await bridge.request(a.method,a.args);
+ if(a.method.endsWith('_preview')&&data?.token&&data?.label)approved={token:data.token,label:String(data.label).slice(0,600),deadline:Date.now()+120000};
+ if(a.method==='admin_logout'){vault.clear('admin');approved=null;}
+ return data;
 });
+async function adminLogin(a){
+ const username=clean(a?.username,128),password=clean(a?.password,512),target=a?.target;
+ if(!username?.trim()||!password||!['crm','b2o','both'].includes(target))throw Error('Проверьте данные админки.');
+ approved=null;
+ const data=await bridge.request('admin_login',{username:username.trim(),password,target});
+ let remembered=false;
+ if(data.crm||data.b2o){try{if(a.remember===true){vault.save('admin',{username:username.trim(),password,target});remembered=true}else vault.clear('admin')}catch{}}
+ return {...data,remembered};
+}
+handle('helper:admin-login',adminLogin);
+handle('helper:admin-saved',async()=>{const c=vault.load('admin');if(!c)throw Error('Сохранённого входа админки нет.');return adminLogin({...c,remember:true})});
 handle('helper:archive-download',async a=>{
  if(!['ffmpeg','ffmpeg_no_audio','curl'].includes(a?.mode))throw Error('Выберите метод.');
  const result=await dialog.showSaveDialog(win,{title:'Сохранить архив',defaultPath:'archive.mp4',filters:[{name:'Видео MP4',extensions:['mp4']}]});
@@ -49,7 +83,7 @@ handle('helper:file-action',async a=>{
 });
 handle('helper:cancel',()=>bridge.cancel());
 handle('helper:copy',a=>{const value=clean(a?.text,50000);if(value===null)throw Error('Слишком длинный текст.');clipboard.writeText(value);return null});
-handle('helper:logout',()=>{if(bridge.pending)throw Error('Сначала дождитесь завершения операции или отмените её.');bridge.stop();return null});
+handle('helper:logout',()=>{if(bridge.pending)throw Error('Сначала дождитесь завершения операции или отмените её.');approved=null;bridge.stop();try{vault.clear('work');vault.clear('admin')}catch{}return null});
 function open(){
  win=new BrowserWindow({width:1320,height:850,minWidth:820,minHeight:600,show:false,backgroundColor:'#171a20',title:'LinkVideo.Helper 4 — Preview',webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,sandbox:true,nodeIntegration:false,webSecurity:true,devTools:!app.isPackaged}});
  win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
@@ -65,7 +99,7 @@ function open(){
 }
 
 async function smoke(){
- const attempt=await win.webContents.executeJavaScript(`(async()=>{const wait=()=>new Promise(r=>setTimeout(r,300));const get=id=>document.getElementById(id);if(!window.helper||get('login').hidden)throw Error('Missing login');const core=await window.helper.status();if(!core.ok||core.data.authenticated||core.data.version!=='4.0.0-alpha.2')throw Error('Worker not reachable');get('preview').click();await wait();if(get('workspace').hidden||!get('page').innerText.includes('Демонстрационный режим'))throw Error('Preview missing');const nav=label=>[...get('nav').querySelectorAll('button')].find(b=>b.innerText.includes(label));nav('Поиск клиентов').click();await wait();if(!get('page').querySelector('button[type=submit]').disabled)throw Error('Preview search active');nav('Настройки').click();await wait();const sw=get('page').querySelector('[role=switch]');const before=sw.getAttribute('aria-checked');sw.click();if(get('page').querySelector('[role=switch]').getAttribute('aria-checked')===before)throw Error('Motion switch failed');for(const label of ['Создание VPN','Неактивные VPN','LV-автоматика','Биллинг','Архивы','Диагностика','Новый Агент','Шаблоны','CRM / B2O']){nav(label).click();await wait();if(!get('page').querySelector('h1'))throw Error('Missing view: '+label)}nav('Настройки').click();get('theme').click();await wait();if(!document.documentElement.classList.contains('light'))throw Error('Theme failed');get('logout').click();await wait();if(get('login').hidden||!get('workspace').hidden)throw Error('Logout failed');return true})()`);
+ const attempt=await win.webContents.executeJavaScript(`(async()=>{const wait=()=>new Promise(r=>setTimeout(r,300));const get=id=>document.getElementById(id);if(!window.helper||get('login').hidden)throw Error('Missing login');const core=await window.helper.status();if(!core.ok||core.data.authenticated||core.data.version!=='4.0.0-alpha.2')throw Error('Worker not reachable');get('preview').click();await wait();if(get('workspace').hidden||!get('page').innerText.includes('Демонстрационный режим'))throw Error('Preview missing');const nav=label=>[...get('nav').querySelectorAll('button')].find(b=>b.innerText.includes(label));nav('Поиск клиентов').click();await wait();if(!get('page').querySelector('button[type=submit]').disabled)throw Error('Preview search active');nav('Настройки').click();await wait();const sw=get('page').querySelector('[role=switch]');const before=sw.getAttribute('aria-checked');sw.click();if(get('page').querySelector('[role=switch]').getAttribute('aria-checked')===before)throw Error('Motion switch failed');for(const label of ['Создание VPN','Неактивные VPN','LV-автоматика','Резерв / восстановление','История VPN','Биллинг','Архивы','Диагностика','Новый Агент','Камеры / B2O','Шаблоны','CRM / B2O']){nav(label).click();await wait();if(!get('page').querySelector('h1'))throw Error('Missing view: '+label)}nav('Настройки').click();get('theme').click();await wait();if(!document.documentElement.classList.contains('light'))throw Error('Theme failed');get('logout').click();await wait();if(get('login').hidden||!get('workspace').hidden)throw Error('Logout failed');return true})()`);
  if(!attempt)throw Error('Smoke test failed');
 }
 

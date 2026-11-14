@@ -1,7 +1,12 @@
 'use strict';
 const {contextBridge,ipcRenderer}=require('electron');
 contextBridge.exposeInMainWorld('helper',Object.freeze({
- login:(username,password)=>ipcRenderer.invoke('helper:login',{username,password}),
+ login:(username,password,remember)=>ipcRenderer.invoke('helper:login',{username,password,remember}),
+ rememberStatus:()=>ipcRenderer.invoke('helper:remember-status'),
+ loginSaved:()=>ipcRenderer.invoke('helper:login-saved'),
+ clearSaved:kind=>ipcRenderer.invoke('helper:clear-saved',{kind}),
+ adminLogin:(username,password,target,remember)=>ipcRenderer.invoke('helper:admin-login',{username,password,target,remember}),
+ adminSaved:()=>ipcRenderer.invoke('helper:admin-saved'),
  status:()=>ipcRenderer.invoke('helper:status'),
  search:(query,mode)=>ipcRenderer.invoke('helper:search',{query,mode}),
  servers:()=>ipcRenderer.invoke('helper:servers'),

@@ -10,7 +10,7 @@ import re
 import subprocess
 import shutil
 
-METHODS=frozenset(("copy_vpn","backup","delete_preview","backup_status","sheets_load","deleted_search","restore_preview","sheets_preview","cloud_connect","activity","camera_inspect","b2o_read","b2o_create_preview","billing_recipient","billing_transfer_preview","templates_import","templates_attach","templates_images","templates_detach","winbox"))
+METHODS=frozenset(("copy_vpn","backup","delete_preview","backup_status","sheets_load","deleted_search","restore_preview","sheets_preview","cloud_connect","activity","camera_inspect","b2o_read","b2o_create_preview","billing_recipient","billing_transfer_preview","templates_import","templates_attach","templates_images","templates_detach","winbox","registry_list","registry_update"))
 class Extended:
     def __init__(self,ops):
         self.o=ops;self.cloud=None;self.sheets=None;self.deleted={};self.recipients={}
@@ -65,6 +65,23 @@ class Extended:
     def dispatch(self,m,a,cancel,emit):
         from desktop_v4.operations import InputError,text,number
         o=self.o;svc=o.w.service;creds=o.w.session
+        if m in ("registry_list","registry_update"):
+            if o.w.registry is None: raise InputError("Реестр недоступен.")
+            registry=o.w.registry
+            if m=="registry_update":
+                o.admin_only()
+                act=text(a,"action",16);h=registry.validate_host(text(a,"host",253))
+                rows={r.host:r for r in registry.all()}
+                if act=="trust":
+                    registry.add(h,text(a,"country",50,False) or None)
+                    o.w.trusted_custom.add(h)
+                elif act=="enable" and h in rows: registry.set_enabled(h,True)
+                elif act=="disable" and h in rows: registry.set_enabled(h,False)
+                elif act=="remove" and h in rows and not rows[h].builtin:
+                    registry.remove(h);o.w.trusted_custom.discard(h)
+                else: raise InputError("Недопустимое изменение реестра.")
+                registry.settings.sync();o.w.refresh_hosts()
+            return [{"host":r.host,"country":r.country,"builtin":r.builtin,"enabled":r.enabled,"trusted":r.builtin or r.host in o.w.trusted_custom} for r in registry.all()]
         if m=="copy_vpn":
             c=o.get_client(o.host(a),text(a,"login"))
             return c.copy_text() # Main process writes clipboard; never returned by generic RPC.

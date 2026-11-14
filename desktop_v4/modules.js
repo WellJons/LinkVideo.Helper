@@ -25,7 +25,7 @@
  const ensureHosts=(root)=>{if(S.hosts?.length)return true;root.append(notice('Загрузите список доступных серверов.'));action(root,live('Загрузить серверы',()=>run(async()=>{S.hosts=await rpc('servers');S.host=S.hosts[0]?.host||''}),'primary'));return false};
  const setHost=f=>{S.host=value(f);return S.host};
  const previewNotice=(root,plan,onConfirm)=>{if(!plan)return;const p=el('div','panel confirmation');p.append(el('p','eyebrow','ПОДТВЕРЖДЕНИЕ'),el('h3','',plan.label),el('p','','Одноразовое разрешение действует 120 секунд. Проверьте параметры до отправки.'));const b=live('Подтвердить',()=>run(async()=>{const token=plan.token;S.plan=null;try{S.outcome=await op('commit',{token});if(onConfirm)onConfirm(S.outcome)}finally{if(identity)render(false)}}),'primary');p.append(add(el('div','actionbar'),b,button('Отменить',()=>{S.plan=null;render(false)})));root.append(p)};
- const stage=(method,args)=>run(async()=>{S.plan=null;S.outcome=null;S.plan=await op(method,args);S.planPage=page});
+ const stage=(method,args)=>{const from=page;return run(async()=>{S.plan=null;S.outcome=null;S.plan=await op(method,args);S.planPage=from})};
  const currentPlan=()=>S.planPage===page?S.plan:null;
  const resultNote=(root)=>{if(S.outcome&&S.planPage===page)root.append(notice('Операция завершена. Проверьте актуальное состояние целевой записи.'))};
  function create(root){
@@ -70,7 +70,9 @@
  function admin(root){
   root.append(hero('HELPER / WORK ACCOUNTS','CRM / B2O','Две независимые корпоративные сессии. Данные MikroTik автоматически не используются.'));
   const u=field('Логин админки','text',S.admin?.username||''),p=field('Пароль','password'),t=field('Подключение','select','both',[['both','CRM и B2O'],['crm','Только CRM'],['b2o','Только B2O']]);
-  form(root,u,p,t);action(root,live('Подключить',()=>{const password=p.input.value;p.input.value='';run(async()=>{S.billingClient=null;S.hits=null;S.archive=null;S.plan=null;S.admin=await op('admin_login',{username:value(u),password,target:value(t)})})},'primary'));
+  const remember=field('Запомнить вход (Windows)','select','no',[['no','Нет'],['yes','Да']]);form(root,u,p,t,remember);action(root,live('Подключить',()=>{const password=p.input.value;p.input.value='';run(async()=>{S.billingClient=null;S.hits=null;S.archive=null;S.plan=null;S.admin=await rpc('adminLogin',value(u),password,value(t),value(remember)==='yes')})},'primary'));
+  action(root,live('Вход из хранилища',()=>run(async()=>{S.admin=await rpc('adminSaved');S.billingClient=null;S.hits=null;S.archive=null;S.plan=null})));
+  action(root,live('Очистить сохранённый вход',()=>run(()=>rpc('clearSaved','admin'))));
   action(root,live('Проверить сессии',()=>run(async()=>{S.admin=await op('admin_status')})));
   action(root,live('Выйти из админки',()=>run(async()=>{S.admin=await op('admin_logout');S.billingClient=null;S.hits=null;S.archive=null;S.plan=null})));
   if(S.admin){keyValue(root,[['Аккаунт',S.admin.username],['CRM',S.admin.crm?'Подключено':'Не подключено'],['B2O',S.admin.b2o?'Подключено':'Не подключено']]);for(const e of S.admin.errors||[])root.append(notice(e))}
@@ -159,5 +161,27 @@
   section(root,'Создание обычного аккаунта с биллингом');const name=field('Имя клиента'),login=field('Логин'),password=field('Пароль','password'),phone=field('Телефон');form(root,name,login,password,phone);action(root,live('Подготовить создание',()=>{const pw=password.input.value;password.input.value='';stage('b2o_create_preview',{country:value(country),name:value(name),login:value(login),password:pw,phone:value(phone)})},'primary'));
   previewNotice(root,currentPlan());if(S.outcome?.id_account&&S.planPage===page)keyValue(root,[['Создан ID',S.outcome.id_account],['Проверка чтением',S.outcome.read_back_verified?'Да':'Не подтверждена']]);resultNote(root);
  }
- window.lvModules=Object.freeze({reset,client,clearClient:()=>{S.client=null;S.plan=null;S.outcome=null},renderClient,render:(name,root)=>{({create,inactive,lv,recovery,activity,admin,billing,archives:r=>archive(r,false),diagnostics:r=>archive(r,true),agent,camera,templates})[name]?.(root)}});
+ function dashboard(root){
+  section(root,'Рабочие инструменты');const g=el('div','dashboard-grid');
+  for(const [id,desc] of [['create','Создание учёток и NAT'],['inactive','Жизненный цикл VPN'],['lv','Скрипты и автоматизация'],['recovery','FULL backup · восстановление'],['activity','События инфраструктуры'],['billing','Тарифы и услуги'],['archives','Поиск и экспорт MP4'],['diagnostics','Разрывы и сравнение'],['camera','B2O и сетевые проверки'],['agent','Настройки камеры'],['templates','Библиотека ответов'],['admin','Независимые сессии']]){
+   const p=pages.find(x=>x[0]===id),b=btn('','dash-tile',()=>go(id));b.append(navIcon(id,p[1]),add(el('div'),el('strong','',p[2]),el('small','',desc)),el('span','dash-arrow','›'));g.append(b)
+  }
+  root.append(g);
+ }
+ function workspaceSettings(root){
+  if(preview){root.append(notice('Настройки корпоративных серверов доступны после входа.'));return}
+  section(root,'Защищённые учётные данные');action(root,live('Очистить сохранённый вход',()=>run(()=>rpc('clearSaved','work'))));
+  if(identity?.role!=='sysadmin')return;
+  section(root,'Реестр VPN-серверов');
+  const load=async()=>{S.registry=await op('registry_list');S.hosts=await rpc('servers');serverState=null;searchState=null};
+  action(root,live('Открыть реестр',()=>run(load),'primary'));
+  if(S.registry){root.append(table(['Адрес','Регион','Доступ',''],S.registry.map(r=>[r.host,r.country,r.enabled?(r.trusted?'Активен':'Требуется доверие'):'Выключен',add(el('div','actionbar'),live(r.enabled?'Выключить':'Включить',()=>run(async()=>{await op('registry_update',{host:r.host,action:r.enabled?'disable':'enable'});await load()})),...(!r.builtin?[live('Доверять',()=>run(async()=>{await op('registry_update',{host:r.host,action:'trust',country:r.country});await load()})),live('Удалить',()=>run(async()=>{await op('registry_update',{host:r.host,action:'remove'});await load()}))]:[]))])));
+   const h=field('Дополнительный DNS/IPv4','text'),c=field('Регион','text');form(root,h,c);action(root,live('Добавить доверенный сервер',()=>run(async()=>{await op('registry_update',{host:value(h),country:value(c),action:'trust'});await load()})))
+  }
+  section(root,'Фоновая служба Windows 3.x');
+  action(root,live('Проверить существующее задание',()=>run(async()=>{S.background=await op('background_status')})));
+  if(S.background)keyValue(root,[['Установлено',S.background.installed?'Да':'Нет'],['Период, ч',S.background.interval_hours],['Статус',S.background.status]]);
+  root.append(notice('4.0 не создаёт вторую системную задачу параллельно с 3.x. Автоматический запуск 4.0 требует отдельной защищённой миграции.'))
+ }
+ window.lvModules=Object.freeze({reset,client,dashboard,settings:workspaceSettings,clearClient:()=>{S.client=null;S.plan=null;S.outcome=null},renderClient,render:(name,root)=>{({create,inactive,lv,recovery,activity,admin,billing,archives:r=>archive(r,false),diagnostics:r=>archive(r,true),agent,camera,templates})[name]?.(root)}});
 })();

@@ -65,8 +65,14 @@ class Operations:
         self.b2o_ready=False
         self.extra=Extended(self)
 
-    def close(self):
+    def clear_admin(self):
         if self.transport: self.transport.close()
+        self.transport=self.billing=self.archive=self.discovery=self.client=None
+        self.hits={};self.extra.recipients={};self.b2o_ready=False;self.admin_name='';self.plan=None
+        self.settings.remove('b2o')
+
+    def close(self):
+        self.clear_admin()
         self.__init__(self.w)
 
     def host(self,args):
@@ -172,9 +178,9 @@ class Operations:
         if method=="admin_status":
             return {"username":self.admin_name,"b2o":self.b2o_ready,"crm":self.billing is not None}
         if method=="admin_logout":
-            self.close();return {"username":"","b2o":False,"crm":False}
+            self.clear_admin();return {"username":"","b2o":False,"crm":False}
         if method=="admin_login":
-            self.close()
+            self.clear_admin()
             username=text(a,"username",128);password=a.get("password")
             if not isinstance(password,str) or not password or len(password)>512: raise InputError("Введите пароль.")
             target=text(a,"target",12)
