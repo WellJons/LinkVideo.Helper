@@ -6,9 +6,11 @@
   "scripts": {
     "start": "electron .",
     "check": "node --check main.cjs && node --check bridge.cjs && node --check preload.cjs && node --check renderer.js && node --check modules.js && node --test test/*.test.cjs",
-    "test": "node --test test/*.test.cjs"
+    "test": "node --test test/*.test.cjs",
+    "package:win": "node package-win.cjs"
   },
   "devDependencies": {
-    "electron": "45.3.2"
+    "electron": "45.3.2",
+    "@electron/packager": "20.3.0"
   }
 }
