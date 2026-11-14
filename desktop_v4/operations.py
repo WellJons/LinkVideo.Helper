@@ -60,7 +60,7 @@ class MemorySettings:
     def sync(self): pass
 
 class Operations:
-    METHODS=frozenset(("client_detail","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","admin_login","admin_logout","admin_status","billing_search","billing_select","billing_catalog","billing_history","billing_preview","billing_bulk_preview","billing_camera_image","create_auto","archive_discover","archive_diagnose","archive_download","archive_settings","archive_settings_update","agent_search","agent_settings","agent_preview","templates_list","templates_save","templates_favorite","templates_delete","background_status")) | EXTRA_METHODS
+    METHODS=frozenset(("client_detail","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","admin_login","admin_logout","admin_status","billing_search","billing_select","billing_catalog","billing_history","billing_preview","billing_bulk_preview","billing_camera_image","create_auto","archive_discover","archive_diagnose","archive_download","archive_settings","archive_settings_update","agent_search","agent_settings","agent_preview","templates_list","templates_migrate","server_fleet","templates_save","templates_favorite","templates_delete","background_status")) | EXTRA_METHODS
     def __init__(self,workspace):
         self.w=workspace
         self.settings=MemorySettings(workspace)
@@ -169,6 +169,23 @@ class Operations:
                     else: service.remove_custom_archive_server(operator,host)
                 else: raise InputError("Неизвестная настройка архива.")
             return {"clusters":[{"key":k,"name":n,"operator":op,"enabled":service.extra_cluster_enabled(k)} for k,n,op in service.EXTRA_CLUSTERS],"hosts":[{"operator":op,"country":service.operator_country(op),"custom":service.custom_archive_servers(op)} for op in service.OPERATOR_PROFILES]}
+        if method=="server_fleet":
+            hosts=list(self.w.hosts)
+            results={};failed={}
+            with ThreadPoolExecutor(max_workers=min(6,max(1,len(hosts)))) as pool:
+                tasks={pool.submit(svc.analyze_server_quick,h,creds):h for h in hosts}
+                completed=0
+                for future in as_completed(tasks):
+                    if cancel.is_set():
+                        for f in tasks: f.cancel()
+                        break
+                    h=tasks[future]
+                    try:
+                        row=asdict(future.result())
+                        results[h]={k:row.get(k) for k in ("server","cpu_load","memory_usage_percent","clients_total","clients_online","ports_total","ports_active")}
+                    except Exception: failed[h]="Нет подтверждённых данных"
+                    completed+=1;emit("Проверено серверов "+str(completed)+"/"+str(len(hosts)),round(completed*100/max(1,len(hosts))))
+            return {"rows":[{"host":h,"country":self.w.hosts[h].country,"metrics":results.get(h),"error":failed.get(h)} for h in hosts],"checked":len(results)+len(failed),"cancelled":cancel.is_set()}
         if method=="client_detail":
             return public_client(self.get_client(self.host(a),text(a,"login")))
         if method=="create_auto":
@@ -396,6 +413,12 @@ class Operations:
             else: raise InputError("Неизвестная настройка.")
             label={0:"Обычное изображение",1:"Вертикальное отражение",2:"Горизонтальное отражение",3:"Поворот на 180°"}.get(value) if action=="rotation" else str(value)
             return self.stage("agent",(action,value),f"Камера {self.camera.serial_number}: {action} = {label}",self.camera.serial_number)
+        if method=="templates_migrate":
+            from desktop_v4.template_migration import migrate_templates
+            path=Path(text(a,"path",2048))
+            if not path.is_absolute(): raise InputError("Выберите файл базы старой версии.")
+            try: return migrate_templates(path,self.template_store(),cancel)
+            except ValueError as ex: raise InputError(str(ex))
         if method=="templates_list":
             store=self.template_store()
             return {"categories":store.categories(),"items":[asdict(row) for row in store.list(text(a,"query",256,False),text(a,"category",70,False),a.get("favorites") is True)]}

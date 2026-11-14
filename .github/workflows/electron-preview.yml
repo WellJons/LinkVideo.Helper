@@ -30,7 +30,7 @@ jobs:
       - name: Install Python runtime build dependencies
         run: python -m pip install -r requirements.txt pyinstaller
       - name: Test Python RPC without production connections
-        run: python -m unittest desktop_v4.test_worker
+        run: python -m unittest desktop_v4.test_worker desktop_v4.test_template_migration
       - name: Compile Python adapters
         run: python -m compileall -q desktop_v4
       - name: Install Electron dependencies

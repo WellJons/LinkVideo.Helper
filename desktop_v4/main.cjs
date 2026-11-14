@@ -36,7 +36,7 @@ handle('helper:status',()=>bridge.request('status'));
 handle('helper:search',a=>{const query=clean(a?.query,128);if(!query?.trim()||!['login','port'].includes(a?.mode))throw Error('Некорректный запрос.');return bridge.request('search',{query:query.trim(),mode:a.mode})});
 handle('helper:servers',()=>bridge.request('servers'));
 handle('helper:analyze',a=>{const host=clean(a?.host,253);if(!host)throw Error('Выберите сервер.');return bridge.request('analyze',{host})});
-const operations=new Set(['client_detail','create_preview','vpn_preview','commit','inactive','lv_status','lv_preview','admin_logout','admin_status','billing_search','billing_select','billing_catalog','billing_history','billing_preview','billing_bulk_preview','billing_camera_image','create_auto','archive_discover','archive_settings','archive_settings_update','archive_diagnose','agent_search','agent_settings','agent_preview','templates_list','templates_save','templates_favorite','templates_delete','background_status','backup','delete_preview','backup_status','deleted_search','restore_preview','sheets_preview','cloud_connect','cloud_restore_preview','activity','camera_inspect','camera_live','agent_image','b2o_read','b2o_create_preview','billing_recipient','billing_transfer_preview','templates_images','templates_detach','winbox','registry_list','registry_update','background_status']);
+const operations=new Set(['client_detail','server_fleet','create_preview','vpn_preview','commit','inactive','lv_status','lv_preview','admin_logout','admin_status','billing_search','billing_select','billing_catalog','billing_history','billing_preview','billing_bulk_preview','billing_camera_image','create_auto','archive_discover','archive_settings','archive_settings_update','archive_diagnose','agent_search','agent_settings','agent_preview','templates_list','templates_save','templates_favorite','templates_delete','background_status','backup','delete_preview','backup_status','deleted_search','restore_preview','sheets_preview','cloud_connect','cloud_restore_preview','activity','camera_inspect','camera_live','agent_image','b2o_read','b2o_create_preview','billing_recipient','billing_transfer_preview','templates_images','templates_detach','winbox','registry_list','registry_update','background_status']);
 handle('helper:operation',async a=>{
  if(!a||!operations.has(a.method)||!a.args||typeof a.args!=='object'||Array.isArray(a.args)||JSON.stringify(a.args).length>65000)throw Error('Недопустимая операция.');
  if(a.method==='commit'){
@@ -78,9 +78,9 @@ handle('helper:copy-vpn',async a=>{
  const value=await bridge.request('copy_vpn',{host,login});clipboard.writeText(value);return null;
 });
 handle('helper:file-action',async a=>{
- const allowed={templates_import:{extensions:['docx'],name:'Шаблоны Word'},templates_attach:{extensions:['png','jpg','jpeg','gif','webp'],name:'Изображение'},sheets_load:{extensions:['json'],name:'Google service account'}};
+ const allowed={templates_import:{extensions:['docx'],name:'Шаблоны Word'},templates_migrate:{extensions:['sqlite3'],name:'Библиотека Helper 3.x'},templates_attach:{extensions:['png','jpg','jpeg','gif','webp'],name:'Изображение'},sheets_load:{extensions:['json'],name:'Google service account'}};
  if(!Object.hasOwn(allowed,a?.method))throw Error('Неизвестная операция.');
- const choice=await dialog.showOpenDialog(win,{properties:['openFile'],filters:[allowed[a.method]]});
+ const choice=await dialog.showOpenDialog(win,{title:a.method==='templates_migrate'?'Выберите старый templates.sqlite3 (папка support_templates)':'Выберите файл',properties:['openFile'],filters:[allowed[a.method]]});
  if(choice.canceled||!choice.filePaths[0])throw Error('Выбор отменён.');
  return bridge.request(a.method,{path:choice.filePaths[0],id:a?.id,category:clean(a?.category,70)||''});
 });

@@ -25,3 +25,5 @@ main{padding:0 34px;max-width:1760px}.topbar{min-height:62px;margin-bottom:26px}
 .camera-check{width:15px!important;height:15px!important;min-height:0;padding:0;accent-color:var(--accent)}.camera-preview{margin:15px 0}.camera-thumb{display:block;max-width:min(100%,560px);max-height:335px;object-fit:contain;margin:12px auto 0;border-radius:9px;background:#101318}
 
 .update-panel{margin:18px 0}.update-heading{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:12px}.update-heading .eyebrow{margin:0 0 5px}.release-notes{white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto;padding:13px;margin:12px 0;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+
+.fleet-load{display:flex;align-items:center;gap:8px;font-variant-numeric:tabular-nums}.fleet-meter{appearance:none;width:65px;height:5px;border:0;border-radius:6px;overflow:hidden;background:var(--line)}.fleet-meter::-webkit-progress-bar{background:var(--line)}.fleet-meter::-webkit-progress-value{background:var(--accent)}
