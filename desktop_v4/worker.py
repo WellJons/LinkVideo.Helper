@@ -1,4 +1,4 @@
-"""Private stdio RPC for the Electron preview. No HTTP listener or writes."""
+"""Private stdio RPC; no HTTP listener. Mutations are explicitly gated."""
 from __future__ import annotations
 import json
 import sys

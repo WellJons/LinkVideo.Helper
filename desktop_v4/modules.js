@@ -1,0 +1,121 @@
+'use strict';
+(()=>{
+ let S={};
+ const reset=()=>{S={}};
+ const op=(method,args={})=>rpc('operation',method,args);
+ const button=(name,fn,cls='quiet',disabled=false)=>{const b=btn(name,cls,fn);b.disabled=disabled;return b};
+ const live=(text,fn,cls='quiet')=>button(text,fn,cls,preview);
+ const field=(title,type='text',value='',opts=[])=>{
+  const input=el(type==='select'?'select':type==='textarea'?'textarea':'input');
+  if(type==='select'){for(const [v,n] of opts){const o=el('option','',n);o.value=String(v);input.append(o)}}
+  else if(type!=='textarea')input.type=type;
+  if(value!=='')input.value=String(value);
+  return {input,node:add(el('label','',title),input)};
+ };
+ const form=(root,...fields)=>{const p=el('div','panel fields');p.append(...fields.map(f=>f.node||f));root.append(p);return p};
+ const action=(root,button)=>{root.append(add(el('div','actionbar'),button));return button};
+ const section=(root,title)=>root.append(el('h2','section-head',title));
+ const value=(f)=>f.input.value.trim();
+ const num=f=>Number(f.input.value);
+ const error=err=>toast(err?.message||'Операция не выполнена.');
+ const run=async(fn)=>{const owner=identity;try{const result=await fn();if(identity===owner&&owner)render(false);return result}catch(err){if(identity===owner)error(err)}};
+ const keyValue=(root,entries)=>{const d=el('div','kv-grid');for(const [k,v] of entries)d.append(add(el('div','kv'),el('small','',k),el('strong','',v==null||v===''?'—':Array.isArray(v)?v.join(', '):String(v))));root.append(d)};
+ const status=v=>el('span',v?'online':'offline',v?'В сети':'Не в сети');
+ const serverField=(title='VPN-сервер')=>field(title,'select',S.host||'',(S.hosts||[]).map(r=>[r.host,r.host+' · '+r.country]));
+ const ensureHosts=(root)=>{if(S.hosts?.length)return true;root.append(notice('Загрузите список доступных серверов.'));action(root,live('Загрузить серверы',()=>run(async()=>{S.hosts=await rpc('servers');S.host=S.hosts[0]?.host||''}),'primary'));return false};
+ const setHost=f=>{S.host=value(f);return S.host};
+ const previewNotice=(root,plan,onConfirm)=>{if(!plan)return;const p=el('div','panel confirmation');p.append(el('p','eyebrow','ПОДТВЕРЖДЕНИЕ'),el('h3','',plan.label),el('p','','Одноразовое разрешение действует 120 секунд. Проверьте параметры до отправки.'));const b=live('Подтвердить',()=>run(async()=>{const token=plan.token;S.plan=null;try{S.outcome=await op('commit',{token});if(onConfirm)onConfirm(S.outcome)}finally{if(identity)render(false)}}),'primary');p.append(add(el('div','actionbar'),b,button('Отменить',()=>{S.plan=null;render(false)})));root.append(p)};
+ const stage=(method,args)=>run(async()=>{S.plan=null;S.outcome=null;S.plan=await op(method,args);S.planPage=page});
+ const currentPlan=()=>S.planPage===page?S.plan:null;
+ const resultNote=(root)=>{if(S.outcome&&S.planPage===page)root.append(notice('Операция завершена. Проверьте актуальное состояние целевой записи.'))};
+ function create(root){
+  root.append(hero('VPN / PROVISIONING','Создание VPN-клиентов','Используется существующий распределитель адресов и портов RouterOS.'));
+  if(!ensureHosts(root))return;
+  const h=serverField(),l=field('Базовый логин','text',S.createLogin||''),p=field('Портов на учётку','number',S.createPorts||2),c=field('Количество учёток','number',S.createCount||1);
+  p.input.min=1;p.input.max=14;c.input.min=1;c.input.max=20;
+  form(root,h,l,p,c);action(root,live('Подготовить создание',()=>{S.createLogin=value(l);S.createPorts=num(p);S.createCount=num(c);stage('create_preview',{host:setHost(h),login:S.createLogin,ports:S.createPorts,count:S.createCount})},'primary'));
+  previewNotice(root,currentPlan());resultNote(root);
+  if(S.planPage==='create'&&S.outcome?.clients)root.append(table(['Логин','Сервер','VPN IP','Порты'],S.outcome.clients.map(c=>[c.login,c.server,c.remote_address,c.ports.join(', ')])));
+ }
+ async function client(host,login){S.client=null;S.plan=null;S.outcome=null;await run(async()=>{S.client=await op('client_detail',{host,login})})}
+ function renderClient(root){
+  const c=S.client;if(!c)return;
+  section(root,'Карточка VPN · '+c.login);
+  const panel=el('div','panel');keyValue(panel,[['Сервер',c.server],['VPN IP',c.remote_address],['Статус',c.is_online?'В сети':'Не в сети'],['Учётка',c.is_enabled?'Включена':'Отключена'],['Uptime',c.uptime]]);
+  panel.append(table(['Порт','Статус','Конфликты'],c.ports.map(p=>[p,c.disabled_ports.includes(p)?'Выключен':c.active_ports.includes(p)?'Активен':'Настроен',c.port_conflicts?.[p]||'—'])));
+  root.append(panel);
+  const a=field('Действие','select','add',[['add','Добавить порты'],['disconnect','Разорвать сессию'],...(identity?.role==='sysadmin'?[['enable','Включить VPN'],['disable','Отключить VPN'],['port_enable','Включить порт'],['port_disable','Отключить порт'],['remove_port','Удалить порт'],['recreate_port','Пересоздать порт'],['password','Сменить пароль']]:[])]),p=field('Порт / количество','number',1),pw=field('Новый пароль','password');
+  form(root,a,p,pw);action(root,live('Подготовить действие',()=>{const args={host:c.server,login:c.login,action:value(a),count:num(p),port:num(p),password:pw.input.value};pw.input.value='';stage('vpn_preview',args)},'primary'));action(root,live('Обновить карточку',()=>client(c.server,c.login)));
+  previewNotice(root,currentPlan(),out=>{if(out?.login)S.client=out});resultNote(root);
+ }
+ function inactive(root){
+  root.append(hero('VPN / LIFECYCLE','Неактивные VPN','Жизненный цикл учёток, состояния LV и дата последнего отключения.'));
+  if(!ensureHosts(root))return;
+  const h=serverField(),d=field('Порог неактивности, дней','number',S.inactiveDays||30);
+  form(root,h,d);action(root,live('Проверить',()=>run(async()=>{S.inactiveDays=num(d);S.inactive=await op('inactive',{host:setHost(h),days:S.inactiveDays})}),'primary'));
+  if(S.inactive){root.append(notice('Найдено: '+S.inactive.length));root.append(table(['Логин','Состояние LV','Последний выход','VPN IP','Статус'],S.inactive.map(c=>[c.login,c.lifecycle_state,c.last_logged_out||'—',c.remote_address,status(c.is_online)])))}
+ }
+ function lv(root){
+  root.append(hero('VPN / AUTOMATION','LV-автоматика','Состояние скриптов, планировщиков и жизненного цикла.'));
+  if(!preview&&identity?.role!=='sysadmin'){root.append(notice('Раздел доступен системному администратору.'));return}
+  if(!ensureHosts(root))return;
+  const h=serverField(),a=field('Действие','select','install',[['install','Установить / обновить'],['start','Запустить'],['pause','Приостановить'],['seed','Инициализировать'],['quarantine_on','Включить карантин'],['quarantine_off','Выключить карантин']]);
+  form(root,h,a);action(root,live('Проверить состояние',()=>run(async()=>{S.lv=await op('lv_status',{host:setHost(h)})}),'primary'));action(root,live('Подготовить изменение',()=>stage('lv_preview',{host:setHost(h),action:value(a)})));
+  const x=S.lv;if(x)keyValue(root,[['Сервер',x.server],['Версия',x.version],['Скрипты',x.scripts_installed+' / '+x.scripts_expected],['Планировщики',x.schedulers_installed+' / '+x.schedulers_expected],['Установка',x.installed?'Подтверждена':'Не полная'],['Пауза',x.paused?'Да':'Нет'],['Активные',x.active],['Сон',x.sleeping],['Карантин',x.quarantine],['Архив',x.archive],['Неизвестные',x.unknown]]);
+  previewNotice(root,currentPlan(),out=>S.lv=out);resultNote(root);
+ }
+ function admin(root){
+  root.append(hero('HELPER / WORK ACCOUNTS','CRM / B2O','Две независимые корпоративные сессии. Данные MikroTik автоматически не используются.'));
+  const u=field('Логин админки','text',S.admin?.username||''),p=field('Пароль','password'),t=field('Подключение','select','both',[['both','CRM и B2O'],['crm','Только CRM'],['b2o','Только B2O']]);
+  form(root,u,p,t);action(root,live('Подключить',()=>{const password=p.input.value;p.input.value='';run(async()=>{S.billingClient=null;S.hits=null;S.archive=null;S.plan=null;S.admin=await op('admin_login',{username:value(u),password,target:value(t)})})},'primary'));
+  action(root,live('Проверить сессии',()=>run(async()=>{S.admin=await op('admin_status')})));
+  action(root,live('Выйти из админки',()=>run(async()=>{S.admin=await op('admin_logout');S.billingClient=null;S.hits=null;S.archive=null;S.plan=null})));
+  if(S.admin){keyValue(root,[['Аккаунт',S.admin.username],['CRM',S.admin.crm?'Подключено':'Не подключено'],['B2O',S.admin.b2o?'Подключено':'Не подключено']]);for(const e of S.admin.errors||[])root.append(notice(e))}
+ }
+ function billing(root){
+  root.append(hero('CRM / BILLING','Биллинг','Поиск клиента, карточка, история камеры и тарифный справочник BY / KZ.'));
+  const q=field('Логин клиента','text',S.billingQuery||'');
+  form(root,q);action(root,live('Найти',()=>run(async()=>{S.billingQuery=value(q);S.billingClient=null;S.history=null;S.catalog=null;S.plan=null;S.hits=await op('billing_search',{query:S.billingQuery})}),'primary'));
+  action(root,live('Все тарифы',()=>run(async()=>{S.catalog=await op('billing_catalog',{scope:'all'})})));
+  if(S.hits)root.append(table(['Логин','Клиент','Страна','Баланс',''],S.hits.map(x=>[x.login,x.account_name,x.country,x.balance_text,live('Открыть',()=>run(async()=>{S.billingClient=await op('billing_select',{id:x.id});S.plan=null;S.history=null;S.catalog=null}))])));
+  const c=S.billingClient;if(c){section(root,c.display_name||c.login);keyValue(root,[['Логин',c.login],['Страна',c.country],['Статус',c.status],['Баланс',c.balance_text],['Договор',c.contract_number],['Тип',c.legal_type]]);
+   root.append(table(['Камера','ID','Тариф','Статус','Стоимость',''],c.services.map(x=>[x.camera_name,x.camera_id,x.tariff_name,x.status,x.total_text,live('История',()=>run(async()=>{S.history=await op('billing_history',{camera:x.id})}))])));
+   action(root,live('Тарифы клиента',()=>run(async()=>{S.catalog=await op('billing_catalog',{scope:'client'})})));
+   if(c.services.length){const cam=field('Камера','select','',c.services.map(x=>[x.id,x.camera_name+' · '+x.id])),a=field('Изменение','select','tariff',[['tariff','Сменить тариф'],['status','Изменить статус']]),t=field('ID тарифа','text'),st=field('Статус','select','1',[[1,'Включить'],[0,'Отключить']]),date=field('Дата','date'),comment=field('Комментарий','text');form(root,cam,a,t,st,date,comment);action(root,live('Подготовить изменение',()=>stage('billing_preview',{camera:value(cam),action:value(a),tariff:value(t),status:num(st),date:value(date),comment:value(comment)}),'primary'))}
+  }
+  if(S.catalog){section(root,'Каталог тарифов');root.append(table(['ID','Название','Страна','Тип','Цена'],(S.catalog.tariffs||[]).map(t=>[t.id,t.name,t.country,t.account_type,t.price])))}
+  if(S.history){section(root,'История камеры');root.append(table(['Дата','Пользователь','Действие','Поле','До','После'],S.history.map(h=>[h.date,h.user,h.action,h.field_name,h.old_value,h.new_value])))}
+  previewNotice(root,currentPlan(),out=>S.billingClient=out);resultNote(root);
+ }
+ function archive(root,diagnose){
+  root.append(hero(diagnose?'ARCHIVE / DIAGNOSIS':'ARCHIVE / DOWNLOAD',diagnose?'Диагностика архива':'Архивы','Период задаётся в локальном времени камеры. Источник — существующий DVR / B2O сервис.'));
+  const saved=S.archiveForm||{},cam=field('ID камеры','text',saved.camera||''),country=field('Регион','select',saved.operator||241,[[241,'Россия'],[1721,'Казахстан'],[1741,'Беларусь']]),start=field('Начало','datetime-local',saved.start||''),end=field('Конец','datetime-local',saved.end||''),compare=field('Камеры того же адреса, через запятую','text',saved.compare||''),server=field('Камеры того же сервера, через запятую','text',saved.server_compare||'');
+  form(root,cam,country,start,end,...(diagnose?[compare,server]:[]));
+  action(root,live(diagnose?'Выполнить диагностику':'Найти архив',()=>run(async()=>{S.archive=null;S.archivePage=page;S.archiveForm={camera:value(cam),operator:num(country),start:value(start),end:value(end),compare:value(compare),server_compare:value(server)};const a={...S.archiveForm,compare:value(compare).split(',').map(s=>s.trim()).filter(Boolean),server_compare:value(server).split(',').map(s=>s.trim()).filter(Boolean)};S.archive=await op(diagnose?'archive_diagnose':'archive_discover',a)}),'primary'));
+  const d=S.archive;if(d&&S.archivePage===page){const time=t=>new Date((t+d.timezone*3600)*1000).toISOString().slice(0,19).replace('T',' ');
+   keyValue(root,[['Камера',d.camera],['Сервер',d.server],['Часовой пояс','UTC '+d.timezone],['Покрытие',Math.round(d.coverage*10)/10+'%'],['Пропуски',d.gaps.length],['Проверено серверов',d.checked],['Ошибки',d.error_count]]);
+   if(!d.exact_timeline)root.append(notice('Точный DVR timeline не подтверждён; HLS не доказывает отсутствие разрывов.'));
+   const timeline=el('div','timeline');for(const s of d.slices)timeline.append(add(el('span','slice'),el('small','',time(s.start)+' — '+time(s.end))));root.append(timeline);
+   if(d.gaps.length){section(root,'Пропуски');root.append(table(['Начало','Конец'],d.gaps.map(g=>[time(g.start),time(g.end)])))}
+   if(d.diagnosis){section(root,d.diagnosis.title);root.append(add(el('div','panel'),el('h3','',d.diagnosis.side+' · '+d.diagnosis.confidence),el('p','',d.diagnosis.summary),...d.diagnosis.cautions.map(c=>el('p','',c))))}
+   if(!diagnose&&d.downloadable){const method=field('Метод скачивания','select','ffmpeg',[['ffmpeg','FFmpeg со звуком'],['ffmpeg_no_audio','FFmpeg без звука'],['curl','Прямой MP4 / curl']]);form(root,method);action(root,live('Сохранить MP4',()=>run(async()=>{const r=await rpc('archiveDownload',value(method));toast((r.partial?'Частично сохранён: ':'Сохранён: ')+r.output)}),'primary'))}
+  }
+ }
+ function agent(root){
+  root.append(hero('CAMERA / AGENT','Новый Агент','Поиск камеры и настройки времени, ориентации, битрейта через исходный AgentService.'));
+  const sn=field('Серийный номер','text',S.serial||'');form(root,sn);
+  action(root,live('Найти камеру',()=>run(async()=>{S.serial=value(sn);S.agent=await op('agent_search',{serial:S.serial});S.plan=null}),'primary'));
+  const c=S.agent;if(c){keyValue(root,[['SN',c.serial_number],['Модель',c.model],['Производитель',c.vendor],['Сервер',c.server],['Версия агента',c.version]]);
+   const a=field('Настройка','select','timezone',[['timezone','Часовой пояс (часы)'],['rotation','Поворот (градусы)'],['bitrate','Битрейт (Кбит/с)']]),v=field('Значение','number',7);form(root,a,v);action(root,live('Подготовить изменение',()=>stage('agent_preview',{action:value(a),value:num(v)}),'primary'))}
+  previewNotice(root,currentPlan());resultNote(root);
+ }
+ function templates(root){
+  root.append(hero('SUPPORT / KNOWLEDGE','Шаблоны ответов','Личная библиотека быстрых ответов — локальная SQLite база 4.0.'));
+  const q=field('Поиск','text',S.templateQuery||''),cat=field('Категория','select',S.templateCategory||'',[['','Все'],...(S.templates?.categories||[]).map(v=>[v,v])]);form(root,q,cat);
+  const load=async()=>{S.templateQuery=value(q);S.templateCategory=value(cat);S.templates=await op('templates_list',{query:S.templateQuery,category:S.templateCategory})};
+  action(root,live('Загрузить шаблоны',()=>run(load),'primary'));action(root,live('Новый шаблон',()=>{S.editTemplate={};render(false)}));
+  if(S.templates)for(const t of S.templates.items){const row=el('article','panel template');row.append(el('h3','',t.title),el('small','',t.category+(t.favorite?' · ★':'')),el('p','',t.body),add(el('div','actionbar'),live('Копировать',()=>rpc('copy',t.body).then(()=>toast('Скопировано')).catch(error)),live('Редактировать',()=>{S.editTemplate=t;render(false)}),live(t.favorite?'Убрать из избранного':'В избранное',()=>run(async()=>{await op('templates_favorite',{id:t.id,selected:!t.favorite});await load()})),live('Удалить',()=>{if(confirm('Удалить локальный шаблон?'))run(async()=>{await op('templates_delete',{id:t.id});S.editTemplate=null;await load()})})));root.append(row)}
+  if(S.editTemplate){const t=S.editTemplate,title=field('Название','text',t.title||''),category=field('Категория','text',t.category||''),body=field('Текст','textarea',t.body||'');section(root,t.id?'Редактирование':'Новый шаблон');form(root,title,category,body);action(root,live('Сохранить',()=>run(async()=>{await op('templates_save',{id:t.id||null,title:value(title),category:value(category),body:value(body)});S.editTemplate=null;await load()}),'primary'))}
+ }
+ window.lvModules=Object.freeze({reset,client,clearClient:()=>{S.client=null;S.plan=null;S.outcome=null},renderClient,render:(name,root)=>{({create,inactive,lv,admin,billing,archives:r=>archive(r,false),diagnostics:r=>archive(r,true),agent,templates})[name]?.(root)}});
+})();

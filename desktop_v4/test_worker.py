@@ -1,6 +1,9 @@
 import unittest
 from types import SimpleNamespace as NS
 from desktop_v4.worker import Workspace, Rejected
+from desktop_v4.operations import InputError
+from unittest.mock import patch
+from dataclasses import dataclass
 
 class TestWorkspace(unittest.TestCase):
     def setUp(self):
@@ -16,7 +19,7 @@ class TestWorkspace(unittest.TestCase):
             if password!="valid":
                 raise Rejected("Invalid")
             return NS(username=user)
-        self.w = Workspace(Registry,verify,None,NS(search_login_all=lambda *a:report, search_port_all=lambda *a:report),lambda *a:a,lambda user:user=="AdminChats")
+        self.w = Workspace(Registry,verify,None,NS(search_login_all=lambda *a,**kw:report, search_port_all=lambda *a,**kw:report),lambda *a:a,lambda user:user=="AdminChats")
     def test_no_access_before_login(self):
         for method,args in [("servers",{}),("search",{"query":"client","mode":"login"}),("analyze",{"host":"trusted.example"})]:
             with self.assertRaises(Rejected):
@@ -33,5 +36,21 @@ class TestWorkspace(unittest.TestCase):
         with self.assertRaises(Rejected):
             self.w.dispatch("login",{"username":"AdminChats","password":"invalid"})
         self.assertFalse(self.w.dispatch("status",{})["authenticated"])
+    def test_operational_permissions(self):
+        self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
+        with patch.dict("os.environ",{"LV4_ENABLE_WRITES":"1"}):
+            with self.assertRaises(InputError): self.w.dispatch("lv_preview",{"host":"trusted.example","action":"install"})
+            with self.assertRaises(InputError): self.w.dispatch("vpn_preview",{"host":"trusted.example","login":"client","action":"disable"})
+            plan=self.w.dispatch("create_preview",{"host":"trusted.example","login":"test","ports":2,"count":1})
+            self.assertIn("token",plan)
+            with self.assertRaises(InputError): self.w.dispatch("commit",{"token":"wrong"})
+            with self.assertRaises(InputError): self.w.dispatch("commit",{"token":plan["token"]})
+        with patch.dict("os.environ",{"LV4_ENABLE_WRITES":"0"}):
+            with self.assertRaises(InputError): self.w.dispatch("create_preview",{"host":"trusted.example","login":"test","ports":2,"count":1})
+    def test_separate_admin_auth(self):
+        self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
+        self.assertEqual(self.w.dispatch("admin_status",{}),{"username":"","b2o":False,"crm":False})
+        with self.assertRaises(InputError): self.w.dispatch("billing_search",{"query":"client"})
+        with self.assertRaises(InputError): self.w.dispatch("archive_discover",{"camera":"123"})
 if __name__=="__main__":
     unittest.main()
