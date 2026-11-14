@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('helper',Object.freeze({
  adminSaved:()=>ipcRenderer.invoke('helper:admin-saved'),
  updateCheck:()=>ipcRenderer.invoke('helper:update-check'),
  updateDownload:()=>ipcRenderer.invoke('helper:update-download'),
+ updateInstall:()=>ipcRenderer.invoke('helper:update-install'),
  status:()=>ipcRenderer.invoke('helper:status'),
  search:(query,mode)=>ipcRenderer.invoke('helper:search',{query,mode}),
  servers:()=>ipcRenderer.invoke('helper:servers'),

@@ -15,6 +15,14 @@ function selectRelease(rows,current){
  }return candidates.sort((a,b)=>compare(b.version,a.version))[0]||null;
 }
 function approvedRedirect(url){try{const u=new URL(url);return u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&u.hostname==='release-assets.githubusercontent.com'}catch{return false}}
+async function verifyInstaller(filename,release){
+ const stat=await fsp.lstat(filename);
+ if(!stat.isFile()||stat.isSymbolicLink()||stat.size!==release.size)throw Error('Размер файла не совпадает.');
+ const hash=crypto.createHash('sha256');let bytes=0;
+ for await(const data of fs.createReadStream(filename)){bytes+=data.length;if(bytes>release.size)throw Error('Размер файла не совпадает.');hash.update(data)}
+ if(bytes!==release.size||hash.digest('hex')!==release.sha256)throw Error('SHA-256 установщика не совпадает.');
+ return true;
+}
 class Updater{
  constructor(current,{fetchFn=fetch}={}){this.current=current;this.fetch=fetchFn;this.release=null;this.active=false}
  async check(){
@@ -43,4 +51,4 @@ class Updater{
   }finally{this.active=false;if(staging)await fsp.rm(staging,{recursive:true,force:true}).catch(()=>{})}
  }
 }
-module.exports={Updater,selectRelease,compare,approvedRedirect};
+module.exports={Updater,selectRelease,compare,approvedRedirect,verifyInstaller};

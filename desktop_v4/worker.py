@@ -33,7 +33,7 @@ class Workspace:
 
     def dispatch(self, method, args, cancel=None, emit=None):
         if method == "status":
-            return {"authenticated": self.session is not None, "version": "4.0.0-alpha.4"}
+            return {"authenticated": self.session is not None, "version": "4.0.0-alpha.5"}
         if method == "login":
             self.ops.close()
             self.session = self.identity = None
