@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('helper',Object.freeze({
  cloudSaved:()=>ipcRenderer.invoke('helper:cloud-saved'),
  cloudProfile:()=>ipcRenderer.invoke('helper:cloud-profile'),
  cloudDisconnect:()=>ipcRenderer.invoke('helper:cloud-disconnect'),
+ taskScheduler:()=>ipcRenderer.invoke('helper:task-scheduler'),
  updateCheck:()=>ipcRenderer.invoke('helper:update-check'),
  updateDownload:()=>ipcRenderer.invoke('helper:update-download'),
  updateInstall:()=>ipcRenderer.invoke('helper:update-install'),

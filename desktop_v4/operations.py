@@ -172,6 +172,7 @@ class Operations:
                 else: raise InputError("Неизвестная настройка архива.")
             return {"clusters":[{"key":k,"name":n,"operator":op,"enabled":service.extra_cluster_enabled(k)} for k,n,op in service.EXTRA_CLUSTERS],"hosts":[{"operator":op,"country":service.operator_country(op),"custom":service.custom_archive_servers(op)} for op in service.OPERATOR_PROFILES]}
         if method=="server_fleet":
+            self.admin_only()
             hosts=list(self.w.hosts)
             results={};failed={}
             with ThreadPoolExecutor(max_workers=min(6,max(1,len(hosts)))) as pool:
@@ -215,6 +216,7 @@ class Operations:
             report=match_vpn_ports(c.login,tuple(c.ports),b2o,self.admin_credentials,vpn_server=h,override_login=text(a,"override",100,False),country=self.w.hosts[h].country)
             return {**asdict(report),"matched_camera_count":report.matched_camera_count}
         if method=="inactive_fleet":
+            self.admin_only()
             days=number(a,"days",1,3650);hosts=list(self.w.hosts) if a.get("all") is True else [self.host(a)]
             rows=[];errors=[];self.inactive_records={}
             with ThreadPoolExecutor(max_workers=min(8,max(1,len(hosts)))) as pool:
@@ -295,6 +297,7 @@ class Operations:
             labels={"add":"Добавить порты","enable":"Включить VPN","disable":"Отключить VPN","port_enable":"Включить порт","port_disable":"Отключить порт","disconnect":"Разорвать сессию","remove_port":"Удалить порт","recreate_port":"Пересоздать порт","password":"Сменить пароль"}
             return self.stage("vpn",(h,login,act,value),f"{labels[act]}: {h} / {login}"+(f" / {value}" if type(value) is int else ""),self.client_revision(c))
         if method=="inactive":
+            self.admin_only()
             h=self.host(a);days=number(a,"days",1,3650)
             rows=svc.list_lifecycle_clients(h,creds,days,True)
             return [{k:getattr(r,k) for k in ("server","login","last_logged_out","is_enabled","remote_address","lifecycle_state","is_online","lifecycle_source")} for r in rows]

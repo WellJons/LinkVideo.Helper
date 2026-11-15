@@ -33,7 +33,7 @@ class Workspace:
 
     def dispatch(self, method, args, cancel=None, emit=None):
         if method == "status":
-            return {"authenticated": self.session is not None, "version": "4.0.0-alpha.6"}
+            return {"authenticated": self.session is not None, "version": "4.0.0-alpha.7"}
         if method == "login":
             self.ops.close()
             self.session = self.identity = None
@@ -44,7 +44,8 @@ class Workspace:
             user = self.verify(username.strip(), password, [row.host for row in self.registry_type.defaults()])
             self.refresh_hosts()
             self.session = self.credentials(user.username, password, 8728, 4.5)
-            self.identity = {"username": user.username, "role": "employee" if self.employee(user.username) else "sysadmin"}
+            import os
+            self.identity = {"username": user.username, "role": "employee" if self.employee(user.username) else "sysadmin", "writes": os.environ.get("LV4_ENABLE_WRITES")=="1", "destructive": os.environ.get("LV4_ENABLE_WRITES")=="1" and os.environ.get("LV4_ENABLE_DESTRUCTIVE")=="1" and not self.employee(user.username)}
             return dict(self.identity)
         if method not in {"servers", "search", "analyze"} | Operations.METHODS:
             raise Rejected("Неизвестная операция.")
@@ -58,6 +59,7 @@ class Workspace:
             host = args.get("host")
             if not isinstance(host,str) or host not in self.hosts:
                 raise Rejected("Сервер отсутствует в доверенном списке.")
+            if self.identity["role"]!="sysadmin": raise Rejected("Раздел доступен только системному администратору.")
             return asdict(self.service.analyze_server_quick(host, self.session))
         query, mode = args.get("query"), args.get("mode")
         if not isinstance(query,str) or not query.strip() or len(query)>128:

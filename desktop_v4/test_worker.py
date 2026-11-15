@@ -119,6 +119,11 @@ class TestWorkspace(unittest.TestCase):
         self.assertEqual(data[0]["details"],{"port":10001})
         with self.assertRaises(InputError):
             self.w.dispatch("activity",{"host":"trusted.example","login":""})
+    def test_infrastructure_read_access(self):
+        self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
+        for method,args in [("server_fleet",{}),("inactive_fleet",{"all":True,"days":30}),("inactive",{"host":"trusted.example","days":30})]:
+            with self.assertRaises(InputError): self.w.dispatch(method,args)
+        with self.assertRaises(Rejected): self.w.dispatch("analyze",{"host":"trusted.example"})
     def test_separate_admin_auth(self):
         self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
         self.assertEqual(self.w.dispatch("admin_status",{}),{"username":"","b2o":False,"crm":False})

@@ -25,7 +25,7 @@
  const ensureHosts=(root)=>{if(S.hosts?.length)return true;root.append(notice('Загрузите список доступных серверов.'));action(root,live('Загрузить серверы',()=>run(async()=>{S.hosts=await rpc('servers');S.host=S.hosts[0]?.host||''}),'primary'));return false};
  const setHost=f=>{S.host=value(f);return S.host};
  const previewNotice=(root,plan,onConfirm)=>{if(!plan)return;const p=el('div','panel confirmation');p.append(el('p','eyebrow','ПОДТВЕРЖДЕНИЕ'),el('h3','',plan.label),el('p','','Одноразовое разрешение действует 120 секунд. Проверьте параметры до отправки.'));const b=live('Подтвердить',()=>run(async()=>{const token=plan.token;S.plan=null;try{S.outcome=await op('commit',{token});if(onConfirm)onConfirm(S.outcome)}finally{if(identity)render(false)}}),'primary');p.append(add(el('div','actionbar'),b,button('Отменить',()=>{S.plan=null;render(false)})));root.append(p)};
- const stage=(method,args)=>{const from=page;return run(async()=>{S.plan=null;S.outcome=null;S.plan=await op(method,args);S.planPage=from})};
+ const stage=(method,args)=>{const from=page;stopTraffic();return run(async()=>{S.plan=null;S.outcome=null;S.plan=await op(method,args);S.planPage=from})};
  const currentPlan=()=>S.planPage===page?S.plan:null;
  const resultNote=(root)=>{if(S.outcome&&S.planPage===page)root.append(notice('Операция завершена. Проверьте актуальное состояние целевой записи.'))};
  function imagePreview(root,result){if(!result?.src||!/^data:image\/(png|jpeg|webp);base64,/.test(result.src))return;const i=el('img','camera-thumb');i.alt='Кадр камеры';i.src=result.src;root.append(add(el('div','panel camera-preview'),el('h3','','Превью камеры'),i))}
@@ -94,6 +94,7 @@
  }
  function inactive(root){
   root.append(hero('VPN / LIFECYCLE','Неактивные VPN','Жизненный цикл учёток на всех серверах. Частичный ответ не считается полным результатом.'));
+  if(!preview&&identity?.role!=='sysadmin'){root.append(notice('Раздел доступен системному администратору.'));return}
   if(!ensureHosts(root))return;
   const h=serverField(),days=field('Порог неактивности, дней','number',S.inactiveDays||30),scope=field('Область проверки','select',S.inactiveScope||'all',[['all','Все доверенные серверы'],['one','Выбранный сервер']]),unknown=field('Неизвестное состояние','select',S.inactiveUnknown||'yes',[['yes','Показать'],['no','Скрыть']]);form(root,scope,h,days,unknown);
   action(root,live('Проверить',()=>run(async()=>{S.inactiveDays=num(days);S.inactiveScope=value(scope);S.inactiveUnknown=value(unknown);S.inactiveSelected=[];S.inactive=null;S.inactiveBatch=null;S.plan=null;S.inactive=await op('inactive_fleet',{host:setHost(h),all:S.inactiveScope==='all',days:S.inactiveDays,unknown:S.inactiveUnknown==='yes'})}),'primary'));
@@ -243,8 +244,8 @@
  }
  function dashboard(root){
   section(root,'Рабочие инструменты');const g=el('div','dashboard-grid');
-  for(const [id,desc] of [['create','Создание учёток и NAT'],['inactive','Жизненный цикл VPN'],['lv','Скрипты и автоматизация'],['recovery','FULL backup · восстановление'],['activity','События инфраструктуры'],['billing','Тарифы и услуги'],['archives','Поиск и экспорт MP4'],['diagnostics','Разрывы и сравнение'],['camera','B2O и сетевые проверки'],['agent','Настройки камеры'],['templates','Библиотека ответов'],['admin','Независимые сессии']]){
-   const p=pages.find(x=>x[0]===id),b=btn('','dash-tile',()=>go(id));b.append(navIcon(id,p[1]),add(el('div'),el('strong','',p[2]),el('small','',desc)),el('span','dash-arrow','›'));g.append(b)
+  for(const [id,desc] of [['create','Создание учёток и NAT'],['inactive','Жизненный цикл VPN'],['lv','Скрипты и автоматизация'],['recovery','FULL backup · восстановление'],['billing','Тарифы и услуги'],['archives','Поиск и экспорт MP4'],['diagnostics','Разрывы и сравнение'],['camera','B2O и сетевые проверки'],['agent','Настройки камеры'],['templates','Библиотека ответов'],['admin','Независимые сессии']]){
+   const p=pages.find(x=>x[0]===id);if(!p||!pageAllowed(id))continue;const b=btn('','dash-tile',()=>go(id));b.append(navIcon(id,p[1]),add(el('div'),el('strong','',p[2]),el('small','',desc)),el('span','dash-arrow','›'));g.append(b)
   }
   root.append(g);
  }
@@ -270,9 +271,9 @@
   }
   if(S.registryTest)keyValue(root,[['Сервер отвечает',S.registryTest.server],['CPU',S.registryTest.cpu_load],['RAM',S.registryTest.memory_usage_percent],['VPN онлайн',S.registryTest.clients_online]]);
   section(root,'Фоновая служба Windows 3.x');
-  action(root,live('Проверить существующее задание',()=>run(async()=>{S.background=await op('background_status')})));
+  action(root,live('Проверить существующее задание',()=>run(async()=>{S.background=await op('background_status')})));action(root,live('Открыть планировщик Windows',()=>run(()=>rpc('taskScheduler'))));
   if(S.background){const b=S.background;keyValue(root,[['Задание',b.verified?'Обнаружено':b.installed?'Есть квитанция 3.x, не проверено':'Не подтверждено'],['Период, ч',b.interval_hours],['Статус',b.status],['Последняя проверка UTC',b.checked_utc],['Успешно',b.successful],['Ошибок',b.failed]])}
-  root.append(notice('Google Sheets — ручной аварийный резерв, PostgreSQL — основная база. 4.0 не создаёт и не удаляет системную задачу 3.x.'))
+  root.append(notice('Google Sheets — ручной аварийный резерв, PostgreSQL — основная база. Задание LinkVideo.Helper.VPNSheetsMirror можно проверить в планировщике. 4.0 не создаёт, не переустанавливает и не удаляет SYSTEM-задачу 3.x.'))
  }
  window.lvModules=Object.freeze({reset,client,stopTraffic,cloudRestore:c=>stage("cloud_restore_preview",{host:c.server,login:c.login}),dashboard,settings:workspaceSettings,clearClient:()=>{stopTraffic();S.clientHistory=null;S.camPorts=null;S.client=null;S.plan=null;S.outcome=null},renderClient,render:(name,root)=>{({create,inactive,lv,recovery,admin,billing,archives:r=>archive(r,false),diagnostics:r=>archive(r,true),agent,camera,templates})[name]?.(root)}});
 })();
