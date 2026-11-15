@@ -93,6 +93,16 @@ class TestWorkspace(unittest.TestCase):
             ops.agent.get_image_enhance=lambda c:{"ImageRotation":2}
             with self.assertRaises(InputError):self.w.dispatch("commit",{"token":plan["token"]})
         self.assertEqual(calls,[])
+    def test_create_exact_login_and_per_server_ip(self):
+        self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
+        self.w.search.search_exact_login=lambda *a:NS(matches=[],checked=1,total=1,errors=[])
+        result=self.w.dispatch("create_check",{"host":"trusted.example","login":"client"})
+        self.assertEqual(result["status"],"free")
+        self.w.search.search_exact_login=lambda *a:NS(matches=[],checked=1,total=1,errors=[NS(server="trusted.example")])
+        self.assertEqual(self.w.dispatch("create_check",{"host":"trusted.example","login":"client"})["status"],"unknown")
+        self.w.dispatch("create_ip",{"host":"trusted.example","start_ip":"172.18.0.1"})
+        self.assertEqual(self.w.dispatch("create_ip",{"host":"trusted.example"})["start_ip"],"172.18.0.1")
+        with self.assertRaises(InputError):self.w.dispatch("create_ip",{"host":"other.example"})
     def test_client_refresh_is_targeted_and_secret_free(self):
         self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
         calls=[]

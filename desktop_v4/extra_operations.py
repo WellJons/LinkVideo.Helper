@@ -10,7 +10,7 @@ import re
 import subprocess
 import shutil
 
-METHODS=frozenset(("copy_vpn","backup","delete_preview","backup_status","backup_inventory","backup_verify","cloud_deleted_search","sheets_load","deleted_search","restore_preview","sheets_preview","cloud_connect","cloud_status","cloud_disconnect","cloud_restore_preview","activity","camera_inspect","camera_live","agent_image","b2o_read","b2o_create_preview","billing_recipient","billing_transfer_preview","templates_import","templates_attach","templates_reply","templates_images","templates_detach","winbox","registry_list","registry_update"))
+METHODS=frozenset(("copy_vpn","copy_vpn_batch","backup","delete_preview","backup_status","backup_inventory","backup_verify","cloud_deleted_search","sheets_load","deleted_search","restore_preview","sheets_preview","cloud_connect","cloud_status","cloud_disconnect","cloud_restore_preview","activity","camera_inspect","camera_live","agent_image","b2o_read","b2o_create_preview","billing_recipient","billing_transfer_preview","templates_import","templates_attach","templates_reply","templates_images","templates_detach","winbox","registry_list","registry_update"))
 class Extended:
     def __init__(self,ops):
         self.o=ops;self.cloud=None;self.sheets=None;self.deleted={};self.cloud_deleted={};self.recipients={};self.camera_report=None
@@ -203,6 +203,20 @@ class Extended:
                 else: raise InputError("Недопустимое изменение реестра.")
                 registry.settings.sync();o.w.refresh_hosts()
             return [{"host":r.host,"country":r.country,"builtin":r.builtin,"enabled":r.enabled,"trusted":r.builtin or r.host in o.w.trusted_custom} for r in registry.all()]
+        if m=="copy_vpn_batch":
+            targets=a.get("targets")
+            if not isinstance(targets,list) or not 1<=len(targets)<=20:raise InputError("Выберите созданные учётки.")
+            keys=[]
+            for target in targets:
+                if not isinstance(target,dict):raise InputError("Некорректная учётка.")
+                key=(o.host(target),text(target,"login"))
+                if key not in o.created_batch or key in keys:raise InputError("Учётка не относится к последнему созданному набору.")
+                keys.append(key)
+            result=[]
+            for h,login in keys:
+                if cancel.is_set():raise InputError("Копирование отменено.")
+                result.append(o.get_client(h,login).copy_text())
+            return "\n\n".join(result)
         if m=="copy_vpn":
             c=o.get_client(o.host(a),text(a,"login"))
             return c.copy_text() # Main process writes clipboard; never returned by generic RPC.

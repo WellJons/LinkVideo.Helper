@@ -52,7 +52,7 @@ handle('helper:status',()=>bridge.request('status'));
 handle('helper:search',a=>{const query=clean(a?.query,128);if(!query?.trim()||!['login','port'].includes(a?.mode))throw Error('Некорректный запрос.');return bridge.request('search',{query:query.trim(),mode:a.mode})});
 handle('helper:servers',()=>bridge.request('servers'));
 handle('helper:analyze',a=>{const host=clean(a?.host,253);if(!host)throw Error('Выберите сервер.');return bridge.request('analyze',{host})});
-const operations=new Set(['client_detail','client_refresh','traffic_sample','camera_ports','camera_lookup','inactive_fleet','inactive_batch_preview','server_fleet','create_preview','vpn_preview','commit','inactive','lv_status','lv_preview','lv_fleet','lv_batch_preview','create_suggest','admin_logout','admin_status','admin_retry','billing_refresh','billing_filter','billing_search','billing_select','billing_catalog','billing_history','billing_preview','billing_bulk_preview','billing_camera_image','create_auto','archive_discover','archive_settings','archive_settings_update','archive_diagnose','agent_search','agent_settings','agent_preview','templates_list','templates_save','templates_favorite','templates_delete','background_status','backup','delete_preview','backup_status','backup_inventory','backup_verify','cloud_deleted_search','deleted_search','restore_preview','sheets_preview','cloud_status','cloud_restore_preview','activity','camera_inspect','camera_live','agent_image','b2o_read','b2o_create_preview','billing_recipient','billing_transfer_preview','templates_images','templates_detach','winbox','registry_list','registry_update','background_status']);
+const operations=new Set(['client_detail','client_refresh','traffic_sample','camera_ports','camera_lookup','inactive_fleet','inactive_batch_preview','server_fleet','create_preview','vpn_preview','commit','inactive','lv_status','lv_preview','lv_fleet','lv_batch_preview','create_suggest','create_ip','create_check','admin_logout','admin_status','admin_retry','billing_refresh','billing_filter','billing_search','billing_select','billing_catalog','billing_history','billing_preview','billing_bulk_preview','billing_camera_image','create_auto','archive_discover','archive_settings','archive_settings_update','archive_diagnose','agent_search','agent_settings','agent_preview','templates_list','templates_save','templates_favorite','templates_delete','background_status','backup','delete_preview','backup_status','backup_inventory','backup_verify','cloud_deleted_search','deleted_search','restore_preview','sheets_preview','cloud_status','cloud_restore_preview','activity','camera_inspect','camera_live','agent_image','b2o_read','b2o_create_preview','billing_recipient','billing_transfer_preview','templates_images','templates_detach','winbox','registry_list','registry_update','background_status']);
 handle('helper:operation',async a=>{
  if(!a||!operations.has(a.method)||!a.args||typeof a.args!=='object'||Array.isArray(a.args)||JSON.stringify(a.args).length>65000)throw Error('Недопустимая операция.');
  if(a.method==='commit'){
@@ -140,6 +140,22 @@ handle('helper:template-copy',async a=>{
  const html='<html><body><div style="white-space:pre-wrap">'+escaped+'</div>'+decoded.map(([src])=>'<p><img src="'+src+'" style="max-width:100%;height:auto"></p>').join('')+'</body></html>';
  clipboard.write({text,html,image:decoded[0][1]});
  return {count:decoded.length,skipped:(reply.skipped||0)+images.length-decoded.length};
+});
+handle('helper:copy-vpn-batch',async a=>{
+ if(!Array.isArray(a?.targets)||a.targets.length<1||a.targets.length>20)throw Error('Нет созданных учёток.');
+ const targets=a.targets.map(x=>({host:clean(x?.host,253),login:clean(x?.login,128)}));
+ if(targets.some(x=>!x.host||!x.login))throw Error('Некорректные учётки.');
+ const answer=await dialog.showMessageBox(win,{type:'warning',message:'Скопировать конфигурации '+targets.length+' VPN вместе с паролями?',detail:'Буфер обмена может быть доступен другим приложениям.',buttons:['Отмена','Копировать'],defaultId:0,cancelId:0});
+ if(answer.response!==1)throw Error('Копирование отменено.');
+ const value=await bridge.request('copy_vpn_batch',{targets});clipboard.writeText(value);return {count:targets.length};
+});
+handle('helper:template-paste',async a=>{
+ if(!Number.isSafeInteger(a?.id)||a.id<1)throw Error('Сначала сохраните шаблон.');
+ const pic=clipboard.readImage();if(pic.isEmpty())throw Error('В буфере обмена нет изображения.');
+ const size=pic.getSize();if(size.width>12000||size.height>12000)throw Error('Слишком большое изображение.');
+ const scaled=Math.max(size.width,size.height)>2500?pic.resize(size.width>=size.height?{width:2500}:{height:2500}):pic;
+ const png=scaled.toPNG();if(png.length>20*1024*1024)throw Error('Изображение слишком велико.');
+ const dir=await fsp.mkdtemp(path.join(app.getPath('temp'),'lv4-template-'));try{const file=path.join(dir,'clipboard.png');await fsp.writeFile(file,png,{mode:0o600});return await bridge.request('templates_attach',{id:a.id,path:file})}finally{await fsp.rm(dir,{recursive:true,force:true}).catch(()=>{})}
 });
 handle('helper:copy-vpn',async a=>{
  const host=clean(a?.host,253),login=clean(a?.login,128);

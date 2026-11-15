@@ -35,7 +35,7 @@ def public_client(c):
 
 class MemorySettings:
     """Only explicit non-secret archive preferences persist in the 4.0 profile."""
-    PREFIXES=("archive/extra_cluster_enabled/","archive/custom_servers/")
+    PREFIXES=("archive/extra_cluster_enabled/","archive/custom_servers/","vpn_create/start_ip/")
     def __init__(self,workspace=None): self.data={};self.workspace=workspace
     def disk(self,key):
         registry=getattr(self.workspace,"registry",None)
@@ -60,7 +60,7 @@ class MemorySettings:
     def sync(self): pass
 
 class Operations:
-    METHODS=frozenset(("client_detail","client_refresh","traffic_sample","camera_ports","inactive_fleet","inactive_batch_preview","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","lv_fleet","lv_batch_preview","create_suggest","camera_lookup","admin_login","admin_logout","admin_status","admin_retry","billing_refresh","billing_filter","billing_search","billing_select","billing_catalog","billing_history","billing_preview","billing_bulk_preview","billing_camera_image","create_auto","archive_discover","archive_diagnose","archive_download","archive_settings","archive_settings_update","agent_search","agent_settings","agent_preview","templates_list","templates_migrate","server_fleet","templates_save","templates_favorite","templates_delete","background_status")) | EXTRA_METHODS
+    METHODS=frozenset(("client_detail","client_refresh","traffic_sample","camera_ports","inactive_fleet","inactive_batch_preview","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","lv_fleet","lv_batch_preview","create_suggest","create_ip","create_check","camera_lookup","admin_login","admin_logout","admin_status","admin_retry","billing_refresh","billing_filter","billing_search","billing_select","billing_catalog","billing_history","billing_preview","billing_bulk_preview","billing_camera_image","create_auto","archive_discover","archive_diagnose","archive_download","archive_settings","archive_settings_update","agent_search","agent_settings","agent_preview","templates_list","templates_migrate","server_fleet","templates_save","templates_favorite","templates_delete","background_status")) | EXTRA_METHODS
     def __init__(self,workspace):
         self.w=workspace
         self.settings=MemorySettings(workspace)
@@ -74,6 +74,7 @@ class Operations:
         self.camera=None
         self.agent=None
         self.agent_values={}
+        self.created_batch=set()
         self.templates=None
         self.plan=None
         self.admin_name=""
@@ -348,6 +349,24 @@ class Operations:
             if not hosts: raise InputError("Нет активных VPN-серверов выбранного региона.")
             emit("Сравниваю нагрузку VPN-серверов")
             return {"host":svc.pick_best_server_parallel(hosts,creds,cancel_event=cancel)}
+        if method=="create_ip":
+            from linkvideo_vpn_helper.services.vpn_address_allocator import DEFAULT_START_IP,validate_start_ip
+            h=self.host(a);key="vpn_create/start_ip/"+h.lower()
+            if a.get("start_ip") is not None:
+                try:value=validate_start_ip(text(a,"start_ip",32))
+                except ValueError as ex:raise InputError(str(ex))
+                self.settings.setValue(key,value)
+            else:
+                try:value=validate_start_ip(self.settings.value(key,DEFAULT_START_IP,str))
+                except ValueError:value=DEFAULT_START_IP
+            return {"host":h,"start_ip":value}
+        if method=="create_check":
+            h=self.host(a);login=text(a,"login",64)
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+",login):raise InputError("Недопустимый VPN-логин.")
+            report=self.w.search.search_exact_login(h,creds,login)
+            if cancel.is_set():raise InputError("Операция отменена.")
+            if report.errors or report.checked!=report.total or not report.total:return {"host":h,"login":login,"status":"unknown"}
+            return {"host":h,"login":login,"status":"occupied" if report.matches else "free","suggestion":svc.suggest_next_login(h,creds,login) if report.matches else login}
         if method=="create_suggest":
             h=self.host(a);login=text(a,"login",64)
             if not re.fullmatch(r"[A-Za-z0-9_.-]+",login): raise InputError("Недопустимый VPN-логин.")
@@ -361,6 +380,7 @@ class Operations:
             from linkvideo_vpn_helper.services.vpn_address_allocator import DEFAULT_START_IP, validate_start_ip
             try: start_ip=validate_start_ip(text(a,"start_ip",32,False) or DEFAULT_START_IP)
             except ValueError as ex: raise InputError(str(ex))
+            self.settings.setValue("vpn_create/start_ip/"+h.lower(),start_ip)
             return self.stage("create",(h,login,ports,count,start_ip),f"Создать {count} VPN-учёток, по {ports} портов: {h} / {login}. Начальный IP: {start_ip}.")
         if method=="vpn_preview":
             h=self.host(a);login=text(a,"login");act=text(a,"action",32)
@@ -721,7 +741,9 @@ class Operations:
             return {"items":results}
         if kind=="create":
             h,login,ports,count,start_ip=p
+            self.created_batch=set()
             rows=svc.create_clients_batch(h,creds,login,ports,count,progress_callback=lambda done,total,name:emit("Создание VPN "+str(name),round(done*100/max(total,1))),cancel_event=cancel,start_ip=start_ip)
+            self.created_batch={(c.server,c.login) for c in rows}
             return {"clients":[public_client(c) for c in rows]}
         if kind=="vpn":
             h,login,act,value=p

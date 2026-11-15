@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld('helper',Object.freeze({
  analyze:host=>ipcRenderer.invoke('helper:analyze',{host}),
  operation:(method,args)=>ipcRenderer.invoke('helper:operation',{method,args}),
  copyVpn:(host,login)=>ipcRenderer.invoke('helper:copy-vpn',{host,login}),
+ copyVpnBatch:targets=>ipcRenderer.invoke('helper:copy-vpn-batch',{targets}),
+ templatePaste:id=>ipcRenderer.invoke('helper:template-paste',{id}),
  fileAction:(method,args={})=>ipcRenderer.invoke('helper:file-action',{method,...args}),
  archiveDownload:(mode,manual='',token='',filename='')=>ipcRenderer.invoke('helper:archive-download',{mode,manual,token,filename}),
  archiveLocation:()=>ipcRenderer.invoke('helper:archive-location'),
