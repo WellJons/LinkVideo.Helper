@@ -2,13 +2,13 @@ import unittest
 from decimal import Decimal
 from types import SimpleNamespace as NS
 from unittest.mock import patch
-from desktop_v4.test_worker import TestWorkspace
+from desktop_v4 import test_worker
 from desktop_v4.operations import InputError
 from linkvideo_vpn_helper.services.billing_catalog import TariffCatalogEntry,BillingCountry,AllTariffsSnapshot
 
 class BillingParityTests(unittest.TestCase):
     def setUp(self):
-        fixture=TestWorkspace();fixture.setUp();self.w=fixture.w
+        fixture=test_worker.TestWorkspace();fixture.setUp();self.w=fixture.w
         self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
         self.ops=self.w.ops
     def test_catalog_filters_match_release(self):

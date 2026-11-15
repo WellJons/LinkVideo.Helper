@@ -18,7 +18,7 @@
  const value=(f)=>f.input.value.trim();
  const num=f=>Number(f.input.value);
  const error=err=>toast(err?.message||'Операция не выполнена.');
- const run=async(fn)=>{const owner=identity;try{const result=await fn();if(identity===owner&&owner)render(false);return result}catch(err){if(identity===owner)error(err)}};
+ const run=async(fn)=>{const owner=identity;try{return await fn()}catch(err){if(identity===owner)error(err)}finally{if(identity===owner&&owner)render(false)}};
  const keyValue=(root,entries)=>{const d=el('div','kv-grid');for(const [k,v] of entries)d.append(add(el('div','kv'),el('small','',k),el('strong','',v==null||v===''?'—':Array.isArray(v)?v.join(', '):String(v))));root.append(d)};
  const status=v=>el('span',v?'online':'offline',v?'В сети':'Не в сети');
  const serverField=(title='VPN-сервер')=>field(title,'select',S.host||'',(S.hosts||[]).map(r=>[r.host,r.host+' · '+r.country]));
@@ -129,18 +129,18 @@
  function clearB2OView(){S.archive=null;S.archiveSaved=null;S.cameraInfo=null;S.cameraChoices=null;S.cameraLive=null;S.cameraImage=null;S.billingImage=null;S.agentImage=null;S.camPorts=null;S.plan=null;S.outcome=null}
  function sessionStrip(root,kind){
   const connected=!!S.admin?.[kind];const panel=el('div','panel session-strip');
-  panel.append(add(el('div'),el('p','eyebrow','РАБОЧАЯ УЧЁТНАЯ ЗАПИСЬ'),el('h3','',kind==='crm'?'CRM / Биллинг':'B2O / Видео'),el('p','muted',connected?'Сессия подключена · '+S.admin.username:'Подключение не подтверждено.')));
+  panel.append(add(el('div'),el('p','eyebrow','РАБОЧАЯ УЧЁТНАЯ ЗАПИСЬ'),el('h3','',kind==='crm'?'CRM / Биллинг':'B2O / Видео'),el('p','muted',connected?'Последний вход подтверждён · '+S.admin.username:'Подключение не подтверждено.')));
   const bar=el('div','actionbar');bar.append(live('Проверить сессию',()=>run(async()=>{S.admin=await op('admin_status')})),live('Повторить вход',()=>run(async()=>{if(kind==='crm')clearBillingView();else clearB2OView();S.admin=await op('admin_retry',{target:kind});for(const e of S.admin.errors||[])toast(e)})),button('Админка',()=>go('admin')));
   panel.append(bar);root.append(panel);
  }
  function admin(root){
   root.append(hero('HELPER / WORK ACCOUNTS','CRM / B2O','Две независимые корпоративные сессии. Данные MikroTik автоматически не используются.'));
   const u=field('Логин админки','text',S.admin?.username||''),p=field('Пароль','password'),t=field('Подключение','select','both',[['both','CRM и B2O'],['crm','Только CRM'],['b2o','Только B2O']]);
-  const remember=field('Запомнить вход (Windows)','select','no',[['no','Нет'],['yes','Да']]);form(root,u,p,t,remember);action(root,live('Подключить',()=>{const password=p.input.value;p.input.value='';run(async()=>{clearBillingView();clearB2OView();S.admin=await rpc('adminLogin',value(u),password,value(t),value(remember)==='yes')})},'primary'));
-  action(root,live('Вход из хранилища',()=>run(async()=>{clearBillingView();clearB2OView();S.admin=await rpc('adminSaved')})));
+  const remember=field('Запомнить вход (Windows)','select','no',[['no','Нет'],['yes','Да']]);form(root,u,p,t,remember);action(root,live('Подключить',()=>{const password=p.input.value;p.input.value='';run(async()=>{clearBillingView();clearB2OView();S.admin=null;S.admin=await rpc('adminLogin',value(u),password,value(t),value(remember)==='yes')})},'primary'));
+  action(root,live('Вход из хранилища',()=>run(async()=>{clearBillingView();clearB2OView();S.admin=null;S.admin=await rpc('adminSaved')})));
   action(root,live('Очистить сохранённый вход',()=>run(()=>rpc('clearSaved','admin'))));
   action(root,live('Проверить сессии',()=>run(async()=>{S.admin=await op('admin_status')})));
-  action(root,live('Выйти из админки',()=>run(async()=>{S.admin=await op('admin_logout');clearBillingView();clearB2OView()})));
+  action(root,live('Выйти из админки (без удаления сохранённых данных)',()=>run(async()=>{S.admin=await op('admin_logout');clearBillingView();clearB2OView()})));
   for(const k of ['crm','b2o'])action(root,live('Повторить '+k.toUpperCase(),()=>run(async()=>{if(k==='crm')clearBillingView();else clearB2OView();S.admin=await op('admin_retry',{target:k})}))); 
   if(S.admin){keyValue(root,[['Аккаунт',S.admin.username],['CRM',S.admin.crm?'Подключено':'Не подключено'],['B2O',S.admin.b2o?'Подключено':'Не подключено']]);for(const e of S.admin.errors||[])root.append(notice(e))}
  }
