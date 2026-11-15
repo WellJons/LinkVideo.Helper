@@ -38,7 +38,7 @@
   previewNotice(root,currentPlan());resultNote(root);
   if(S.planPage==='create'&&S.outcome?.clients)root.append(table(['Логин','Сервер','VPN IP','Порты',''],S.outcome.clients.map(c=>[c.login,c.server,c.remote_address,c.ports.join(', '),live('Копировать VPN',()=>rpc('copyVpn',c.server,c.login).then(()=>toast('Скопировано')).catch(error))])));
  }
- async function client(host,login){stopTraffic();S.camPorts=null;S.cameraLogin='';S.client=null;S.plan=null;S.outcome=null;await run(async()=>{S.client=await op('client_detail',{host,login})})}
+ async function client(host,login){stopTraffic();S.clientHistory=null;S.camPorts=null;S.cameraLogin='';S.client=null;S.plan=null;S.outcome=null;await run(async()=>{S.client=await op('client_detail',{host,login})})}
  let traffic=null;
  function stopTraffic(){if(traffic){traffic.stopped=true;clearTimeout(traffic.timer);traffic=null}}
  function trafficPanel(root,c){
@@ -77,7 +77,7 @@
   x.timer=setTimeout(poll,10);
  }
  function renderClient(root){
-  const c=S.client;if(!c){if(currentPlan())previewNotice(root,currentPlan());resultNote(root);return;}
+  const c=S.client;if(!c){if(currentPlan())previewNotice(root,currentPlan(),out=>{if(out?.restored&&out.client){S.client=out.client;S.camPorts=null;S.clientHistory=null;searchState=null}});resultNote(root);return;}
   section(root,'Карточка VPN · '+c.login);
   const panel=el('div','panel');keyValue(panel,[['Сервер',c.server],['VPN IP',c.remote_address],['IP источника',c.tunnel_source_ip],['Статус',c.is_online?'В сети':'Не в сети'],['Учётка',c.is_enabled?'Включена':'Отключена'],['Uptime',c.uptime],['RX, байт',c.rx_bytes],['TX, байт',c.tx_bytes]]);
   panel.append(table(['Порт','Статус','Байты NAT','Пакеты NAT','Конфликты'],c.ports.map(p=>[p,c.disabled_ports.includes(p)?'Выключен':c.active_ports.includes(p)?'Активен':'Настроен',c.port_nat_bytes?.[p]??'—',c.port_nat_packets?.[p]??'—',c.conflicts_verified===false?'Не проверено':c.port_conflicts?.[p]||'—'])));
@@ -90,7 +90,7 @@
   const a=field('Действие','select','add',[['add','Добавить порты'],['disconnect','Разорвать сессию'],...(identity?.role==='sysadmin'?[['enable','Включить VPN'],['disable','Отключить VPN'],['port_enable','Включить порт'],['port_disable','Отключить порт'],['remove_port','Удалить порт'],['recreate_port','Пересоздать порт'],['password','Сменить пароль']]:[])]),p=field('Порт / количество','number',1),pw=field('Новый пароль','password');
   form(root,a,p,pw);action(root,live('Подготовить действие',()=>{const args={host:c.server,login:c.login,action:value(a),count:num(p),port:num(p),password:pw.input.value};pw.input.value='';stage('vpn_preview',args)},'primary'));action(root,live('Обновить карточку',()=>client(c.server,c.login)));
   if(identity?.role==='sysadmin'){const d=field('Для удаления: точный server/login','text');form(root,d);action(root,live('Подготовить удаление',()=>stage('delete_preview',{host:c.server,login:c.login,confirm:value(d)})))}
-  previewNotice(root,currentPlan(),out=>{if(out?.login)S.client=out;else if(out?.deleted){S.client=null;searchState=null}});resultNote(root);
+  previewNotice(root,currentPlan(),out=>{if(out?.deleted){stopTraffic();S.client=null;searchState=null}else if(out?.login){S.client=out;S.camPorts=null;S.clientHistory=null}});resultNote(root);clientHistory(root,c);
  }
  function inactive(root){
   root.append(hero('VPN / LIFECYCLE','Неактивные VPN','Жизненный цикл учёток на всех серверах. Частичный ответ не считается полным результатом.'));
@@ -208,15 +208,24 @@
   if(S.deleted)root.append(table(['Логин','Сервер','VPN IP','Удалён','Порты',''],S.deleted.map(r=>[r.login,r.server,r.remote_address,r.deleted_at,r.ports,live('Восстановить',()=>stage('restore_preview',{host:r.server,login:r.login}))])));
   previewNotice(root,currentPlan(),out=>{if(out?.sheets_results)S.sheetsResult=out});if(S.sheetsResult){section(root,'Результаты аварийного экспорта');root.append(table(['Сервер','Подтверждение','Клиентов','Изменено'],S.sheetsResult.sheets_results.map(x=>[x.server,x.success?'Подтверждено':'Не подтверждено',x.clients,x.changed])));if(S.sheetsResult.cancelled)root.append(notice('Экспорт остановлен; уже подтверждённые записи не отменяются.'))}resultNote(root);
  }
- function activity(root){
-  root.append(hero('VPN / ACTIVITY','VPNSync','Отдельное подключение к VPNSync для архива PostgreSQL и аудита действий.'));
-  const host=field('DNS или IPv4','text',S.cloudHost||''),port=field('Порт','number',S.cloudPort||443),u=field('Логин облака','text'),pw=field('Пароль облака','password'),scheme=field('Протокол','select','https',[['https','HTTPS'],['http','HTTP в доверенной сети']]);form(root,host,port,u,pw,scheme);
-  action(root,live('Подключить',()=>{const password=pw.input.value;pw.input.value='';if(value(scheme)==='http'&&!confirm('HTTP не защищает пароль при передаче. Продолжить только в доверенной сети?'))return;run(async()=>{S.cloudHost=value(host);S.cloudPort=num(port);S.cloud=await op('cloud_connect',{host:S.cloudHost,port:S.cloudPort,username:value(u),password,tls:value(scheme)==='https',allow_http:value(scheme)==='http'})})},'primary'));
-  if(S.cloud?.connected)root.append(notice('Подключение подтверждено.'));
-  if(!preview&&identity?.role!=='sysadmin')return;
-  const login=field('Фильтр логина','text',S.activityLogin||''),source=field('Источник','text',S.activitySource||'');form(root,login,source);
-  action(root,live('Обновить историю',()=>run(async()=>{S.activityLogin=value(login);S.activitySource=value(source);S.historyVpn=await op('activity',{login:S.activityLogin,source:S.activitySource})}),'primary'));
-  if(S.historyVpn){const actions={'client.create':'Создан VPN','nat.add_ports':'Добавлены порты','nat.remove_port':'Удалён порт','nat.recreate':'Пересоздан порт','client.password_change':'Пароль изменён','client.enabled_change':'Состояние VPN','nat.enabled_change':'Состояние NAT','client.disconnect':'Разрыв сессии','client.delete':'Удалён VPN','archive.restore':'Восстановление VPN','retention.sleep':'Спящий статус','retention.quarantine':'Карантин','retention.delete':'Автоматическое удаление','retention.error':'Ошибка автоматики'};const labels={count:'Количество',port:'Порт',enabled:'Включено',ports_per_client:'Портов на учётку',accounts_count:'Учёток',clients:'Клиентов',active:'Активных',added:'Добавлено',changed:'Изменено',deleted:'Удалено',restored_objects:'Восстановлено',session_removed:'Сессия удалена',active_sessions:'Сессий'};root.append(table(['Время','Событие','Сервер','Логин','Источник','Оператор','Подробности','Результат'],S.historyVpn.map(r=>[r.created_at||r.timestamp,actions[r.action]||r.action,r.server,r.login,r.source,r.actor||r.username,Object.entries(r.details||{}).map(([k,v])=>(labels[k]||k)+': '+(typeof v==='boolean'?(v?'Да':'Нет'):v)).join(' · '),r.success])))}
+ function cloudSettings(root){
+  section(root,'Облачный сервер · VPNSync');
+  const card=el('div','panel');card.append(el('p','muted','Отдельная учётная запись API для PostgreSQL, архива и аудита. Поиск активных VPN по-прежнему обращается непосредственно к MikroTik.'));root.append(card);
+  const c=S.cloud?.connected?S.cloud:S.cloudProfile||{},host=field('DNS или IPv4','text',c.host||''),port=field('Порт','number',c.port||443),u=field('Логин VPNSync','text',c.username||''),pw=field('Пароль VPNSync','password'),scheme=field('Протокол','select',c.tls===false?'http':'https',[['https','HTTPS'],['http','HTTP в доверенной сети']]),remember=field('Запомнить','select',c.remembered?'yes':'no',[['no','Только этот сеанс'],['yes','Шифрование Windows']]);form(root,host,port,u,pw,scheme,remember);
+  action(root,live('Подключить и проверить',()=>{const password=pw.input.value;pw.input.value='';run(async()=>{S.cloud=await rpc('cloudLogin',{host:value(host),port:num(port),username:value(u),password,tls:value(scheme)==='https',remember:value(remember)==='yes'});S.cloudProfile=null})},'primary'));
+  action(root,live('Показать сохранённое подключение',()=>run(async()=>{S.cloudProfile=await rpc('cloudProfile');if(!S.cloudProfile)toast('Нет сохранённого подключения')})));
+  action(root,live('Подключить сохранённое',()=>run(async()=>{S.cloud=await rpc('cloudSaved')})));
+  action(root,live('Отключить и забыть',()=>run(async()=>{S.cloud=await rpc('cloudDisconnect');S.cloudProfile=null;S.clientHistory=null})));
+  if(S.cloud?.connected)root.append(notice('VPNSync подключён · '+S.cloud.host+':'+S.cloud.port));
+ }
+ function clientHistory(root,c){
+  if(identity?.role!=='sysadmin')return;
+  section(root,'История VPN · '+c.login);
+  const source=field('Источник','select',S.clientHistorySource||'',[['','Все'],['desktop','Helper'],['routeros','MikroTik'],['archive','Восстановление'],['retention','Автоматика']]);form(root,source);
+  action(root,live('Загрузить историю клиента',()=>run(async()=>{S.clientHistorySource=value(source);S.clientHistory=await op('activity',{host:c.server,login:c.login,source:S.clientHistorySource})}),'primary'));
+  if(S.clientHistory){const actions={'client.create':'Создан VPN','nat.add_ports':'Добавлены порты','nat.remove_port':'Удалён порт','nat.recreate':'Пересоздан порт','client.password_change':'Пароль изменён','client.enabled_change':'Состояние VPN','nat.enabled_change':'Состояние NAT','client.disconnect':'Разрыв сессии','client.delete':'Удалён VPN','archive.restore':'Восстановление VPN','retention.sleep':'Спящий статус','retention.quarantine':'Карантин','retention.delete':'Автоматическое удаление','retention.error':'Ошибка автоматики'};const labels={count:'Количество',port:'Порт',enabled:'Включено',ports_per_client:'Портов на учётку',accounts_count:'Учёток',clients:'Клиентов',active:'Активных',added:'Добавлено',changed:'Изменено',deleted:'Удалено',restored_objects:'Восстановлено',session_removed:'Сессия удалена',active_sessions:'Сессий'};
+   root.append(table(['Время','Событие','Источник','Оператор','Подробности','Результат'],S.clientHistory.map(r=>[r.created_at||r.timestamp,actions[r.action]||r.action,r.source,r.actor||r.username,Object.entries(r.details||{}).map(([k,v])=>(labels[k]||k)+': '+(typeof v==='boolean'?(v?'Да':'Нет'):v)).join(' · '),r.success])));
+  }
  }
  function camera(root){
   root.append(hero('B2O / CAMERAS','Камеры и клиенты B2O','Проверка RTSP/TCP, сведения об устройстве, чтение и создание корпоративной учётки.'));
@@ -241,7 +250,7 @@
  }
  function workspaceSettings(root){
   if(preview){root.append(notice('Настройки корпоративных серверов доступны после входа.'));return}
-  section(root,'Защищённые учётные данные');action(root,live('Очистить сохранённый вход',()=>run(()=>rpc('clearSaved','work'))));
+  section(root,'Защищённые учётные данные');action(root,live('Очистить сохранённый вход',()=>run(()=>rpc('clearSaved','work'))));cloudSettings(root);
   section(root,'Архив · кластеры и серверы');
   action(root,live('Настройки архива',()=>run(async()=>{S.archiveSettings=await op('archive_settings')}),'primary'));
   if(S.archiveSettings){
@@ -265,5 +274,5 @@
   if(S.background){const b=S.background;keyValue(root,[['Задание',b.verified?'Обнаружено':b.installed?'Есть квитанция 3.x, не проверено':'Не подтверждено'],['Период, ч',b.interval_hours],['Статус',b.status],['Последняя проверка UTC',b.checked_utc],['Успешно',b.successful],['Ошибок',b.failed]])}
   root.append(notice('Google Sheets — ручной аварийный резерв, PostgreSQL — основная база. 4.0 не создаёт и не удаляет системную задачу 3.x.'))
  }
- window.lvModules=Object.freeze({reset,client,stopTraffic,cloudRestore:c=>stage("cloud_restore_preview",{host:c.server,login:c.login}),dashboard,settings:workspaceSettings,clearClient:()=>{stopTraffic();S.camPorts=null;S.client=null;S.plan=null;S.outcome=null},renderClient,render:(name,root)=>{({create,inactive,lv,recovery,activity,admin,billing,archives:r=>archive(r,false),diagnostics:r=>archive(r,true),agent,camera,templates})[name]?.(root)}});
+ window.lvModules=Object.freeze({reset,client,stopTraffic,cloudRestore:c=>stage("cloud_restore_preview",{host:c.server,login:c.login}),dashboard,settings:workspaceSettings,clearClient:()=>{stopTraffic();S.clientHistory=null;S.camPorts=null;S.client=null;S.plan=null;S.outcome=null},renderClient,render:(name,root)=>{({create,inactive,lv,recovery,admin,billing,archives:r=>archive(r,false),diagnostics:r=>archive(r,true),agent,camera,templates})[name]?.(root)}});
 })();

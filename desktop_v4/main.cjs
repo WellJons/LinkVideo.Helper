@@ -44,15 +44,15 @@ async function login(a){
  return {...result,remembered};
 }
 handle('helper:login',login);
-handle('helper:remember-status',()=>({work:vault.has('work'),admin:vault.has('admin'),available:vault.available()}));
+handle('helper:remember-status',()=>({work:vault.has('work'),admin:vault.has('admin'),cloud:vault.has('cloud'),available:vault.available()}));
 handle('helper:login-saved',async()=>{const c=vault.load('work');if(!c)throw Error('Сохранённого рабочего входа нет.');try{return await login({...c,remember:true})}catch(e){vault.clear('work');throw e}});
-handle('helper:clear-saved',a=>{if(!['work','admin'].includes(a?.kind))throw Error('Неизвестный аккаунт.');vault.clear(a.kind);return null});
+handle('helper:clear-saved',a=>{if(!['work','admin','cloud'].includes(a?.kind))throw Error('Неизвестный аккаунт.');vault.clear(a.kind);return null});
 
 handle('helper:status',()=>bridge.request('status'));
 handle('helper:search',a=>{const query=clean(a?.query,128);if(!query?.trim()||!['login','port'].includes(a?.mode))throw Error('Некорректный запрос.');return bridge.request('search',{query:query.trim(),mode:a.mode})});
 handle('helper:servers',()=>bridge.request('servers'));
 handle('helper:analyze',a=>{const host=clean(a?.host,253);if(!host)throw Error('Выберите сервер.');return bridge.request('analyze',{host})});
-const operations=new Set(['client_detail','traffic_sample','camera_ports','camera_lookup','inactive_fleet','inactive_batch_preview','server_fleet','create_preview','vpn_preview','commit','inactive','lv_status','lv_preview','lv_fleet','lv_batch_preview','create_suggest','admin_logout','admin_status','billing_search','billing_select','billing_catalog','billing_history','billing_preview','billing_bulk_preview','billing_camera_image','create_auto','archive_discover','archive_settings','archive_settings_update','archive_diagnose','agent_search','agent_settings','agent_preview','templates_list','templates_save','templates_favorite','templates_delete','background_status','backup','delete_preview','backup_status','deleted_search','restore_preview','sheets_preview','cloud_connect','cloud_restore_preview','activity','camera_inspect','camera_live','agent_image','b2o_read','b2o_create_preview','billing_recipient','billing_transfer_preview','templates_images','templates_detach','winbox','registry_list','registry_update','background_status']);
+const operations=new Set(['client_detail','traffic_sample','camera_ports','camera_lookup','inactive_fleet','inactive_batch_preview','server_fleet','create_preview','vpn_preview','commit','inactive','lv_status','lv_preview','lv_fleet','lv_batch_preview','create_suggest','admin_logout','admin_status','billing_search','billing_select','billing_catalog','billing_history','billing_preview','billing_bulk_preview','billing_camera_image','create_auto','archive_discover','archive_settings','archive_settings_update','archive_diagnose','agent_search','agent_settings','agent_preview','templates_list','templates_save','templates_favorite','templates_delete','background_status','backup','delete_preview','backup_status','deleted_search','restore_preview','sheets_preview','cloud_status','cloud_restore_preview','activity','camera_inspect','camera_live','agent_image','b2o_read','b2o_create_preview','billing_recipient','billing_transfer_preview','templates_images','templates_detach','winbox','registry_list','registry_update','background_status']);
 handle('helper:operation',async a=>{
  if(!a||!operations.has(a.method)||!a.args||typeof a.args!=='object'||Array.isArray(a.args)||JSON.stringify(a.args).length>65000)throw Error('Недопустимая операция.');
  if(a.method==='commit'){
@@ -80,6 +80,23 @@ async function adminLogin(a){
 }
 handle('helper:admin-login',adminLogin);
 handle('helper:admin-saved',async()=>{const c=vault.load('admin');if(!c)throw Error('Сохранённого входа админки нет.');return adminLogin({...c,remember:true})});
+async function cloudLogin(a,saved=false){
+ const host=clean(a?.host,253),username=clean(a?.username,128),password=clean(a?.password,512),port=a?.port,tls=a?.tls===true;
+ if(!host||!/^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/.test(host)||!username?.trim()||!password||!Number.isInteger(port)||port<1||port>65535)throw Error('Проверьте адрес и учётную запись VPNSync.');
+ // Never connect to a user-entered plaintext endpoint without native consent.
+ if(!tls){
+  const answer=await dialog.showMessageBox(win,{type:'warning',title:'VPNSync · HTTP',message:'Подключиться к '+host+':'+port+' без HTTPS?',detail:'Логин, пароль и токен будут переданы без шифрования. Продолжайте только в доверенной корпоративной сети.',buttons:['Отмена','Подключить'],defaultId:0,cancelId:0});
+  if(answer.response!==1)throw Error('Подключение отменено.');
+ }
+ const data=await bridge.request('cloud_connect',{host,port,username:username.trim(),password,tls,allow_http:!tls});
+ let remembered=false;
+ try{if(saved||a.remember===true){vault.save('cloud',{host,port,username:username.trim(),password,tls});remembered=true}else vault.clear('cloud')}catch{}
+ return {...data,remembered};
+}
+handle('helper:cloud-login',a=>cloudLogin(a));
+handle('helper:cloud-saved',async()=>{const c=vault.load('cloud');if(!c)throw Error('Сохранённого входа VPNSync нет.');return cloudLogin(c,true)});
+handle('helper:cloud-profile',()=>{const c=vault.load('cloud');return c?{host:c.host,port:c.port,username:c.username,tls:c.tls,remembered:true}:null});
+handle('helper:cloud-disconnect',async()=>{const result=await bridge.request('cloud_disconnect');vault.clear('cloud');return result});
 handle('helper:archive-download',async a=>{
  if(!['ffmpeg','ffmpeg_no_audio','curl'].includes(a?.mode))throw Error('Выберите метод.');
  const manual=clean(a?.manual??'',4000);if(manual===null)throw Error('Слишком длинная команда FFmpeg.');
@@ -154,7 +171,7 @@ handle('helper:update-install',async()=>{
 });
 handle('helper:cancel',()=>{if(updateAbort){updateAbort.abort();return true}return bridge.cancel()});
 handle('helper:copy',a=>{const value=clean(a?.text,50000);if(value===null)throw Error('Слишком длинный текст.');clipboard.writeText(value);return null});
-handle('helper:logout',()=>{if(bridge.pending)throw Error('Сначала дождитесь завершения операции или отмените её.');approved=null;lastArchive=null;bridge.stop();try{vault.clear('work');vault.clear('admin')}catch{}return null});
+handle('helper:logout',()=>{if(bridge.pending)throw Error('Сначала дождитесь завершения операции или отмените её.');approved=null;lastArchive=null;bridge.stop();try{vault.clear('work');vault.clear('admin');vault.clear('cloud')}catch{}return null});
 function open(){
  win=new BrowserWindow({width:1320,height:850,minWidth:820,minHeight:600,show:false,backgroundColor:'#171a20',title:'LinkVideo.Helper 4 — Preview',webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,sandbox:true,nodeIntegration:false,webSecurity:true,devTools:!app.isPackaged}});
  win.webContents.setWindowOpenHandler(()=>({action:'deny'}));
@@ -172,7 +189,7 @@ function open(){
 async function smoke(){
  const cold=performance.now();await bridge.request('status');const coldMs=performance.now()-cold;
  const timings=[];for(let i=0;i<15;i++){const started=performance.now();await bridge.request('status');timings.push(performance.now()-started)}
- const attempt=await win.webContents.executeJavaScript(`(async()=>{const wait=()=>new Promise(r=>setTimeout(r,300));const get=id=>document.getElementById(id);if(!window.helper||get('login').hidden)throw Error('Missing login');const core=await window.helper.status();if(!core.ok||core.data.authenticated||core.data.version!=='4.0.0-alpha.6')throw Error('Worker not reachable');get('preview').click();await wait();if(get('workspace').hidden||!get('page').innerText.includes('Демонстрационный режим'))throw Error('Preview missing');const nav=label=>[...get('nav').querySelectorAll('button')].find(b=>b.innerText.includes(label));nav('Поиск клиентов').click();await wait();if(!get('page').querySelector('button[type=submit]').disabled)throw Error('Preview search active');nav('Настройки').click();await wait();const sw=get('page').querySelector('[role=switch]');const before=sw.getAttribute('aria-checked');sw.click();if(get('page').querySelector('[role=switch]').getAttribute('aria-checked')===before)throw Error('Motion switch failed');for(const label of ['Создание VPN','Неактивные VPN','LV-автоматика','Резерв / восстановление','История VPN','Биллинг','Архивы','Диагностика','Новый Агент','Камеры / B2O','Шаблоны','CRM / B2O']){nav(label).click();await wait();if(!get('page').querySelector('h1'))throw Error('Missing view: '+label)}nav('Настройки').click();get('theme').click();await wait();if(!document.documentElement.classList.contains('light'))throw Error('Theme failed');get('logout').click();await wait();if(get('login').hidden||!get('workspace').hidden)throw Error('Logout failed');return true})()`);
+ const attempt=await win.webContents.executeJavaScript(`(async()=>{const wait=()=>new Promise(r=>setTimeout(r,300));const get=id=>document.getElementById(id);if(!window.helper||get('login').hidden)throw Error('Missing login');const core=await window.helper.status();if(!core.ok||core.data.authenticated||core.data.version!=='4.0.0-alpha.6')throw Error('Worker not reachable');get('preview').click();await wait();if(get('workspace').hidden||!get('page').innerText.includes('Демонстрационный режим'))throw Error('Preview missing');const nav=label=>[...get('nav').querySelectorAll('button')].find(b=>b.innerText.includes(label));nav('Поиск клиентов').click();await wait();if(!get('page').querySelector('button[type=submit]').disabled)throw Error('Preview search active');nav('Настройки').click();await wait();const sw=get('page').querySelector('[role=switch]');const before=sw.getAttribute('aria-checked');sw.click();if(get('page').querySelector('[role=switch]').getAttribute('aria-checked')===before)throw Error('Motion switch failed');for(const label of ['Создание VPN','Неактивные VPN','LV-автоматика','Резерв / восстановление','Биллинг','Архивы','Диагностика','Новый Агент','Камеры / B2O','Шаблоны','CRM / B2O']){nav(label).click();await wait();if(!get('page').querySelector('h1'))throw Error('Missing view: '+label)}nav('Настройки').click();get('theme').click();await wait();if(!document.documentElement.classList.contains('light'))throw Error('Theme failed');get('logout').click();await wait();if(get('login').hidden||!get('workspace').hidden)throw Error('Logout failed');return true})()`);
  if(!attempt)throw Error('Smoke test failed');
  const metrics={coldCoreMs:Math.round(coldMs),warmRpcMeanMs:Math.round(timings.reduce((a,b)=>a+b,0)/timings.length*100)/100,electronProcesses:app.getAppMetrics().map(x=>({type:x.type,workingSetKB:x.memory?.workingSetSize||0}))};
  console.log('LV4_METRICS '+JSON.stringify(metrics));if(process.env.LV4_METRICS_PATH)require('node:fs').writeFileSync(process.env.LV4_METRICS_PATH,JSON.stringify(metrics,null,2));

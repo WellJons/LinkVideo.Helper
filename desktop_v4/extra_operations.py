@@ -10,7 +10,7 @@ import re
 import subprocess
 import shutil
 
-METHODS=frozenset(("copy_vpn","backup","delete_preview","backup_status","sheets_load","deleted_search","restore_preview","sheets_preview","cloud_connect","cloud_restore_preview","activity","camera_inspect","camera_live","agent_image","b2o_read","b2o_create_preview","billing_recipient","billing_transfer_preview","templates_import","templates_attach","templates_reply","templates_images","templates_detach","winbox","registry_list","registry_update"))
+METHODS=frozenset(("copy_vpn","backup","delete_preview","backup_status","sheets_load","deleted_search","restore_preview","sheets_preview","cloud_connect","cloud_status","cloud_disconnect","cloud_restore_preview","activity","camera_inspect","camera_live","agent_image","b2o_read","b2o_create_preview","billing_recipient","billing_transfer_preview","templates_import","templates_attach","templates_reply","templates_images","templates_detach","winbox","registry_list","registry_update"))
 class Extended:
     def __init__(self,ops):
         self.o=ops;self.cloud=None;self.sheets=None;self.deleted={};self.cloud_deleted={};self.recipients={};self.camera_report=None
@@ -247,8 +247,24 @@ class Extended:
             o.admin_only();o.writes_enabled();self.destructive_enabled();h=o.host(a);login=text(a,"login")
             row=self.cloud_deleted.get((h,login))
             if not row or not row["password_saved"]: raise InputError("Найдите удалённую учётку с сохранённым паролем в PostgreSQL.")
-            self.cloud_preflight(h,login)
-            return o.stage("cloud_restore",(h,login),f"Восстановить {h}/{login} из PostgreSQL без замены занятых портов.")
+            preflight=self.cloud_preflight(h,login)
+            ports=[]
+            for p in preflight.get("ports") or []:
+                try:
+                    n=int(p)
+                    if 1<=n<=65535: ports.append(str(n))
+                except (TypeError,ValueError): pass
+            return o.stage("cloud_restore",(h,login),f"Восстановить {h}/{login} из PostgreSQL без замены занятых портов. VPN IP: {row['remote_address']}. Порты: "+(", ".join(ports) or ", ".join(row["ports"]) or "не указаны"))
+        if m=="cloud_status":
+            if self.cloud is None: return {"connected":False}
+            config=self.cloud.config
+            return {"connected":True,"host":config.host,"port":config.port,"username":config.username,"tls":config.use_tls}
+        if m=="cloud_disconnect":
+            if self.cloud is not None:
+                try: self.cloud._session.close()
+                except Exception: pass
+            self.cloud=None;self.cloud_deleted={}
+            return {"connected":False}
         if m=="cloud_connect":
             from linkvideo_vpn_helper.services.cloud_vpnsync import CloudVPNSyncClient,CloudServerConfig
             host=text(a,"host",253)
@@ -257,16 +273,28 @@ class Extended:
             if not isinstance(password,str) or not password or len(password)>512: raise InputError("Введите пароль облачного аккаунта.")
             config=CloudServerConfig(host=host,port=number(a,"port",1,65535),username=text(a,"username"),password=password,use_tls=a.get("tls") is True,remember=False)
             if not config.use_tls and a.get("allow_http") is not True: raise InputError("HTTP не шифруется. Используйте HTTPS или явно разрешите HTTP внутри доверенной сети.")
-            self.cloud=None
-            client=CloudVPNSyncClient(o.settings);client.set_config(config,save=False);client.test_connection();self.cloud=client
-            return {"connected":True}
+            if self.cloud is not None:
+                try: self.cloud._session.close()
+                except Exception: pass
+            self.cloud=None;self.cloud_deleted={}
+            client=CloudVPNSyncClient(o.settings);client.set_config(config,save=False)
+            try: client.test_connection()
+            except Exception as exc:
+                client._session.close()
+                if "Неверный логин или пароль" in str(exc): raise InputError("Неверный логин или пароль VPNSync. Это отдельная учётная запись, не SSH и не MikroTik.") from None
+                raise InputError("Подключение VPNSync не подтверждено. Проверьте адрес, протокол, доступность и учётную запись API.") from None
+            self.cloud=client
+            return {"connected":True,"host":config.host,"port":config.port,"username":config.username,"tls":config.use_tls}
         if m=="activity":
             o.admin_only()
             if self.cloud is None: raise InputError("Подключите отдельный облачный аккаунт.")
-            rows=self.cloud.activity(200,login=text(a,"login",128,False),source=text(a,"source",80,False))
+            h=o.host(a);login=text(a,"login",128)
+            # History is scoped to a live client, never a global employee log.
+            o.get_client(h,login)
+            rows=self.cloud.activity(200,login=login,source=text(a,"source",80,False))
             result=[]
             for row in rows:
-                if not isinstance(row,dict): continue
+                if not isinstance(row,dict) or str(row.get("login") or "")!=login or str(row.get("server") or "")!=h: continue
                 out={k:str(row.get(k) or "")[:160] for k in ("created_at","timestamp","action","server","login","source","username","actor","success")}
                 detail=row.get("details") or {}
                 if not isinstance(detail,dict): detail={}
@@ -388,8 +416,11 @@ class Extended:
             if cancel.is_set(): raise InputError("Операция отменена.")
             result=self.cloud.request("POST","/v1/archive/restore",json={"server":h,"login":login},timeout=45.0)
             if not isinstance(result,dict) or result.get("ok") is not True: raise InputError("Восстановление не подтверждено. Проверьте MikroTik.")
+            fresh=svc.get_client(h,creds,login)
+            if fresh is None: raise InputError("VPNSync принял восстановление, но живой MikroTik не подтвердил учётку. Проверьте состояние перед повтором.")
             self.cloud_deleted.pop((h,login),None)
-            return {"restored":True,"server":h,"login":login}
+            from desktop_v4.operations import public_client
+            return {"restored":True,"server":h,"login":login,"client":public_client(fresh)}
         if kind=="delete":
             o.admin_only();self.destructive_enabled();h,login=p
             return self.confirmed_delete(h,login,revision,cancel,emit)

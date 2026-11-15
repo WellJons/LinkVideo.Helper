@@ -3,7 +3,7 @@ const fs=require('node:fs');
 const path=require('node:path');
 class CredentialVault{
  constructor(dir,safeStorage,platform=process.platform){this.dir=dir;this.safeStorage=safeStorage;this.platform=platform}
- file(kind){if(!['work','admin'].includes(kind))throw Error('Unknown vault');return path.join(this.dir,'credentials-'+kind+'.bin')}
+ file(kind){if(!['work','admin','cloud'].includes(kind))throw Error('Unknown vault');return path.join(this.dir,'credentials-'+kind+'.bin')}
  available(){return this.platform==='win32'&&this.safeStorage.isEncryptionAvailable()}
  save(kind,credentials){
   if(!this.available())throw Error('Шифрование Windows недоступно.');

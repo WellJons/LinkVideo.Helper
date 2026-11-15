@@ -106,6 +106,19 @@ class TestWorkspace(unittest.TestCase):
             validate_command('ffmpeg -i "{input}" -vf movie=secret.mp4 "{output}"')
         with self.assertRaises(ValueError):
             validate_command('ffmpeg -i "{input}" extra.mp4 "{output}"')
+    def test_activity_is_client_scoped(self):
+        self.w.dispatch("login",{"username":"admin","password":"valid"})
+        self.w.service=NS(get_client=lambda *a,**k:NS(login="client"))
+        self.w.ops.extra.cloud=NS(activity=lambda *a,**k:[
+            {"login":"client","server":"trusted.example","source":"desktop","actor":"transport","details":{"employee":"staff","port":10001,"password":"hidden"}},
+            {"login":"other","server":"trusted.example"},
+            {"login":"client","server":"other.example"}])
+        data=self.w.dispatch("activity",{"host":"trusted.example","login":"client"})
+        self.assertEqual(len(data),1)
+        self.assertEqual(data[0]["actor"],"staff")
+        self.assertEqual(data[0]["details"],{"port":10001})
+        with self.assertRaises(InputError):
+            self.w.dispatch("activity",{"host":"trusted.example","login":""})
     def test_separate_admin_auth(self):
         self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
         self.assertEqual(self.w.dispatch("admin_status",{}),{"username":"","b2o":False,"crm":False})
