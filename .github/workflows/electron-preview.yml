@@ -30,7 +30,7 @@ jobs:
       - name: Install Python runtime build dependencies
         run: python -m pip install -r requirements.txt pyinstaller
       - name: Test Python RPC without production connections
-        run: python -m unittest desktop_v4.test_worker desktop_v4.test_template_migration desktop_v4.test_delete_recovery desktop_v4.test_billing_parity desktop_v4.test_archive_report desktop_v4.test_backup_inventory
+        run: python -m unittest desktop_v4.test_worker desktop_v4.test_template_migration desktop_v4.test_delete_recovery desktop_v4.test_billing_parity desktop_v4.test_archive_report desktop_v4.test_backup_inventory desktop_v4.test_background
       - name: Run original 3.0.27 offline CRM protocol regression scripts
         shell: pwsh
         run: |
@@ -95,6 +95,22 @@ jobs:
           if (!$uninstaller) { throw 'Missing uninstaller' }
           $p = Start-Process -FilePath $uninstaller.FullName -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') -PassThru -Wait
           if ($p.ExitCode -ne 0) { throw "Uninstall failed: $($p.ExitCode)" }
+      - name: Build separate protected Windows background component
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Inno Setup 6\ISCC.exe'
+          & $iscc desktop_v4/background-installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $local = Resolve-Path 'dist-v4-core/worker/helper-core.exe'
+          $p = Start-Process -FilePath $local -ArgumentList '--lv4-background-check-installation' -PassThru -Wait
+          if ($p.ExitCode -ne 3) { throw 'Unprotected worker accepted background mode' }
+          Get-FileHash dist-v4-bg/*-Setup.exe -Algorithm SHA256 | Format-List | Out-File dist-v4-bg/SHA256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LinkVideo.Helper-4-Background-Setup
+          path: dist-v4-bg/
+          if-no-files-found: error
+          retention-days: 14
       - uses: actions/upload-artifact@v4
         with:
           name: LinkVideo.Helper-4-Windows-Setup

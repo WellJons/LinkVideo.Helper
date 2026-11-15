@@ -21,7 +21,7 @@ class Bridge {
   try{this.start()}catch{return Promise.reject(new Error('Не удалось запустить Python-ядро.'))}
   return new Promise((resolve,reject)=>{
    const id=++this.next;
-   const timer=setTimeout(()=>this.stop('Ядро не ответило. Войдите снова.'),['archive_discover','archive_diagnose','archive_download','commit','backup','lv_fleet','inactive_fleet','camera_ports','server_fleet','inactive_batch_preview','lv_batch_preview','delete_preview'].includes(method)?Math.max(this.timeout,7200000):this.timeout);
+   const timer=setTimeout(()=>this.stop('Ядро не ответило. Войдите снова.'),['archive_discover','archive_diagnose','archive_download','commit','backup','lv_fleet','inactive_fleet','camera_ports','server_fleet','inactive_batch_preview','lv_batch_preview','delete_preview','backup_verify','background_verify_admin'].includes(method)?Math.max(this.timeout,7200000):this.timeout);
    this.pending={id,timer,resolve,reject};
    try{this.child.stdin.write(JSON.stringify({id,method,args})+'\n')}catch{this.stop('Связь с ядром прервана.')}
   });

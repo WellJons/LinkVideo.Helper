@@ -33,7 +33,7 @@ class Workspace:
 
     def dispatch(self, method, args, cancel=None, emit=None):
         if method == "status":
-            return {"authenticated": self.session is not None, "version": "4.0.0-alpha.10"}
+            return {"authenticated": self.session is not None, "version": "4.0.0-alpha.11"}
         if method == "login":
             self.ops.close()
             self.session = self.identity = None
@@ -166,4 +166,7 @@ def main():
         if active: active["event"].set()
 
 if __name__=="__main__":
+    from desktop_v4.background import dispatch_cli
+    code=dispatch_cli(sys.argv[1:])
+    if code is not None: sys.exit(code)
     main()

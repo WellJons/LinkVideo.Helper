@@ -60,7 +60,7 @@ class MemorySettings:
     def sync(self): pass
 
 class Operations:
-    METHODS=frozenset(("client_detail","client_refresh","traffic_sample","camera_ports","inactive_fleet","inactive_batch_preview","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","lv_fleet","lv_batch_preview","create_suggest","create_ip","create_check","camera_lookup","admin_login","admin_logout","admin_status","admin_retry","billing_refresh","billing_filter","billing_search","billing_select","billing_catalog","billing_history","billing_preview","billing_bulk_preview","billing_camera_image","create_auto","archive_discover","archive_diagnose","archive_download","archive_settings","archive_settings_update","agent_search","agent_settings","agent_preview","templates_list","templates_migrate","server_fleet","templates_save","templates_favorite","templates_delete","background_status")) | EXTRA_METHODS
+    METHODS=frozenset(("client_detail","client_refresh","traffic_sample","camera_ports","inactive_fleet","inactive_batch_preview","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","lv_fleet","lv_batch_preview","create_suggest","create_ip","create_check","camera_lookup","admin_login","admin_logout","admin_status","admin_retry","billing_refresh","billing_filter","billing_search","billing_select","billing_catalog","billing_history","billing_preview","billing_bulk_preview","billing_camera_image","create_auto","archive_discover","archive_diagnose","archive_download","archive_settings","archive_settings_update","agent_search","agent_settings","agent_preview","templates_list","templates_migrate","server_fleet","templates_save","templates_favorite","templates_delete","background_status","background_preview","background_verify_admin")) | EXTRA_METHODS
     def __init__(self,workspace):
         self.w=workspace
         self.settings=MemorySettings(workspace)
@@ -673,12 +673,33 @@ class Operations:
             if method=="templates_favorite": store.favorite(tid,a.get("selected") is True)
             else: store.delete(tid)
             return {"ok":True}
+        if method=="background_preview":
+            from desktop_v4 import background
+            self.admin_only();self.writes_enabled()
+            action=text(a,"action",24)
+            if action not in ("enable","disable","run"):raise InputError("Неизвестное действие фоновой задачи.")
+            if not background.installed():raise InputError("Установите отдельный Background-компонент 4.0 в Program Files.")
+            interval=None
+            if action=="enable":
+                self.extra.sheets_service();interval=number(a,"interval",6,24)
+                if interval not in background.INTERVALS:raise InputError("Выберите 6, 12 или 24 ч.")
+                if not self.w.hosts:raise InputError("Нет доверенных серверов.")
+            targets=tuple(self.w.hosts) if action=="enable" else ()
+            label={"enable":f"Явно включить аварийное расписание Sheets каждые {interval} ч. Серверов: {len(targets)}. Таблица будет содержать PPP-пароли и recovery-снимки. PostgreSQL остаётся основной базой.","disable":"Отключить только фоновое задание 4.0; данные Sheets и 3.x не изменяются.","run":"Запустить существующее аварийное задание 4.0 сейчас. Будет отправлена полная конфигурация в Google Sheets."}[action]
+            return self.stage("background",(action,interval,targets),label)
+        if method=="background_verify_admin":
+            from desktop_v4 import background
+            self.admin_only();emit("Запрошена проверка Windows с UAC")
+            try:background.elevate("verify")
+            except RuntimeError as ex:raise InputError(str(ex)) from None
+            return background.status()
         if method=="background_status":
+            from desktop_v4 import background
             from linkvideo_vpn_helper.services.vpn_background_service import read_status, read_task_receipt, task_inspection
             self.admin_only()
             status=read_status();receipt=read_task_receipt();inspection=task_inspection()
             # Never serialize task secrets or arbitrary status payload.
-            return {"installed":bool(inspection.get("installed")),"verified":bool(inspection.get("verified")),"source":inspection.get("source"),"interval_hours":receipt.get("interval_hours"),"status":str(status.get("state") or status.get("status") or "")[:80],"checked_utc":str(status.get("checked_utc") or "")[:60],"servers":status.get("servers"),"successful":status.get("successful"),"failed":status.get("failed"),"mode":"manual_emergency_only"}
+            return {"v4":background.status(),"legacy":{"installed":bool(inspection.get("installed")),"verified":bool(inspection.get("verified")),"source":inspection.get("source"),"interval_hours":receipt.get("interval_hours"),"status":str(status.get("state") or status.get("status") or "")[:80],"checked_utc":str(status.get("checked_utc") or "")[:60],"servers":status.get("servers"),"successful":status.get("successful"),"failed":status.get("failed")},"mode":"manual_emergency_by_default","sheets_configured":self.extra.sheets is not None}
         if method=="commit":
             token=text(a,"token",128)
             plan=self.plan;self.plan=None
@@ -709,6 +730,22 @@ class Operations:
         svc=self.w.service;creds=self.w.session
         if kind in ("delete","restore","sheets","b2o","transfer","cloud_restore"):
             return self.extra.execute(kind,p,revision,cancel,emit)
+        if kind=="background":
+            from desktop_v4 import background
+            self.admin_only();action,interval,targets=p;file=None
+            if cancel.is_set():raise InputError("Операция отменена.")
+            try:
+                if action=="enable":
+                    if tuple(self.w.hosts)!=targets:raise InputError("Список серверов изменился. Повторите подготовку.")
+                    backend=self.extra.sheets_service()
+                    file=background.stage(creds,backend.service_account_info,list(targets),backend.spreadsheet_id,interval)
+                if cancel.is_set():raise InputError("Операция отменена.")
+                emit("Подтвердите запрос UAC Windows")
+                background.elevate(action,file)
+                return {"background":background.status(),"action":action,"submitted":True}
+            except RuntimeError as ex:raise InputError(str(ex)) from None
+            finally:
+                if file is not None:file.unlink(missing_ok=True)
         if kind=="inactive_batch":
             self.admin_only();action,targets=p;results=[]
             if action=="delete": self.extra.destructive_enabled()

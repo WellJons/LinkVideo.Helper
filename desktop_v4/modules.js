@@ -362,10 +362,25 @@
    const h=field('Дополнительный DNS/IPv4','text'),c=field('Регион','text');form(root,h,c);action(root,live('Добавить доверенный сервер',()=>run(async()=>{await op('registry_update',{host:value(h),country:value(c),action:'trust'});await load()})))
   }
   if(S.registryTest)keyValue(root,[['Сервер отвечает',S.registryTest.server],['CPU',S.registryTest.cpu_load],['RAM',S.registryTest.memory_usage_percent],['VPN онлайн',S.registryTest.clients_online]]);
-  section(root,'Фоновая служба Windows 3.x');
-  action(root,live('Проверить существующее задание',()=>run(async()=>{S.background=await op('background_status')})));action(root,live('Открыть планировщик Windows',()=>run(()=>rpc('taskScheduler'))));
-  if(S.background){const b=S.background;keyValue(root,[['Задание',b.verified?'Обнаружено':b.installed?'Есть квитанция 3.x, не проверено':'Не подтверждено'],['Период, ч',b.interval_hours],['Статус',b.status],['Последняя проверка UTC',b.checked_utc],['Успешно',b.successful],['Ошибок',b.failed]])}
-  root.append(notice('Google Sheets — ручной аварийный резерв, PostgreSQL — основная база. Задание LinkVideo.Helper.VPNSheetsMirror можно проверить в планировщике. 4.0 не создаёт, не переустанавливает и не удаляет SYSTEM-задачу 3.x.'))
+  section(root,'Фоновая служба Windows · аварийный резерв');
+  root.append(notice('По умолчанию расписание выключено. PostgreSQL — основная база; автоматический экспорт Sheets возможен только после отдельной установки администратора и явного согласия. Служба работает после закрытия Helper.'));
+  action(root,live('Проверить состояние задач',()=>run(async()=>{S.background=await op('background_status')}),'primary'));
+  action(root,live('Открыть планировщик Windows',()=>run(()=>rpc('taskScheduler'))));
+  if(S.background){const legacy=S.background.legacy||{},bg=S.background.v4||{};
+   keyValue(root,[['Старая задача 3.x',legacy.verified?'Найдена':legacy.installed?'Есть receipt, не проверено':'Не подтверждена'],['Компонент 4.0',bg.component?'Установлен в Program Files':'Не установлен'],['Задание 4.0',bg.verified?'Обнаружено':bg.installed?'Есть receipt, не проверено':'Не подтверждено'],['Период, ч',bg.interval_hours],['Статус',bg.status],['Последняя проверка UTC',bg.checked_utc],['Успешно',bg.successful],['Ошибок',bg.failed]]);
+   if(legacy.installed)root.append(notice('Сначала отключите прежнюю задачу в Helper 3.x. 4.0 не изменяет задание или файлы 3.x.'));
+   if(!bg.component)root.append(notice('Нужен отдельный артефакт LinkVideo.Helper-4-Background-Setup из сборки. Обычный пользовательский установщик не создаёт SYSTEM-задачу.'));
+   else{
+    action(root,live('Проверить с правами администратора',()=>run(async()=>{await op('background_verify_admin');S.background=await op('background_status')})));
+    const interval=field('Интервал резервирования','select',bg.interval_hours||12,[[6,'6 часов'],[12,'12 часов'],[24,'24 часа']]);form(root,interval);
+    action(root,live('Выбрать JSON-ключ Sheets',()=>run(async()=>{S.sheets=await rpc('fileAction','sheets_load');S.background=await op('background_status')})));
+    action(root,button(bg.installed?'Изменить расписание':'Включить аварийное расписание',()=>stage('background_preview',{action:'enable',interval:num(interval)}),'primary',!identity?.writes||!S.background.sheets_configured||legacy.installed));
+    action(root,button('Запустить резервирование сейчас',()=>stage('background_preview',{action:'run'}),'quiet',!identity?.writes||!bg.installed||legacy.installed));
+    action(root,button('Отключить задание 4.0',()=>stage('background_preview',{action:'disable'}),'quiet',!identity?.writes||!bg.installed));
+   }
+  }
+  previewNotice(root,currentPlan(),out=>{if(out?.background&&S.background)S.background.v4=out.background});resultNote(root);
+
  }
  window.lvModules=Object.freeze({reset,client,stopTraffic,stopRefresh,cloudRestore:c=>stage("cloud_restore_preview",{host:c.server,login:c.login}),dashboard,settings:workspaceSettings,clearClient:()=>{stopTraffic();stopRefresh();S.newPorts=[];S.refreshWarning='';S.clientHistory=null;S.camPorts=null;S.client=null;S.plan=null;S.outcome=null},renderClient,render:(name,root)=>{({create,inactive,lv,recovery,admin,billing,archives:r=>archive(r,false),diagnostics:r=>archive(r,true),agent,camera,templates})[name]?.(root)}});
 })();
