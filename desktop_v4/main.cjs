@@ -52,7 +52,7 @@ handle('helper:status',()=>bridge.request('status'));
 handle('helper:search',a=>{const query=clean(a?.query,128);if(!query?.trim()||!['login','port'].includes(a?.mode))throw Error('Некорректный запрос.');return bridge.request('search',{query:query.trim(),mode:a.mode})});
 handle('helper:servers',()=>bridge.request('servers'));
 handle('helper:analyze',a=>{const host=clean(a?.host,253);if(!host)throw Error('Выберите сервер.');return bridge.request('analyze',{host})});
-const operations=new Set(['client_detail','traffic_sample','camera_ports','camera_lookup','inactive_fleet','inactive_batch_preview','server_fleet','create_preview','vpn_preview','commit','inactive','lv_status','lv_preview','lv_fleet','lv_batch_preview','create_suggest','admin_logout','admin_status','billing_search','billing_select','billing_catalog','billing_history','billing_preview','billing_bulk_preview','billing_camera_image','create_auto','archive_discover','archive_settings','archive_settings_update','archive_diagnose','agent_search','agent_settings','agent_preview','templates_list','templates_save','templates_favorite','templates_delete','background_status','backup','delete_preview','backup_status','deleted_search','restore_preview','sheets_preview','cloud_status','cloud_restore_preview','activity','camera_inspect','camera_live','agent_image','b2o_read','b2o_create_preview','billing_recipient','billing_transfer_preview','templates_images','templates_detach','winbox','registry_list','registry_update','background_status']);
+const operations=new Set(['client_detail','traffic_sample','camera_ports','camera_lookup','inactive_fleet','inactive_batch_preview','server_fleet','create_preview','vpn_preview','commit','inactive','lv_status','lv_preview','lv_fleet','lv_batch_preview','create_suggest','admin_logout','admin_status','admin_retry','billing_refresh','billing_filter','billing_search','billing_select','billing_catalog','billing_history','billing_preview','billing_bulk_preview','billing_camera_image','create_auto','archive_discover','archive_settings','archive_settings_update','archive_diagnose','agent_search','agent_settings','agent_preview','templates_list','templates_save','templates_favorite','templates_delete','background_status','backup','delete_preview','backup_status','deleted_search','restore_preview','sheets_preview','cloud_status','cloud_restore_preview','activity','camera_inspect','camera_live','agent_image','b2o_read','b2o_create_preview','billing_recipient','billing_transfer_preview','templates_images','templates_detach','winbox','registry_list','registry_update','background_status']);
 handle('helper:operation',async a=>{
  if(!a||!operations.has(a.method)||!a.args||typeof a.args!=='object'||Array.isArray(a.args)||JSON.stringify(a.args).length>65000)throw Error('Недопустимая операция.');
  if(a.method==='commit'){
@@ -66,7 +66,7 @@ handle('helper:operation',async a=>{
  const answer=await dialog.showMessageBox(win,{type:'warning',message:'Разрешить подключение к '+target+'?',detail:'Рабочие данные MikroTik передаются этому серверу. Добавляйте только проверенные корпоративные адреса. Доверие действует текущий сеанс.',buttons:['Отмена','Разрешить'],defaultId:0,cancelId:0});if(answer.response!==1)throw Error('Доверие не подтверждено.');}
  const data=await bridge.request(a.method,a.args);
  if(a.method.endsWith('_preview')&&data?.token&&data?.label)approved={token:data.token,label:String(data.label).slice(0,600),deadline:Date.now()+120000};
- if(a.method==='admin_logout'){vault.clear('admin');approved=null;}
+ if(a.method==='admin_logout'){approved=null;}
  return data;
 });
 async function adminLogin(a){
@@ -75,7 +75,7 @@ async function adminLogin(a){
  approved=null;
  const data=await bridge.request('admin_login',{username:username.trim(),password,target});
  let remembered=false;
- if(data.crm||data.b2o){try{if(a.remember===true){vault.save('admin',{username:username.trim(),password,target});remembered=true}else vault.clear('admin')}catch{}}
+ if(data.crm||data.b2o){try{if(a.remember===true){vault.save('admin',{username:username.trim(),password,target:'both'});remembered=true}else vault.clear('admin')}catch{}}
  return {...data,remembered};
 }
 handle('helper:admin-login',adminLogin);

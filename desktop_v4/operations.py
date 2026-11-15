@@ -60,7 +60,7 @@ class MemorySettings:
     def sync(self): pass
 
 class Operations:
-    METHODS=frozenset(("client_detail","traffic_sample","camera_ports","inactive_fleet","inactive_batch_preview","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","lv_fleet","lv_batch_preview","create_suggest","camera_lookup","admin_login","admin_logout","admin_status","billing_search","billing_select","billing_catalog","billing_history","billing_preview","billing_bulk_preview","billing_camera_image","create_auto","archive_discover","archive_diagnose","archive_download","archive_settings","archive_settings_update","agent_search","agent_settings","agent_preview","templates_list","templates_migrate","server_fleet","templates_save","templates_favorite","templates_delete","background_status")) | EXTRA_METHODS
+    METHODS=frozenset(("client_detail","traffic_sample","camera_ports","inactive_fleet","inactive_batch_preview","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","lv_fleet","lv_batch_preview","create_suggest","camera_lookup","admin_login","admin_logout","admin_status","admin_retry","billing_refresh","billing_filter","billing_search","billing_select","billing_catalog","billing_history","billing_preview","billing_bulk_preview","billing_camera_image","create_auto","archive_discover","archive_diagnose","archive_download","archive_settings","archive_settings_update","agent_search","agent_settings","agent_preview","templates_list","templates_migrate","server_fleet","templates_save","templates_favorite","templates_delete","background_status")) | EXTRA_METHODS
     def __init__(self,workspace):
         self.w=workspace
         self.settings=MemorySettings(workspace)
@@ -76,16 +76,94 @@ class Operations:
         self.plan=None
         self.admin_name=""
         self.admin_credentials=None
+        self.work_admin_credentials=None
         self.inactive_records={}
+        self.catalog_snapshot=None
+        self.catalog_scope=None
         self.b2o_ready=False
         self.uncertain=set()
         self.extra=Extended(self)
 
+    def clear_crm(self):
+        if self.transport:
+            try: self.transport.close()
+            except Exception: pass
+        self.transport=self.billing=self.client=None
+        self.hits={};self.extra.recipients={};self.plan=None
+        self.catalog_snapshot=self.catalog_scope=None
+
+    def clear_b2o(self):
+        self.archive=self.discovery=None
+        self.extra.camera_report=None;self.b2o_ready=False;self.admin_credentials=None;self.plan=None
+        self.settings.remove("b2o")
+
     def clear_admin(self):
-        if self.transport: self.transport.close()
-        self.transport=self.billing=self.archive=self.discovery=self.client=None
-        self.hits={};self.extra.recipients={};self.extra.camera_report=None;self.b2o_ready=False;self.admin_name='';self.admin_credentials=None;self.plan=None
-        self.settings.remove('b2o')
+        self.clear_crm();self.clear_b2o()
+        self.admin_name="";self.work_admin_credentials=None
+        self.camera=self.agent=None
+
+    def admin_state(self,errors=None):
+        result={"username":self.admin_name,"b2o":self.b2o_ready,"crm":self.billing is not None}
+        if errors is not None: result["errors"]=errors
+        return result
+
+    def connect_admin(self,username,password,target):
+        from types import SimpleNamespace
+        old=self.work_admin_credentials
+        # Different credentials invalidate both services. Explicit retry with
+        # the same verified work account touches only the requested service.
+        if old is None or old.username!=username or old.password!=password:
+            self.clear_admin()
+        else:
+            if target in ("crm","both"): self.clear_crm()
+            if target in ("b2o","both"): self.clear_b2o()
+        errors=[]
+        if target in ("b2o","both"):
+            try:
+                from linkvideo_vpn_helper.services.archive_service import ArchiveService
+                self.archive=ArchiveService(self.settings)
+                self.archive.b2o.login(username,password)
+                self.b2o_ready=bool(self.archive.b2o.token())
+                if not self.b2o_ready: raise ValueError()
+                self.admin_credentials=SimpleNamespace(username=username,password=password)
+            except Exception:
+                self.clear_b2o();errors.append("B2O: вход не подтверждён.")
+        if target in ("crm","both"):
+            try:
+                from linkvideo_vpn_helper.services.billing_auth_contract import BillingLoginRequest
+                from linkvideo_vpn_helper.services.billing_login_probe import check_billing_login
+                from linkvideo_vpn_helper.services.billing_token_transport import BillingTokenTransport
+                from linkvideo_vpn_helper.services.billing_editable_gateway import BillingEditableGateway
+                token=check_billing_login(BillingLoginRequest(username,password)).token
+                self.transport=BillingTokenTransport(token,"auto")
+                self.billing=BillingEditableGateway(self.transport)
+                self.billing.all_tariffs()
+            except Exception:
+                self.clear_crm();errors.append("CRM: вход или защищённый запрос не подтверждён.")
+        if self.b2o_ready or self.billing is not None:
+            self.admin_name=username
+            self.work_admin_credentials=SimpleNamespace(username=username,password=password)
+        else:
+            self.admin_name="";self.work_admin_credentials=None
+        return self.admin_state(errors)
+
+    def catalog_public(self,a):
+        from linkvideo_vpn_helper.services.billing_tariff_filter import archive_days_from_name, bitrate_mbps_from_name, select_tariffs
+        snapshot=self.catalog_snapshot
+        if snapshot is None: raise InputError("Сначала загрузите справочник тарифов.")
+        country=text(a,"country",60,False)
+        if self.catalog_scope=="client":
+            country=self.source_client().country
+        days=number(a,"days",0,9999) if "days" in a else 0
+        speed=a.get("bitrate",0)
+        if type(speed) not in (int,float) or not 0<=speed<=10000: raise InputError("Некорректный битрейт.")
+        rows=select_tariffs(snapshot.tariffs,country=country,days=days,search=text(a,"query",200,False),bitrate_mbps=float(speed),account_type=text(a,"account_type",80,False))
+        countries=list(getattr(snapshot,"countries",()) or ())
+        if self.catalog_scope=="client": countries=[snapshot.country]
+        codes={x.name:x.currency_code for x in countries}
+        return {"scope":self.catalog_scope,"tariffs":[{**asdict(x),"price":str(x.price),"archive_days":archive_days_from_name(x.name),"bitrate_mbps":bitrate_mbps_from_name(x.name),"currency":codes.get(x.country,"")} for x in rows],
+                "countries":[asdict(x) for x in countries],"account_types":sorted({x.account_type for x in snapshot.tariffs if x.account_type}),
+                "archive_periods":[asdict(x) for x in getattr(snapshot,"archive_periods",())],"total":len(snapshot.tariffs)}
 
     def close(self):
         self.clear_admin()
@@ -338,59 +416,44 @@ class Operations:
             labels={"install":"Установить/обновить LV","start":"Запустить LV","pause":"Приостановить LV","seed":"Инициализировать жизненный цикл","quarantine_on":"Включить карантин","quarantine_off":"Отключить карантин"}
             return self.stage("lv",(h,action),labels[action]+": "+h+". Сначала будет проверен FULL backup.")
         if method=="admin_status":
-            return {"username":self.admin_name,"b2o":self.b2o_ready,"crm":self.billing is not None}
+            return self.admin_state()
         if method=="admin_logout":
-            self.clear_admin();return {"username":"","b2o":False,"crm":False}
+            self.clear_admin();return self.admin_state()
+        if method=="admin_retry":
+            creds=self.work_admin_credentials
+            target=text(a,"target",12)
+            if target not in ("crm","b2o"): raise InputError("Выберите CRM или B2O.")
+            if creds is None: raise InputError("Сначала войдите в рабочую учётную запись CRM / B2O.")
+            return self.connect_admin(creds.username,creds.password,target)
         if method=="admin_login":
-            self.clear_admin()
             username=text(a,"username",128);password=a.get("password")
             if not isinstance(password,str) or not password or len(password)>512: raise InputError("Введите пароль.")
             target=text(a,"target",12)
             if target not in ("crm","b2o","both"): raise InputError("Выберите систему.")
-            errors=[]
-            if target in ("b2o","both"):
-                try:
-                    from linkvideo_vpn_helper.services.archive_service import ArchiveService
-                    self.archive=ArchiveService(self.settings)
-                    self.archive.b2o.login(username,password)
-                    self.b2o_ready=bool(self.archive.b2o.token())
-                    if not self.b2o_ready: raise ValueError()
-                except Exception:
-                    self.archive=None;self.b2o_ready=False;self.settings.remove("b2o")
-                    errors.append("B2O: вход не подтверждён.")
-            if target in ("crm","both"):
-                try:
-                    from linkvideo_vpn_helper.services.billing_auth_contract import BillingLoginRequest
-                    from linkvideo_vpn_helper.services.billing_login_probe import check_billing_login
-                    from linkvideo_vpn_helper.services.billing_token_transport import BillingTokenTransport
-                    from linkvideo_vpn_helper.services.billing_editable_gateway import BillingEditableGateway
-                    token=check_billing_login(BillingLoginRequest(username,password)).token
-                    self.transport=BillingTokenTransport(token,"auto")
-                    self.billing=BillingEditableGateway(self.transport)
-                    # Verify a real authenticated read, not just existence of token.
-                    self.billing.all_tariffs()
-                except Exception:
-                    if self.transport: self.transport.close()
-                    self.transport=self.billing=None;errors.append("CRM: вход или защищённый запрос не подтверждён.")
-            self.admin_name=username if self.b2o_ready or self.billing else ""
-            if self.b2o_ready:
-                from types import SimpleNamespace
-                self.admin_credentials=SimpleNamespace(username=username,password=password)
-            return {"username":self.admin_name,"b2o":self.b2o_ready,"crm":self.billing is not None,"errors":errors}
+            return self.connect_admin(username,password,target)
         if method=="billing_search":
-            g=self.crm();self.client=None;self.hits={};self.plan=None
+            g=self.crm();self.client=None;self.hits={};self.plan=None;self.catalog_snapshot=self.catalog_scope=None;self.extra.recipients={}
             rows=g.search_clients(text(a,"query",100))
             self.hits={r.id:r for r in rows}
             return [asdict(r) for r in rows]
         if method=="billing_select":
             g=self.crm();hit=self.hits.get(text(a,"id",32))
             if hit is None: raise InputError("Выберите запись из актуального поиска.")
-            self.client=g.find_client_by_hit(hit);self.plan=None
+            self.client=None;self.plan=None;self.catalog_snapshot=self.catalog_scope=None;self.extra.recipients={}
+            self.client=g.find_client_by_hit(hit)
+            return asdict(self.client)
+        if method=="billing_refresh":
+            g=self.crm();current=self.source_client();self.plan=None;self.extra.recipients={};self.catalog_snapshot=self.catalog_scope=None
+            self.client=g.refresh_client(current)
             return asdict(self.client)
         if method=="billing_catalog":
-            g=self.crm()
-            if a.get("scope")=="client": return asdict(g.reference_catalog(self.source_client()))
-            return asdict(g.all_tariffs())
+            g=self.crm();self.catalog_snapshot=self.catalog_scope=None
+            scope="client" if a.get("scope")=="client" else "all"
+            self.catalog_snapshot=g.reference_catalog(self.source_client()) if scope=="client" else g.all_tariffs()
+            self.catalog_scope=scope
+            return self.catalog_public({})
+        if method=="billing_filter":
+            self.crm();return self.catalog_public(a)
         if method=="billing_history":
             return list(self.crm().camera_history(self.source_client(),text(a,"camera",32)))
         if method=="billing_camera_image":
@@ -435,7 +498,11 @@ class Operations:
                 opt=next((t for t in options if t.id==value),None)
                 if opt is None: raise InputError("Тариф недоступен этому клиенту.")
                 detail=opt.name
-            else: detail="Включить" if value else "Отключить"
+            else:
+                service=next(s for s in c.services if s.id==camera)
+                expected={"Активный":0,"Неактивный":1}.get(service.status)
+                if expected is None or expected!=value: raise InputError("Статус неизвестен или не требует изменения. Обновите карточку CRM.")
+                detail="Включить" if value else "Отключить"
             return self.stage("billing",(act,camera,value,when,comment),f"CRM: {c.login} / камера {camera} / {detail} / {when}",self.billing_revision(c))
         if method in ("archive_discover","archive_diagnose"):
             archive=self.archives();self.discovery=None
@@ -507,8 +574,9 @@ class Operations:
             return {"output":str(result.output),"downloaded_seconds":result.downloaded_duration,"failed_seconds":result.failed_duration,"partial":result.partial,"error_count":len(result.errors)}
         if method=="agent_search":
             from linkvideo_vpn_helper.services.agent_service import AgentService
+            self.camera=None;self.agent=None;self.plan=None
             self.agent=AgentService(self.settings,creds)
-            self.camera=self.agent.find_camera(text(a,"serial",96));self.plan=None
+            self.camera=self.agent.find_camera(text(a,"serial",96))
             return {**asdict(self.camera),"version":self.camera.version_text}
         if method=="agent_settings":
             if self.camera is None: raise InputError("Сначала найдите камеру.")
@@ -701,7 +769,13 @@ class Operations:
                 try: g.change_tariff(TariffChange(c.id,camera,value,when,comment),client=c)
                 except BillingWriteOutcomeUnknown:
                     self.uncertain.add(key);raise InputError("Результат PUT неизвестен. Проверьте CRM перед повтором.")
-            else: g.set_camera_status(c,camera,value,when,comment)
+            else:
+                from linkvideo_vpn_helper.services.billing_token_transport import BillingWriteOutcomeUnknown
+                key=(c.id,camera,"status",value,when)
+                if key in self.uncertain: raise InputError("Предыдущая запись не подтверждена. Проверьте CRM.")
+                try: g.set_camera_status(c,camera,value,when,comment)
+                except BillingWriteOutcomeUnknown:
+                    self.uncertain.add(key);raise InputError("Результат изменения статуса неизвестен. Проверьте CRM перед повтором.")
             self.client=g.refresh_client(c)
             return asdict(self.client)
         if kind=="agent":
