@@ -93,6 +93,18 @@ class TestWorkspace(unittest.TestCase):
             ops.agent.get_image_enhance=lambda c:{"ImageRotation":2}
             with self.assertRaises(InputError):self.w.dispatch("commit",{"token":plan["token"]})
         self.assertEqual(calls,[])
+    def test_client_refresh_is_targeted_and_secret_free(self):
+        self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
+        calls=[]
+        row=NS(server="trusted.example",login="client",remote_address="172.16.0.1",ports=[10001],active_ports=[],disabled_ports=[],is_online=False,is_enabled=True,uptime="",last_logged_out="",password="hidden")
+        def get(*args,**kwargs):
+            calls.append(kwargs)
+            return row
+        self.w.service=NS(get_client=get)
+        result=self.w.dispatch("client_refresh",{"host":"trusted.example","login":"client"})
+        self.assertTrue(result["found"]);self.assertNotIn("password",result["client"])
+        self.assertEqual(calls,[{"include_port_conflicts":False}])
+        with self.assertRaises(InputError):self.w.dispatch("client_refresh",{"host":"other.example","login":"client"})
     def test_traffic_projection(self):
         self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
         self.w.service=NS(get_client=lambda *a,**kw:NS(is_online=True,rx_bytes=100,tx_bytes=20,uptime="1h",interface_name="l2tp",password="not-exported"))

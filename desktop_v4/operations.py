@@ -60,7 +60,7 @@ class MemorySettings:
     def sync(self): pass
 
 class Operations:
-    METHODS=frozenset(("client_detail","traffic_sample","camera_ports","inactive_fleet","inactive_batch_preview","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","lv_fleet","lv_batch_preview","create_suggest","camera_lookup","admin_login","admin_logout","admin_status","admin_retry","billing_refresh","billing_filter","billing_search","billing_select","billing_catalog","billing_history","billing_preview","billing_bulk_preview","billing_camera_image","create_auto","archive_discover","archive_diagnose","archive_download","archive_settings","archive_settings_update","agent_search","agent_settings","agent_preview","templates_list","templates_migrate","server_fleet","templates_save","templates_favorite","templates_delete","background_status")) | EXTRA_METHODS
+    METHODS=frozenset(("client_detail","client_refresh","traffic_sample","camera_ports","inactive_fleet","inactive_batch_preview","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","lv_fleet","lv_batch_preview","create_suggest","camera_lookup","admin_login","admin_logout","admin_status","admin_retry","billing_refresh","billing_filter","billing_search","billing_select","billing_catalog","billing_history","billing_preview","billing_bulk_preview","billing_camera_image","create_auto","archive_discover","archive_diagnose","archive_download","archive_settings","archive_settings_update","agent_search","agent_settings","agent_preview","templates_list","templates_migrate","server_fleet","templates_save","templates_favorite","templates_delete","background_status")) | EXTRA_METHODS
     def __init__(self,workspace):
         self.w=workspace
         self.settings=MemorySettings(workspace)
@@ -277,6 +277,11 @@ class Operations:
                 try: out["port_conflicts"]={str(k):len(v) for k,v in svc.inspect_port_conflicts(h,creds,c).items()};out["conflicts_verified"]=True
                 except Exception: out["conflicts_verified"]=False
             return out
+        if method=="client_refresh":
+            h=self.host(a);login=text(a,"login")
+            c=svc.get_client(h,creds,login,include_port_conflicts=False)
+            if c is None:return {"found":False,"server":h,"login":login}
+            return {"found":True,"client":public_client(c)}
         if method=="traffic_sample":
             h=self.host(a);login=text(a,"login")
             c=svc.get_client(h,creds,login)
@@ -736,7 +741,10 @@ class Operations:
                 if current.port_conflicts.get(value): raise InputError("Обнаружен конфликт NAT.")
                 if act=="remove_port": result=svc.remove_port(h,creds,login,value)
                 else: result=svc.recreate_port(h,creds,login,value)
-            return public_client(result)
+            out=public_client(result)
+            if act=="add":out["new_ports"]=sorted(set(result.ports)-set(current.ports))
+            out["conflicts_verified"]=False
+            return out
         if kind=="lv_batch":
             self.admin_only();action,hosts=p;rows=[]
             for i,h in enumerate(hosts):
