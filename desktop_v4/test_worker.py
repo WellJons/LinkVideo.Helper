@@ -72,12 +72,27 @@ class TestWorkspace(unittest.TestCase):
         self.assertFalse(settings.value("b2o/token",""))
     def test_rotation_wire_value_and_permission(self):
         self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
-        self.w.ops.camera=NS(serial_number="cam")
+        self.w.ops.camera=NS(serial_number="cam",server="agent.example")
+        self.w.ops.agent_values={"rotation":0}
         with patch.dict("os.environ",{"LV4_ENABLE_WRITES":"1"}):
             plan=self.w.dispatch("agent_preview",{"action":"rotation","value":3})
             self.assertIn("180",plan["label"])
             with self.assertRaises(InputError):
                 self.w.dispatch("agent_preview",{"action":"rotation","value":90})
+    def test_agent_independent_setting_read_and_revision(self):
+        self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
+        ops=self.w.ops;camera=NS(serial_number="cam",server="agent.example");ops.camera=camera
+        calls=[]
+        ops.agent=NS(find_camera=lambda serial:camera,get_image_enhance=lambda c:{"ImageRotation":1},
+            get_video_streams=lambda c:(_ for _ in ()).throw(ValueError("unsupported")),set_image_rotation=lambda *a:calls.append(a))
+        out=self.w.dispatch("agent_settings",{"action":"all"})
+        self.assertEqual(out["rotation"],1);self.assertNotIn("bitrate",out)
+        with patch.dict("os.environ",{"LV4_ENABLE_WRITES":"1"}):
+            with self.assertRaises(InputError):self.w.dispatch("agent_preview",{"action":"bitrate","value":2048})
+            plan=self.w.dispatch("agent_preview",{"action":"rotation","value":3})
+            ops.agent.get_image_enhance=lambda c:{"ImageRotation":2}
+            with self.assertRaises(InputError):self.w.dispatch("commit",{"token":plan["token"]})
+        self.assertEqual(calls,[])
     def test_traffic_projection(self):
         self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
         self.w.service=NS(get_client=lambda *a,**kw:NS(is_online=True,rx_bytes=100,tx_bytes=20,uptime="1h",interface_name="l2tp",password="not-exported"))

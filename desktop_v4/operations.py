@@ -73,6 +73,7 @@ class Operations:
         self.download_token=None
         self.camera=None
         self.agent=None
+        self.agent_values={}
         self.templates=None
         self.plan=None
         self.admin_name=""
@@ -102,7 +103,7 @@ class Operations:
     def clear_admin(self):
         self.clear_crm();self.clear_b2o()
         self.admin_name="";self.work_admin_credentials=None
-        self.camera=self.agent=None
+        self.camera=self.agent=None;self.agent_values={}
 
     def admin_state(self,errors=None):
         result={"username":self.admin_name,"b2o":self.b2o_ready,"crm":self.billing is not None}
@@ -595,26 +596,40 @@ class Operations:
             return {"output":str(result.output),"downloaded_seconds":result.downloaded_duration,"failed_seconds":result.failed_duration,"partial":bool(result.partial or self.discovery.coverage_percent<99 or (self.discovery.slices and self.discovery.gaps)),"error_count":len(result.errors),"failed_slices":[{"start":s.start,"end":s.end} for s in result.failed_slices]}
         if method=="agent_search":
             from linkvideo_vpn_helper.services.agent_service import AgentService
-            self.camera=None;self.agent=None;self.plan=None
+            self.camera=None;self.agent=None;self.plan=None;self.agent_values={}
             self.agent=AgentService(self.settings,creds)
             self.camera=self.agent.find_camera(text(a,"serial",96))
             return {**asdict(self.camera),"version":self.camera.version_text}
         if method=="agent_settings":
             if self.camera is None: raise InputError("Сначала найдите камеру.")
-            image=self.agent.get_image_enhance(self.camera)
-            streams=self.agent.get_video_streams(self.camera)
-            return {"rotation":int(image["ImageRotation"]),"bitrate":str(self.agent._main_video_encode_info(streams).get("BitRate",""))}
+            action=text(a,"action",24,False) or "all"
+            if action not in ("rotation","bitrate","all"): raise InputError("Выберите настройку.")
+            result={"serial":self.camera.serial_number,"errors":[]}
+            for key in ("rotation","bitrate") if action=="all" else (action,):
+                self.agent_values.pop(key,None)
+                try:
+                    if key=="rotation":
+                        value=int(self.agent.get_image_enhance(self.camera)["ImageRotation"])
+                        if value not in (0,1,2,3): raise ValueError()
+                    else:
+                        value=int(self.agent._main_video_encode_info(self.agent.get_video_streams(self.camera))["BitRate"])
+                        if not 1<=value<=100000: raise ValueError()
+                    result[key]=value;self.agent_values[key]=value
+                except Exception:
+                    result["errors"].append("Не подтверждено: "+key)
+            return result
         if method=="agent_preview":
             self.writes_enabled()
             if self.camera is None: raise InputError("Сначала найдите камеру.")
             action=text(a,"action",24)
             if action=="timezone": value=number(a,"value",-12,14)
-            elif action=="rotation":
-                value=number(a,"value",0,3)
+            elif action=="rotation": value=number(a,"value",0,3)
             elif action=="bitrate": value=number(a,"value",1,100000)
             else: raise InputError("Неизвестная настройка.")
+            if action!="timezone" and action not in self.agent_values: raise InputError("Сначала прочитайте текущую настройку именно этой камеры.")
+            old=self.agent_values.get(action)
             label={0:"Обычное изображение",1:"Вертикальное отражение",2:"Горизонтальное отражение",3:"Поворот на 180°"}.get(value) if action=="rotation" else str(value)
-            return self.stage("agent",(action,value),f"Камера {self.camera.serial_number}: {action} = {label}",self.camera.serial_number)
+            return self.stage("agent",(action,value,old),f"Камера {self.camera.serial_number} / {self.camera.server}: {action} = {label}",(self.camera.serial_number,self.camera.server))
         if method=="templates_migrate":
             from desktop_v4.template_migration import migrate_templates
             path=Path(text(a,"path",2048))
@@ -796,14 +811,44 @@ class Operations:
             self.client=g.refresh_client(c)
             return asdict(self.client)
         if kind=="agent":
-            action,value=p
-            if self.camera is None or self.camera.serial_number!=revision: raise InputError("Камера изменилась.")
-            camera=self.agent.find_camera(revision)
-            if camera.server!=self.camera.server: raise InputError("Камера сменила сервер. Повторите поиск.")
+            action,value,old=p
+            if self.camera is None or (self.camera.serial_number,self.camera.server)!=revision: raise InputError("Камера изменилась.")
+            camera=self.agent.find_camera(revision[0])
+            if camera.server!=revision[1] or camera.serial_number!=revision[0]: raise InputError("Камера сменила сервер. Повторите поиск.")
+            if cancel.is_set(): raise InputError("Операция отменена.")
             if action=="timezone":
-                replies=self.agent.configure_time(camera,value)
-                return {"responses":[int(r.status_code) for r in replies]}
-            if action=="rotation": before,after=self.agent.set_image_rotation(camera,self.agent.get_image_enhance(camera),value)
-            else: before,after=self.agent.set_bitrate(camera,self.agent.get_video_streams(camera),value)
-            return {"before":before,"after":after}
+                # Three writes are non-atomic. Verify the embedded LAPI
+                # response as well as HTTP before declaring each stage done.
+                import time
+                stages=(
+                    ("Time","/LAPI/V1.0/System/Time",{"TimeZone":f"GMT{value:+03d}:00","DeviceTime":int(time.time())}),
+                    ("NTP","/LAPI/V1.0/System/Time/NTP",{"Num":1,"NTPServerInfos":[{"Enabled":1,"AddressType":2,"DomainName":"ntp.goodline.info","Port":123,"SynchronizeInterval":3600}]}),
+                    ("SyncMode","/LAPI/V1.0/System/Time/SyncMode",{"Mode":3}),
+                )
+                rows=[]
+                for name,path,payload in stages:
+                    if cancel.is_set(): break
+                    emit("Настройка "+name)
+                    try:
+                        reply=self.agent.proxy_pipe(camera,self.agent._raw_http_put(path,payload))
+                        self.agent._proxy_payload(reply)
+                        rows.append({"stage":name,"accepted":True,"http":int(reply.status_code)})
+                    except Exception:
+                        rows.append({"stage":name,"accepted":False})
+                        break
+                rows.extend({"stage":name,"accepted":None} for name,_,_ in stages[len(rows):])
+                return {"action":action,"serial":camera.serial_number,"stages":rows,"confirmed":False,"accepted":all(x["accepted"] is True for x in rows)}
+            self.agent_values.pop(action,None)
+            if action=="rotation":
+                current=self.agent.get_image_enhance(camera)
+                if int(current["ImageRotation"])!=old: raise InputError("Ориентация изменилась. Обновите настройку.")
+                if cancel.is_set(): raise InputError("Операция отменена.")
+                before,after=self.agent.set_image_rotation(camera,current,value)
+            else:
+                current=self.agent.get_video_streams(camera)
+                if int(self.agent._main_video_encode_info(current)["BitRate"])!=old: raise InputError("Битрейт изменился. Обновите настройку.")
+                if cancel.is_set(): raise InputError("Операция отменена.")
+                before,after=self.agent.set_bitrate(camera,current,value)
+            self.agent_values[action]=int(after)
+            return {"action":action,"serial":camera.serial_number,"before":before,"after":after,"confirmed":True}
         raise InputError("Неизвестное подтверждение.")

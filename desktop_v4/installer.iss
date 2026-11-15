@@ -1,5 +1,5 @@
 #define MyAppName "LinkVideo.Helper 4 Preview"
-#define MyAppVersion "4.0.0-alpha.8"
+#define MyAppVersion "4.0.0-alpha.9"
 [Setup]
 AppId=LinkVideo.Helper.4.Preview
 AppName={#MyAppName}
@@ -11,7 +11,7 @@ PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=..\dist-v4
-OutputBaseFilename=LinkVideo.Helper.4.0.0-alpha.8-Setup
+OutputBaseFilename=LinkVideo.Helper.4.0.0-alpha.9-Setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
