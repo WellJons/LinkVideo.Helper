@@ -139,8 +139,23 @@ class Extended:
         from desktop_v4.operations import InputError
         if self.cloud is None: raise InputError("VPNSync не подключён.")
         result=self.cloud.request("GET","/v1/archive/restore/preflight",params={"server":h,"login":login},timeout=20.0)
-        if not isinstance(result,dict) or result.get("ok") is not True or result.get("conflicts"):
-            raise InputError("Восстановление заблокировано VPNSync: обнаружен конфликт или проверка не завершена.")
+        if not isinstance(result,dict): raise InputError("Проверка VPNSync не подтверждена.")
+        conflicts=result.get("conflicts") or []
+        if result.get("ok") is not True or conflicts:
+            labels={"login":"Занят PPP-логин","profile":"Занят PPP-профиль","remote-address-secret":"IP занят PPP-учёткой","remote-address-profile":"IP занят PPP-профилем","nat-port":"Занят внешний NAT-порт"}
+            reasons=[]
+            for item in conflicts[:12] if isinstance(conflicts,list) else []:
+                if not isinstance(item,dict): continue
+                kind=item.get("type");label=labels.get(kind,"Конфликт RouterOS");value=str(item.get("value") or "")
+                if kind in ("remote-address-secret","remote-address-profile","nat-port") and re.fullmatch(r"[0-9.:-]{1,64}",value):label+=": "+value
+                reasons.append(label)
+            raise InputError("Восстановление заблокировано. "+("; ".join(reasons) or "Проверка конфликтов не подтверждена."))
+        ports=result.get("ports")
+        if not isinstance(ports,list):raise InputError("VPNSync не подтвердил список исходных портов.")
+        try:
+            if any(type(x) not in (int,str) or not str(x).isascii() or not str(x).isdigit() or not 1<=int(x)<=65535 for x in ports):raise ValueError()
+            result={**result,"ports":sorted(set(map(int,ports)))}
+        except (ValueError,TypeError):raise InputError("Некорректные порты в preflight VPNSync.") from None
         return result
     def audit(self,kind,params,success,result=None):
         if self.cloud is None or kind not in ("create","vpn","delete"): return
@@ -263,18 +278,20 @@ class Extended:
                     n=int(p)
                     if 1<=n<=65535: ports.append(str(n))
                 except (TypeError,ValueError): pass
-            return o.stage("cloud_restore",(h,login),f"Восстановить {h}/{login} из PostgreSQL без замены занятых портов. VPN IP: {row['remote_address']}. Порты: "+(", ".join(ports) or ", ".join(row["ports"]) or "не указаны"))
+            return o.stage("cloud_restore",(h,login),f"Восстановить {h}/{login} из PostgreSQL без замены занятых портов. VPN IP: {row['remote_address']}. Порты: "+(", ".join(ports) or "нет"),tuple(preflight["ports"]))
         if m=="cloud_status":
             if self.cloud is None: return {"connected":False}
             config=self.cloud.config
             return {"connected":True,"host":config.host,"port":config.port,"username":config.username,"tls":config.use_tls}
         if m=="cloud_disconnect":
+            o.plan=None
             if self.cloud is not None:
                 try: self.cloud._session.close()
                 except Exception: pass
             self.cloud=None;self.cloud_deleted={}
             return {"connected":False}
         if m=="cloud_connect":
+            o.plan=None
             from linkvideo_vpn_helper.services.cloud_vpnsync import CloudVPNSyncClient,CloudServerConfig
             host=text(a,"host",253)
             if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}",host): raise InputError("Укажите только DNS-имя или IPv4 облачного сервера.")
@@ -421,15 +438,17 @@ class Extended:
         o=self.o;svc=o.w.service;creds=o.w.session
         if kind=="cloud_restore":
             o.admin_only();self.destructive_enabled();h,login=p
-            self.cloud_preflight(h,login)
+            current=self.cloud_preflight(h,login)
+            if tuple(current["ports"])!=revision:raise InputError("Порты в архиве изменились. Повторите подготовку.")
+            if svc.get_client(h,creds,login) is not None:raise InputError("Учётка уже существует на MikroTik.")
             if cancel.is_set(): raise InputError("Операция отменена.")
             result=self.cloud.request("POST","/v1/archive/restore",json={"server":h,"login":login},timeout=45.0)
             if not isinstance(result,dict) or result.get("ok") is not True: raise InputError("Восстановление не подтверждено. Проверьте MikroTik.")
             fresh=svc.get_client(h,creds,login)
-            if fresh is None: raise InputError("VPNSync принял восстановление, но живой MikroTik не подтвердил учётку. Проверьте состояние перед повтором.")
+            if fresh is None or set(fresh.ports)!=set(revision): raise InputError("VPNSync принял восстановление, но живой MikroTik не подтвердил учётку и исходные порты. Проверьте состояние перед повтором.")
             self.cloud_deleted.pop((h,login),None)
             from desktop_v4.operations import public_client
-            return {"restored":True,"server":h,"login":login,"client":public_client(fresh)}
+            return {"restored":True,"server":h,"login":login,"client":public_client(fresh),"restored_objects":result.get("restored_objects") if type(result.get("restored_objects")) is int else None}
         if kind=="delete":
             o.admin_only();self.destructive_enabled();h,login=p
             return self.confirmed_delete(h,login,revision,cancel,emit)
@@ -442,12 +461,30 @@ class Extended:
             restore=self.restore_service()
             row=restore.backend.find_deleted_row(h,login)
             if row is None or hashlib.sha256(json.dumps(row,sort_keys=True,default=str).encode()).hexdigest()!=revision: raise InputError("Резервная запись изменилась. Повторите поиск.")
+            # Bind the exact approved row and defer deleting archive metadata
+            # until live readback succeeds. A stale archive is safer than loss.
+            from copy import deepcopy
+            backend=restore.backend
+            class PinnedRecovery:
+                def find_deleted_row(self,server,account):
+                    if (server,account)!=(h,login):raise ValueError("Unexpected restore target")
+                    return deepcopy(row)
+                def remove_deleted_rows(self,*args):
+                    return None
+            restore.backend=PinnedRecovery()
+            if cancel.is_set():raise InputError("Операция отменена.")
             result=restore.restore(h,creds,login)
             fresh=svc.get_client(h,creds,login)
             if fresh is None or set(result.ports)!=set(fresh.ports): raise InputError("Восстановление не подтверждено повторным чтением. Проверьте MikroTik перед повтором.")
+            cleaned=False
+            try:
+                current=backend.find_deleted_row(h,login)
+                if current is not None and hashlib.sha256(json.dumps(current,sort_keys=True,default=str).encode()).hexdigest()==revision:
+                    backend.remove_deleted_rows(h,[login]);cleaned=True
+            except Exception:pass
             self.deleted.pop((h,login),None)
             from desktop_v4.operations import public_client
-            return {**asdict(result),"restored":True,"client":public_client(fresh)}
+            return {**asdict(result),"restored":True,"client":public_client(fresh),"archive_cleanup_confirmed":cleaned}
         if kind=="sheets":
             o.admin_only()
             from linkvideo_vpn_helper.services.vpn_sheets_sync import VPNSheetsSyncService

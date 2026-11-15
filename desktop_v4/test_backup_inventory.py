@@ -24,3 +24,17 @@ class BackupInventoryTests(unittest.TestCase):
             p["files"][0]["name"]="../outside"
             (folder/"manifest.json").write_text(json.dumps(p))
             self.assertFalse(verify(root,"FULL_fixture",Event(),lambda *_:None)["verified"])
+
+class CloudPreflightTests(unittest.TestCase):
+    def test_conflicts_never_return_raw_secrets(self):
+        from desktop_v4.extra_operations import Extended
+        from desktop_v4.operations import InputError
+        from types import SimpleNamespace as NS
+        x=Extended(NS())
+        x.cloud=NS(request=lambda *a,**kw:{"ok":False,"conflicts":[{"type":"nat-port","value":10001,"owner":"SECRET_TOKEN"}]})
+        with self.assertRaises(InputError) as err:x.cloud_preflight("host","client")
+        self.assertIn("10001",str(err.exception));self.assertNotIn("SECRET_TOKEN",str(err.exception))
+        x.cloud=NS(request=lambda *a,**kw:{"ok":True,"conflicts":[],"ports":["10002",10001]})
+        self.assertEqual(x.cloud_preflight("host","client")["ports"],[10001,10002])
+        x.cloud=NS(request=lambda *a,**kw:{"ok":True,"conflicts":[]})
+        with self.assertRaises(InputError):x.cloud_preflight("host","client")
