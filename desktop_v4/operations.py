@@ -70,6 +70,7 @@ class Operations:
         self.client=None
         self.archive=None
         self.discovery=None
+        self.download_token=None
         self.camera=None
         self.agent=None
         self.templates=None
@@ -94,6 +95,7 @@ class Operations:
 
     def clear_b2o(self):
         self.archive=self.discovery=None
+        self.download_token=None
         self.extra.camera_report=None;self.b2o_ready=False;self.admin_credentials=None;self.plan=None
         self.settings.remove("b2o")
 
@@ -505,14 +507,18 @@ class Operations:
                 detail="Включить" if value else "Отключить"
             return self.stage("billing",(act,camera,value,when,comment),f"CRM: {c.login} / камера {camera} / {detail} / {when}",self.billing_revision(c))
         if method in ("archive_discover","archive_diagnose"):
-            archive=self.archives();self.discovery=None
+            archive=self.archives();self.discovery=None;self.download_token=None
             cam=text(a,"camera",128);operator=archive.b2o.resolve_operator_id(cam,self.operator(a))
             try: start=datetime.fromisoformat(text(a,"start",25));end=datetime.fromisoformat(text(a,"end",25))
             except ValueError: raise InputError("Введите период.")
             if start.tzinfo or end.tzinfo or not 0<(end-start).total_seconds()<=7*86400: raise InputError("Период от 1 секунды до 7 суток, локальное время камеры.")
             d=archive.discover(cam,operator,start,end,lambda title,_:emit(title),cancel)
-            self.discovery=d
+            if cancel.is_set(): raise InputError("Операция отменена.")
             out=self.archive_public(d)
+            if method=="archive_discover" and d.has_downloadable_archive:
+                from desktop_v4.archive_report import archive_filename
+                self.discovery=d;self.download_token=secrets.token_urlsafe(24)
+                out["download_token"]=self.download_token;out["filename"]=archive_filename(d)
             if method=="archive_diagnose":
                 from linkvideo_vpn_helper.services.archive_diagnosis_engine import ArchiveDiagnosisEngine
                 ids=a.get("compare",[]);server_ids=a.get("server_compare",[])
@@ -522,22 +528,34 @@ class Operations:
                     except Exception: return str(raw).strip()
                 main_id=canonical(d.camera.camera_id)
                 address_ids={canonical(x) for x in ids}
-                auto_error=False
+                auto_error=False;debug={"pages":0,"found_total":0,"online_same_server":0,"error_count":0}
+                limit=number(a,"compare_limit",1,15) if "compare_limit" in a else 15
+                for raw in ids+server_ids:
+                    if archive.b2o.resolve_operator_id(raw,operator)!=operator: raise InputError("Для сравнения выберите камеры того же оператора.")
                 if not server_ids:
                     emit("Подбираю другие камеры vcore")
                     try:
-                        candidates,_=archive.b2o.cameras_on_server(operator,d.camera.server,15)
+                        candidates,raw_debug=archive.b2o.cameras_on_server(operator,d.camera.server,min(30,limit+len(address_ids)+1))
+                        debug={k:max(0,int(raw_debug.get(k,0) or 0)) for k in ("pages","found_total","online_same_server")};debug["error_count"]=len(raw_debug.get("errors") or [])
+                        auto_error=bool(debug["error_count"])
                         server_ids=[str(row.get("id_camera") or "") for row in candidates if isinstance(row,dict)]
                     except Exception:
-                        auto_error=True;server_ids=[]
+                        auto_error=True;server_ids=[];debug["error_count"]=1
                 def compare(group,fast=False):
                     out=[]
-                    clean=list(dict.fromkeys(canonical(x) for x in group if x and canonical(x)!=main_id and (not fast or canonical(x) not in address_ids)))[:15 if fast else 8]
-                    with ThreadPoolExecutor(max_workers=4) as pool:
+                    clean=list(dict.fromkeys(canonical(x) for x in group if x and canonical(x)!=main_id and (not fast or canonical(x) not in address_ids)))[:limit if fast else 8]
+                    with ThreadPoolExecutor(max_workers=6 if fast else 4) as pool:
                         tasks={pool.submit(archive.diagnose_epoch,x,operator,d.requested_start,d.requested_end,fast=fast,cancel_event=cancel):x for x in clean}
                         for task in as_completed(tasks):
+                            if cancel.is_set():
+                                for f in tasks: f.cancel()
+                                break
                             x=tasks[task]
-                            try: out.append((x,task.result(),None))
+                            try:
+                                item=task.result()
+                                if fast and archive.b2o.normalize_vcore_host(item.camera.server)!=archive.b2o.normalize_vcore_host(d.camera.server):
+                                    raise ValueError("Сервер камеры изменился")
+                                out.append((x,item,None))
                             except Exception: out.append((x,None,RuntimeError("Не удалось проверить камеру")))
                     return out
                 emit("Сравниваю камеры адреса");addr=compare(ids)
@@ -548,11 +566,14 @@ class Operations:
                 out["diagnosis"]={"title":dx.title,"summary":dx.summary,"confidence":dx.confidence_text,"side":dx.side_text,"cautions":dx.cautions}
                 out["compared"]={"address":len(addr),"server":len(other),"failed":sum(row[1] is None for row in addr+other),"auto_error":auto_error}
                 out["diagnosis"]["evidence"]=[asdict(x) for x in dx.evidence]
-                out["diagnosis"]["gaps"]=[{"start":x.start,"end":x.end,"title":x.title,"summary":x.summary} for x in dx.gaps]
+                out["diagnosis"]["gaps"]=[{"start":x.start,"end":x.end,"title":x.title,"summary":x.summary} for x in dx.gaps] if d.slices else []
+                from desktop_v4.archive_report import comparison,make_reports
+                out["address_compare"]=comparison(d,addr);out["server_compare"]=comparison(d,other);out["comparison_debug"]=debug
+                out["reports"]=make_reports(d,dx,out["address_compare"],out["server_compare"],debug)
             return out
         if method=="archive_download":
             archive=self.archives()
-            if self.discovery is None or not self.discovery.has_downloadable_archive: raise InputError("Сначала найдите доступный архив.")
+            if self.discovery is None or not self.discovery.has_downloadable_archive or not self.download_token or text(a,"token",100)!=self.download_token: raise InputError("Результат поиска устарел. Повторите поиск архива.")
             path=Path(text(a,"output",2048))
             if not path.is_absolute() or path.suffix.lower()!=".mp4" or path.exists(): raise InputError("Выберите новый MP4-файл без перезаписи.")
             mode=text(a,"mode",20)
@@ -571,7 +592,7 @@ class Operations:
                     emit(str(p.get("title") or "Скачивание архива")[:100],val if type(val) in (int,float) else None)
             try: result=archive.download(self.discovery,path,progress,cancel)
             finally: archive._lv_archive_manual_command=""
-            return {"output":str(result.output),"downloaded_seconds":result.downloaded_duration,"failed_seconds":result.failed_duration,"partial":result.partial,"error_count":len(result.errors)}
+            return {"output":str(result.output),"downloaded_seconds":result.downloaded_duration,"failed_seconds":result.failed_duration,"partial":bool(result.partial or self.discovery.coverage_percent<99 or (self.discovery.slices and self.discovery.gaps)),"error_count":len(result.errors),"failed_slices":[{"start":s.start,"end":s.end} for s in result.failed_slices]}
         if method=="agent_search":
             from linkvideo_vpn_helper.services.agent_service import AgentService
             self.camera=None;self.agent=None;self.plan=None
@@ -641,12 +662,8 @@ class Operations:
 
     @staticmethod
     def archive_public(d):
-        return {"camera":d.camera.label,"server":d.camera.server,"timezone":d.camera.timezone_offset,
-                "requested_start":d.requested_start,"requested_end":d.requested_end,"requested_seconds":d.requested_duration,"covered_seconds":d.covered_duration,
-                "coverage":d.coverage_percent,"downloadable":d.has_downloadable_archive,
-                "exact_timeline":bool(d.slices),"checked":len(d.checked_hosts),"error_count":len(d.errors),
-                "gaps":[{"start":x.start,"end":x.end} for x in d.gaps],
-                "slices":[{"start":x.start,"end":x.end,"host":x.host,"source":x.source} for x in d.slices]}
+        from desktop_v4.archive_report import project
+        return project(d)
 
     def execute(self,kind,p,revision,cancel,emit):
         svc=self.w.service;creds=self.w.session

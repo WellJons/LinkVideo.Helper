@@ -110,9 +110,11 @@ handle('helper:task-scheduler',async()=>{
 handle('helper:archive-download',async a=>{
  if(!['ffmpeg','ffmpeg_no_audio','curl'].includes(a?.mode))throw Error('Выберите метод.');
  const manual=clean(a?.manual??'',4000);if(manual===null)throw Error('Слишком длинная команда FFmpeg.');
- const result=await dialog.showSaveDialog(win,{title:'Сохранить архив',defaultPath:'archive.mp4',filters:[{name:'Видео MP4',extensions:['mp4']}]});
+ const token=clean(a?.token,100);if(!token)throw Error('Повторите поиск архива.');
+ const filename=typeof a.filename==='string'&&/^[A-Za-z0-9_.-]{1,180}\.mp4$/.test(a.filename)?a.filename:'archive.mp4';
+ const result=await dialog.showSaveDialog(win,{title:'Сохранить архив',defaultPath:path.join(app.getPath('videos'),filename),filters:[{name:'Видео MP4',extensions:['mp4']}]});
  if(result.canceled||!result.filePath)throw Error('Сохранение отменено.');
- const out=await bridge.request('archive_download',{output:result.filePath,mode:a.mode,manual});lastArchive=out?.output===result.filePath?result.filePath:null;return out;
+ const out=await bridge.request('archive_download',{output:result.filePath,mode:a.mode,manual,token});lastArchive=out?.output===result.filePath?result.filePath:null;return out;
 });
 handle('helper:archive-location',async()=>{
  if(!lastArchive)throw Error('Нет сохранённого архива текущего сеанса.');

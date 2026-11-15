@@ -35,3 +35,5 @@ main{padding:0 34px;max-width:1760px}.topbar{min-height:62px;margin-bottom:26px}
 .selected-targets{margin:12px 0}.selected-targets p{white-space:pre-wrap;line-height:1.55;overflow-wrap:anywhere}.selected-targets #inactive-selected-targets{max-height:180px;overflow:auto}
 
 .session-strip{display:flex;justify-content:space-between;gap:12px;align-items:center;margin:12px 0 18px;flex-wrap:wrap}.session-strip .eyebrow{margin:0 0 6px}.session-strip h3{margin:0}.session-strip p{margin-bottom:0}.session-strip .actionbar{margin:0;flex-wrap:wrap}
+
+.diagnosis-report{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6;max-height:410px;overflow:auto;padding:18px;background:var(--bg);border:1px solid var(--line);border-radius:12px;font-family:inherit;font-size:13px;user-select:text}
