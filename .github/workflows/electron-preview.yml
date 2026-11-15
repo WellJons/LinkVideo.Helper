@@ -30,7 +30,7 @@ jobs:
       - name: Install Python runtime build dependencies
         run: python -m pip install -r requirements.txt pyinstaller
       - name: Test Python RPC without production connections
-        run: python -m unittest desktop_v4.test_worker desktop_v4.test_template_migration desktop_v4.test_delete_recovery desktop_v4.test_billing_parity desktop_v4.test_archive_report
+        run: python -m unittest desktop_v4.test_worker desktop_v4.test_template_migration desktop_v4.test_delete_recovery desktop_v4.test_billing_parity desktop_v4.test_archive_report desktop_v4.test_backup_inventory
       - name: Run original 3.0.27 offline CRM protocol regression scripts
         shell: pwsh
         run: |

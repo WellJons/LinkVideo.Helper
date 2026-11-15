@@ -235,19 +235,28 @@
   if(S.editTemplate){const t=S.editTemplate,title=field('Название','text',t.title||''),category=field('Категория','text',t.category||''),body=field('Текст','textarea',t.body||'');section(root,t.id?'Редактирование':'Новый шаблон');form(root,title,category,body);action(root,live('Сохранить',()=>run(async()=>{await op('templates_save',{id:t.id||null,title:value(title),category:value(category),body:value(body)});S.editTemplate=null;await load()}),'primary'))}
  }
  function recovery(root){
-  root.append(hero('VPN / RECOVERY','Резерв и восстановление','FULL backup хранится локально в приватном профиле. Сценарии восстановления используют прежний аварийный источник Sheets.'));
+  root.append(hero('VPN / RECOVERY','Резерв и восстановление','FULL backup — локальная копия конфигурации. PostgreSQL — основной источник восстановления; Google Sheets — аварийный.'));
   if(!preview&&identity?.role!=='sysadmin'){root.append(notice('Доступно системному администратору.'));return}
   if(!ensureHosts(root))return;const h=serverField();form(root,h);
   action(root,live('FULL backup сервера',()=>run(async()=>{S.backup=await op('backup',{host:setHost(h)})}),'primary'));
   action(root,live('FULL backup всех',()=>run(async()=>{S.backup=await op('backup',{all:true})})));
   if(S.backup){keyValue(root,[['Успешно',S.backup.success],['Ошибки',S.backup.failed],['Папка',S.backup.folder]]);root.append(table(['Сервер','Результат'],S.backup.servers.map(r=>[r.server,r.ok?'Подтверждён':'Ошибка'])))}
+  section(root,'Локальные FULL backup');root.append(notice('Копии содержат пароли PPP. Не отправляйте их клиентам и не сохраняйте в общедоступные папки.'));
+  action(root,live('Открыть папку копий',()=>run(()=>rpc('backupFolder'))));
+  action(root,live('Загрузить список копий',()=>run(async()=>{S.backupInventory=await op('backup_inventory')})));
+  if(S.backupInventory)root.append(table(['Копия','Создано UTC','Серверов OK','Ошибки','Файлов',''],S.backupInventory.map(x=>[x.id,x.created,x.success,x.failed,x.files,live('Проверить SHA-256',()=>run(async()=>{S.backupVerify=null;S.backupVerify=await op('backup_verify',{id:x.id})}))])));
+  if(S.backupVerify){const v=S.backupVerify;root.append(notice(v.verified?(v.complete?'Контрольные суммы совпадают. Manifest отмечает все серверы успешными.':'Контрольные суммы совпадают, но резервная копия неполная.'):'Целостность не подтверждена или проверка отменена.'));root.append(table(['Файл','Проверка'],v.files.map(x=>[x.name,x.ok?'SHA-256 совпадает':'Не подтверждено'])))}
+  section(root,'PostgreSQL · Архив удалённых VPN');
+  const cq=field('Удалённый VPN (логин или порт)','text',S.cloudDeletedQuery||'');form(root,cq);
+  action(root,live('Найти в PostgreSQL',()=>run(async()=>{S.cloudDeletedQuery=value(cq);S.cloudDeleted=null;S.cloudDeleted=await op('cloud_deleted_search',{query:S.cloudDeletedQuery})}),'primary'));
+  if(S.cloudDeleted){if(S.cloudDeleted.error)root.append(notice(S.cloudDeleted.error));else root.append(table(['Логин','Сервер','VPN IP','Удалён','Порты','Пароль',''],S.cloudDeleted.rows.map(x=>[x.login,x.server,x.remote_address,x.deleted_at,x.ports.join(', '),x.password_saved?'Сохранён':'Нет',button('Восстановить',()=>stage('cloud_restore_preview',{host:x.server,login:x.login}),'quiet',preview||!x.password_saved)])))}
   section(root,'Google Sheets · Аварийное восстановление');action(root,live('Выбрать JSON-ключ',()=>run(async()=>{S.sheets=await rpc('fileAction','sheets_load')})));
   if(S.sheets?.configured)root.append(notice('Ключ принят в память текущего процесса.'));
   const q=field('Удалённый логин','text',S.deletedQuery||'');form(root,q);
-  action(root,live('Искать удалённые',()=>run(async()=>{S.deletedQuery=value(q);S.deleted=await op('deleted_search',{query:S.deletedQuery})}),'primary'));
+  action(root,live('Искать удалённые',()=>run(async()=>{S.deletedQuery=value(q);S.deleted=null;S.deleted=await op('deleted_search',{query:S.deletedQuery})}),'primary'));
   action(root,live('Подготовить экспорт сервера в Sheets',()=>stage('sheets_preview',{host:setHost(h)})));action(root,live('Подготовить аварийный экспорт всех',()=>stage('sheets_preview',{all:true})));
-  if(S.deleted)root.append(table(['Логин','Сервер','VPN IP','Удалён','Порты',''],S.deleted.map(r=>[r.login,r.server,r.remote_address,r.deleted_at,r.ports,live('Восстановить',()=>stage('restore_preview',{host:r.server,login:r.login}))])));
-  previewNotice(root,currentPlan(),out=>{if(out?.sheets_results)S.sheetsResult=out});if(S.sheetsResult){section(root,'Результаты аварийного экспорта');root.append(table(['Сервер','Подтверждение','Клиентов','Изменено'],S.sheetsResult.sheets_results.map(x=>[x.server,x.success?'Подтверждено':'Не подтверждено',x.clients,x.changed])));if(S.sheetsResult.cancelled)root.append(notice('Экспорт остановлен; уже подтверждённые записи не отменяются.'))}resultNote(root);
+  if(S.deleted)root.append(table(['Логин','Сервер','VPN IP','Удалён','Порты',''],S.deleted.map(r=>[r.login,r.server,r.remote_address,r.deleted_at,r.ports,button('Восстановить',()=>stage('restore_preview',{host:r.server,login:r.login}),'quiet',preview||!r.password_saved)])));
+  previewNotice(root,currentPlan(),out=>{if(out?.sheets_results)S.sheetsResult=out;if(out?.restored){S.restoreResult=out;S.deleted=null;S.cloudDeleted=null}});if(S.restoreResult){const x=S.restoreResult;section(root,'Восстановленная учётка');keyValue(root,[['Логин',x.login],['Сервер',x.server],['VPN IP',x.client?.remote_address],['Порты',x.client?.ports],['NAT создано',x.nat_created]]);if(x.port_replacements&&Object.keys(x.port_replacements).length)root.append(table(['Старый внешний порт','Новый внешний порт'],Object.entries(x.port_replacements)));action(root,live('Открыть карточку',()=>{go('search');client(x.server,x.login)}));action(root,live('Копировать VPN',()=>rpc('copyVpn',x.server,x.login).then(()=>toast('Скопировано')).catch(error)))}if(S.sheetsResult){section(root,'Результаты аварийного экспорта');root.append(table(['Сервер','Подтверждение','Клиентов','Изменено'],S.sheetsResult.sheets_results.map(x=>[x.server,x.success?'Подтверждено':'Не подтверждено',x.clients,x.changed])));if(S.sheetsResult.cancelled)root.append(notice('Экспорт остановлен; уже подтверждённые записи не отменяются.'))}resultNote(root);
  }
  function cloudSettings(root){
   section(root,'Облачный сервер · VPNSync');

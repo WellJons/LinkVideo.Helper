@@ -10,7 +10,7 @@ import re
 import subprocess
 import shutil
 
-METHODS=frozenset(("copy_vpn","backup","delete_preview","backup_status","sheets_load","deleted_search","restore_preview","sheets_preview","cloud_connect","cloud_status","cloud_disconnect","cloud_restore_preview","activity","camera_inspect","camera_live","agent_image","b2o_read","b2o_create_preview","billing_recipient","billing_transfer_preview","templates_import","templates_attach","templates_reply","templates_images","templates_detach","winbox","registry_list","registry_update"))
+METHODS=frozenset(("copy_vpn","backup","delete_preview","backup_status","backup_inventory","backup_verify","cloud_deleted_search","sheets_load","deleted_search","restore_preview","sheets_preview","cloud_connect","cloud_status","cloud_disconnect","cloud_restore_preview","activity","camera_inspect","camera_live","agent_image","b2o_read","b2o_create_preview","billing_recipient","billing_transfer_preview","templates_import","templates_attach","templates_reply","templates_images","templates_detach","winbox","registry_list","registry_update"))
 class Extended:
     def __init__(self,ops):
         self.o=ops;self.cloud=None;self.sheets=None;self.deleted={};self.cloud_deleted={};self.recipients={};self.camera_report=None
@@ -209,6 +209,14 @@ class Extended:
                     "servers":[{"server":r.server,"ok":r.ok} for r in result.servers]}
         if m=="backup_status":
             o.admin_only();return {"folder":str(self.backup_service().default_root())}
+        if m in ("backup_inventory","backup_verify"):
+            from desktop_v4.backup_inventory import inventory,verify
+            o.admin_only();root=self.backup_service().default_root()
+            return inventory(root) if m=="backup_inventory" else verify(root,text(a,"id",240),cancel,emit)
+        if m=="cloud_deleted_search":
+            o.admin_only()
+            rows,error=self.search_cloud_archive(text(a,"query",128))
+            return {"rows":rows,"error":error}
         if m=="delete_preview":
             o.admin_only();self.destructive_enabled();o.writes_enabled()
             h=o.host(a);login=text(a,"login")
@@ -238,7 +246,8 @@ class Extended:
             h=o.host(a);login=text(a,"login")
             row=self.deleted.get((h,login))
             if not row or not row.password_saved: raise InputError("Найдите подтверждённую удалённую учётку с recovery-данными.")
-            return o.stage("restore",(h,login),f"Восстановить VPN {h}/{login} после FULL backup")
+            rev=hashlib.sha256(json.dumps(row.row,sort_keys=True,default=str).encode()).hexdigest()
+            return o.stage("restore",(h,login),f"Восстановить VPN {h}/{login} после FULL backup. Аварийный режим Sheets: занятые внешние порты могут быть заменены на свободные с сохранением внутренних портов.",rev)
         if m=="sheets_preview":
             o.admin_only();self.sheets_service();hosts=tuple(o.w.hosts) if a.get("all") is True else (o.host(a),)
             if not hosts: raise InputError("Нет доверенных серверов.")
@@ -430,7 +439,15 @@ class Extended:
             result=self.backup_service().backup_one(h,creds,prefix="BEFORE_"+kind.upper())
             if not result.ok or cancel.is_set(): raise InputError("FULL backup не подтверждён. Операция не начата.")
             if svc.get_client(h,creds,login) is not None: raise InputError("Клиент уже существует на MikroTik.")
-            return asdict(self.restore_service().restore(h,creds,login))
+            restore=self.restore_service()
+            row=restore.backend.find_deleted_row(h,login)
+            if row is None or hashlib.sha256(json.dumps(row,sort_keys=True,default=str).encode()).hexdigest()!=revision: raise InputError("Резервная запись изменилась. Повторите поиск.")
+            result=restore.restore(h,creds,login)
+            fresh=svc.get_client(h,creds,login)
+            if fresh is None or set(result.ports)!=set(fresh.ports): raise InputError("Восстановление не подтверждено повторным чтением. Проверьте MikroTik перед повтором.")
+            self.deleted.pop((h,login),None)
+            from desktop_v4.operations import public_client
+            return {**asdict(result),"restored":True,"client":public_client(fresh)}
         if kind=="sheets":
             o.admin_only()
             from linkvideo_vpn_helper.services.vpn_sheets_sync import VPNSheetsSyncService

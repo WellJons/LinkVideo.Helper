@@ -52,7 +52,7 @@ handle('helper:status',()=>bridge.request('status'));
 handle('helper:search',a=>{const query=clean(a?.query,128);if(!query?.trim()||!['login','port'].includes(a?.mode))throw Error('Некорректный запрос.');return bridge.request('search',{query:query.trim(),mode:a.mode})});
 handle('helper:servers',()=>bridge.request('servers'));
 handle('helper:analyze',a=>{const host=clean(a?.host,253);if(!host)throw Error('Выберите сервер.');return bridge.request('analyze',{host})});
-const operations=new Set(['client_detail','traffic_sample','camera_ports','camera_lookup','inactive_fleet','inactive_batch_preview','server_fleet','create_preview','vpn_preview','commit','inactive','lv_status','lv_preview','lv_fleet','lv_batch_preview','create_suggest','admin_logout','admin_status','admin_retry','billing_refresh','billing_filter','billing_search','billing_select','billing_catalog','billing_history','billing_preview','billing_bulk_preview','billing_camera_image','create_auto','archive_discover','archive_settings','archive_settings_update','archive_diagnose','agent_search','agent_settings','agent_preview','templates_list','templates_save','templates_favorite','templates_delete','background_status','backup','delete_preview','backup_status','deleted_search','restore_preview','sheets_preview','cloud_status','cloud_restore_preview','activity','camera_inspect','camera_live','agent_image','b2o_read','b2o_create_preview','billing_recipient','billing_transfer_preview','templates_images','templates_detach','winbox','registry_list','registry_update','background_status']);
+const operations=new Set(['client_detail','traffic_sample','camera_ports','camera_lookup','inactive_fleet','inactive_batch_preview','server_fleet','create_preview','vpn_preview','commit','inactive','lv_status','lv_preview','lv_fleet','lv_batch_preview','create_suggest','admin_logout','admin_status','admin_retry','billing_refresh','billing_filter','billing_search','billing_select','billing_catalog','billing_history','billing_preview','billing_bulk_preview','billing_camera_image','create_auto','archive_discover','archive_settings','archive_settings_update','archive_diagnose','agent_search','agent_settings','agent_preview','templates_list','templates_save','templates_favorite','templates_delete','background_status','backup','delete_preview','backup_status','backup_inventory','backup_verify','cloud_deleted_search','deleted_search','restore_preview','sheets_preview','cloud_status','cloud_restore_preview','activity','camera_inspect','camera_live','agent_image','b2o_read','b2o_create_preview','billing_recipient','billing_transfer_preview','templates_images','templates_detach','winbox','registry_list','registry_update','background_status']);
 handle('helper:operation',async a=>{
  if(!a||!operations.has(a.method)||!a.args||typeof a.args!=='object'||Array.isArray(a.args)||JSON.stringify(a.args).length>65000)throw Error('Недопустимая операция.');
  if(a.method==='commit'){
@@ -115,6 +115,13 @@ handle('helper:archive-download',async a=>{
  const result=await dialog.showSaveDialog(win,{title:'Сохранить архив',defaultPath:path.join(app.getPath('videos'),filename),filters:[{name:'Видео MP4',extensions:['mp4']}]});
  if(result.canceled||!result.filePath)throw Error('Сохранение отменено.');
  const out=await bridge.request('archive_download',{output:result.filePath,mode:a.mode,manual,token});lastArchive=out?.output===result.filePath?result.filePath:null;return out;
+});
+handle('helper:backup-folder',async()=>{
+ const data=await bridge.request('backup_status',{});
+ if(!data?.folder||!path.isAbsolute(data.folder))throw Error('Папка резервных копий недоступна.');
+ await fsp.mkdir(data.folder,{recursive:true});
+ const err=await shell.openPath(data.folder);if(err)throw Error('Не удалось открыть папку резервных копий.');
+ return true;
 });
 handle('helper:archive-location',async()=>{
  if(!lastArchive)throw Error('Нет сохранённого архива текущего сеанса.');
