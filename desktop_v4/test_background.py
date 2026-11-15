@@ -23,3 +23,10 @@ class BackgroundTests(unittest.TestCase):
         with patch.object(background,"task_names",return_value={background.LEGACY.casefold()}),patch.object(background,"command") as command:
             self.assertEqual(background.enable(Path("unused"),{}),18)
             command.assert_not_called()
+
+    def test_hardlink_path_is_not_authorized(self):
+        from types import SimpleNamespace as NS
+        exe=Path("C:/Program Files/LinkVideo.Helper.4.Background/helper-core.exe")
+        with patch.object(background,"executable",return_value=exe),patch.object(background,"sys",NS(frozen=True,executable="C:/Users/test/helper-core.exe")),patch.object(background,"installed",return_value=True) as installed:
+            self.assertFalse(background.is_runner())
+            installed.assert_not_called()

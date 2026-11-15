@@ -105,6 +105,19 @@ jobs:
           $p = Start-Process -FilePath $local -ArgumentList '--lv4-background-check-installation' -PassThru -Wait
           if ($p.ExitCode -ne 3) { throw 'Unprotected worker accepted background mode' }
           Get-FileHash dist-v4-bg/*-Setup.exe -Algorithm SHA256 | Format-List | Out-File dist-v4-bg/SHA256.txt
+      - name: Smoke test protected component installation only (no task or external requests)
+        shell: pwsh
+        run: |
+          $installer = (Get-ChildItem dist-v4-bg/*-Setup.exe | Select-Object -First 1).FullName
+          $p = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "Background component setup failed: $($p.ExitCode)" }
+          $dest = Join-Path $env:ProgramFiles 'LinkVideo.Helper.4.Background'
+          $p = Start-Process -FilePath (Join-Path $dest 'helper-core.exe') -ArgumentList '--lv4-background-check-installation' -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "Protected path/ACL check failed: $($p.ExitCode)" }
+          if (Get-ScheduledTask -TaskName 'LinkVideo.Helper.4.VPNSheetsMirror' -ErrorAction SilentlyContinue) { throw 'Unexpected task created by setup' }
+          $uninstaller = Get-ChildItem $dest/unins*.exe | Select-Object -First 1
+          $p = Start-Process -FilePath $uninstaller.FullName -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "Background uninstall failed: $($p.ExitCode)" }
       - uses: actions/upload-artifact@v4
         with:
           name: LinkVideo.Helper-4-Background-Setup

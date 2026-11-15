@@ -59,16 +59,68 @@ def no_reparse(path):
         return not path.is_symlink() and not (getattr(s,"st_file_attributes",0)&getattr(stat,"FILE_ATTRIBUTE_REPARSE_POINT",1024))
     except OSError:return False
 
-def installed():
+TRUSTED_SIDS={"S-1-5-18","S-1-5-32-544","S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"}
+WRITE_RIGHTS=0x40000000|0x10000000|0x10000|0x40000|0x80000|0x156
+
+def trusted_acl(path,allow_creator=False):
+    if os.name!="nt" or not no_reparse(path):return False
+    adv=ctypes.WinDLL("advapi32",use_last_error=True);kernel=ctypes.WinDLL("kernel32",use_last_error=True)
+    void=ctypes.c_void_p;owner=void();dacl=void();descriptor=void()
+    getter=adv.GetNamedSecurityInfoW
+    getter.argtypes=[wintypes.LPWSTR,wintypes.DWORD,wintypes.DWORD,ctypes.POINTER(void),void,ctypes.POINTER(void),void,ctypes.POINTER(void)]
+    getter.restype=wintypes.DWORD
+    free=kernel.LocalFree;free.argtypes=[void];free.restype=void
+    convert=adv.ConvertSidToStringSidW;convert.argtypes=[void,ctypes.POINTER(wintypes.LPWSTR)];convert.restype=wintypes.BOOL
+    def sid_string(sid):
+        result=wintypes.LPWSTR()
+        if not sid or not convert(sid,ctypes.byref(result)):raise ValueError("Invalid SID")
+        try:return result.value
+        finally:free(ctypes.cast(result,void))
+    class Info(ctypes.Structure):
+        _fields_=[("AceCount",wintypes.DWORD),("AclBytesInUse",wintypes.DWORD),("AclBytesFree",wintypes.DWORD)]
+    info=Info()
+    get_info=adv.GetAclInformation;get_info.argtypes=[void,void,wintypes.DWORD,wintypes.DWORD];get_info.restype=wintypes.BOOL
+    get_ace=adv.GetAce;get_ace.argtypes=[void,wintypes.DWORD,ctypes.POINTER(void)];get_ace.restype=wintypes.BOOL
     try:
-        p=executable()
-        return p.is_file() and no_reparse(root()) and no_reparse(p) and p.resolve()==p
+        if getter(str(path),1,5,ctypes.byref(owner),None,ctypes.byref(dacl),None,ctypes.byref(descriptor)) or not dacl or sid_string(owner) not in TRUSTED_SIDS:return False
+        if not get_info(dacl,ctypes.byref(info),ctypes.sizeof(info),2) or info.AceCount>1024:return False
+        for i in range(info.AceCount):
+            ace=void()
+            if not get_ace(dacl,i,ctypes.byref(ace)):return False
+            kind=ctypes.c_ubyte.from_address(ace.value).value
+            flags=ctypes.c_ubyte.from_address(ace.value+1).value
+            if kind in (1,6,10,12):continue
+            if kind!=0:return False
+            mask=wintypes.DWORD.from_address(ace.value+4).value
+            if not mask&WRITE_RIGHTS:continue
+            who=sid_string(void(ace.value+8))
+            if who in TRUSTED_SIDS:continue
+            if allow_creator and who=="S-1-3-0" and flags&8:continue
+            return False
+        return True
+    except (OSError,ValueError):return False
+    finally:
+        if descriptor:free(descriptor)
+
+def installed(deep=False):
+    try:
+        p=executable();folder=root();internal=folder/"_internal"
+        if not p.is_file() or not internal.is_dir() or p.resolve()!=p:return False
+        if not trusted_acl(folder.parent,allow_creator=True) or not all(trusted_acl(x) for x in (folder,p,internal)):return False
+        if deep:
+            for parent,dirs,files in os.walk(folder,followlinks=False):
+                if Path(parent)==folder:dirs[:]=[name for name in dirs if name!="state"]
+                for name in dirs+files:
+                    if not trusted_acl(Path(parent)/name):return False
+        return True
     except (OSError,RuntimeError):return False
 
 def is_runner():
-    if not getattr(sys,"frozen",False) or not installed():return False
-    try:return Path(sys.executable).resolve().samefile(executable())
-    except OSError:return False
+    if not getattr(sys,"frozen",False):return False
+    try:
+        if Path(sys.executable).absolute()!=executable().absolute():return False
+        return installed(deep=True)
+    except (OSError,RuntimeError):return False
 
 def system_tool(name):
     if name not in ("schtasks.exe","icacls.exe"):raise ValueError("Unexpected system command")
@@ -174,7 +226,7 @@ def stage(credentials,google,servers,spreadsheet_id,interval):
         file.unlink(missing_ok=True);raise
 
 def elevate(action,staged=None):
-    if action not in ALLOWED_ACTIONS or not installed():raise RuntimeError(MESSAGES[3])
+    if action not in ALLOWED_ACTIONS or not installed(deep=True):raise RuntimeError(MESSAGES[3])
     class Info(ctypes.Structure):
         _fields_=[("cbSize",wintypes.DWORD),("fMask",ctypes.c_ulong),("hwnd",wintypes.HWND),("lpVerb",wintypes.LPCWSTR),
          ("lpFile",wintypes.LPCWSTR),("lpParameters",wintypes.LPCWSTR),("lpDirectory",wintypes.LPCWSTR),("nShow",ctypes.c_int),
@@ -186,6 +238,10 @@ def elevate(action,staged=None):
         args.append(str(staged))
     info=Info();info.cbSize=ctypes.sizeof(info);info.fMask=0x40;info.lpVerb="runas"
     info.lpFile=str(executable());info.lpParameters=subprocess.list2cmdline(args);info.lpDirectory=str(root());info.nShow=0
+    kernel=ctypes.windll.kernel32
+    kernel.WaitForSingleObject.argtypes=[wintypes.HANDLE,wintypes.DWORD];kernel.WaitForSingleObject.restype=wintypes.DWORD
+    kernel.GetExitCodeProcess.argtypes=[wintypes.HANDLE,ctypes.POINTER(wintypes.DWORD)];kernel.GetExitCodeProcess.restype=wintypes.BOOL
+    kernel.CloseHandle.argtypes=[wintypes.HANDLE];kernel.CloseHandle.restype=wintypes.BOOL
     hr=ctypes.windll.ole32.CoInitializeEx(None,2)
     try:
         if not ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(info)):raise RuntimeError("Запуск компонента отменён или Windows отказала.")
@@ -200,12 +256,14 @@ def elevate(action,staged=None):
 
 def state_dir():
     folder=root()/"state"
-    if folder.exists() and not no_reparse(folder):raise RuntimeError(MESSAGES[12])
+    if folder.exists() and not trusted_acl(folder):raise RuntimeError(MESSAGES[12])
     folder.mkdir(exist_ok=True)
     if not no_reparse(folder):raise RuntimeError(MESSAGES[12])
     # Directory is inside administrator-owned Program Files; additionally
     # remove inheritance so only SYSTEM/Administrators may read machine-DPAPI blobs.
     command("icacls.exe",str(folder),"/inheritance:r","/grant:r","*S-1-5-18:(OI)(CI)F","*S-1-5-32-544:(OI)(CI)F")
+    command("icacls.exe",str(folder),"/setowner","*S-1-5-32-544")
+    if not trusted_acl(folder):raise RuntimeError(MESSAGES[12])
     return folder
 
 @contextmanager
@@ -214,7 +272,8 @@ def locked(folder):
     path=folder/"operation.lock"
     if path.exists() and not no_reparse(path):raise RuntimeError(MESSAGES[12])
     with path.open("a+b") as handle:
-        handle.seek(0);handle.write(b"0");handle.flush();handle.seek(0)
+        if handle.seek(0,os.SEEK_END)==0:handle.write(b"0");handle.flush()
+        handle.seek(0)
         try:msvcrt.locking(handle.fileno(),msvcrt.LK_NBLCK,1)
         except OSError:raise BlockingIOError(MESSAGES[19]) from None
         try:yield
@@ -233,7 +292,7 @@ def read_staged(file):
 def config_read(folder):
     from linkvideo_vpn_helper.services.vpn_background_service import _unpack_settings
     path=folder/"config.json"
-    if not no_reparse(path) or path.stat().st_size>256*1024:raise ValueError("Invalid local configuration")
+    if not trusted_acl(folder) or not trusted_acl(path) or path.stat().st_size>256*1024:raise ValueError("Invalid local configuration")
     return validate_payload(_unpack_settings(json.loads(path.read_text(encoding="utf-8"))))
 
 def save_config(folder,payload):
@@ -242,6 +301,8 @@ def save_config(folder,payload):
     if target.exists() and not no_reparse(target):raise RuntimeError(MESSAGES[12])
     try:
         with temp.open("x",encoding="utf-8") as f:json.dump(_pack_settings(payload),f)
+        command("icacls.exe",str(temp),"/setowner","*S-1-5-32-544")
+        if not trusted_acl(temp):raise RuntimeError(MESSAGES[12])
         os.replace(temp,target)
     finally:temp.unlink(missing_ok=True)
 
@@ -278,7 +339,7 @@ def enable(folder,payload):
                 command("schtasks.exe","/Delete","/TN",TASK,"/F",check=False)
             if previous is None:target.unlink(missing_ok=True)
             else:
-                temp=folder/("rollback-"+uuid.uuid4().hex+".tmp");temp.write_bytes(previous);os.replace(temp,target)
+                temp=folder/("rollback-"+uuid.uuid4().hex+".tmp");temp.write_bytes(previous);command("icacls.exe",str(temp),"/setowner","*S-1-5-32-544");os.replace(temp,target)
         except Exception:pass
         return 14
 
