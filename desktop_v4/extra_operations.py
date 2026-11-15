@@ -32,16 +32,19 @@ class Extended:
     def destructive_enabled():
         from desktop_v4.operations import InputError
         if os.environ.get("LV4_ENABLE_DESTRUCTIVE")!="1": raise InputError("Удаление и восстановление отключены до отдельной полевой проверки.")
-    def delete_revision(self,h,login):
+    def delete_state(self,h,login,data=None,check_narrow=True):
+        """Match the exact owned, inactive objects; counters are not configuration."""
         from desktop_v4.operations import InputError
         svc=self.o.w.service
-        data=svc.fetch_config_snapshot(h,self.o.w.session)
-        secrets=data.get("secrets",[]);profiles=data.get("profiles",[]);rules=data.get("nat_rules",[])
+        if data is None: data=svc.fetch_config_snapshot(h,self.o.w.session)
+        if not isinstance(data,dict) or any(not isinstance(data.get(k),list) for k in ("secrets","profiles","nat_rules","actives")):
+            raise InputError("Полный снимок конфигурации не подтверждён.")
+        secrets=data["secrets"];profiles=data["profiles"];rules=data["nat_rules"]
         target=[r for r in secrets if r.get("name")==login]
         if len(target)!=1: raise InputError("Не удалось однозначно определить PPP-учётку.")
         target=target[0];name=target.get("profile")
-        if name!=login or not target.get(".id"):
-            raise InputError("Профиль не выделен этой учётке. Автоматическое удаление запрещено.")
+        if name!=login or not target.get(".id") or not target.get("password"):
+            raise InputError("Профиль не выделен этой учётке или пароль недоступен для восстановления.")
         matches=[r for r in profiles if r.get("name")==name]
         if len(matches)!=1 or not matches[0].get(".id"): raise InputError("Профиль не подтверждён.")
         remote=svc._get_client_remote_address(target,matches[0])
@@ -51,17 +54,63 @@ class Extended:
             profile=next((r for r in profiles if r.get("name")==other.get("profile")),None)
             if other.get("profile")==name or svc._get_client_remote_address(other,profile)==remote:
                 raise InputError("Общий профиль или IP. Автоматическое удаление запрещено.")
-        if any(r.get("name")==login for r in data.get("actives",[])): raise InputError("Клиент в сети. Сначала проверьте активную сессию.")
-        own=[r for r in rules if svc._get_rule_remote(r)==remote]
+        for profile in profiles:
+            if profile.get("name")!=name and svc._normalize_ip(profile.get("remote-address"))==remote:
+                raise InputError("Этот VPN IP указан в другом PPP-профиле.")
+        if any(r.get("name")==login or svc._normalize_ip(r.get("address"))==remote for r in data["actives"]):
+            raise InputError("Клиент/IP в сети. Сначала проверьте активную сессию.")
+        own=[r for r in rules if svc._normalize_ip(svc._get_rule_remote(r))==remote]
         if any(r.get("comment")!=login or not r.get(".id") or r.get("chain")!="dstnat" or r.get("action")!="dst-nat" for r in own):
             raise InputError("Неоднозначные NAT-правила. Автоматическое удаление запрещено.")
-        # Compare the exact records returned by the deletion method with
-        # the validated set. Hash privately; never return raw secrets.
-        narrow=svc.fetch_client_snapshot(h,self.o.w.session,login)
+        if any(r.get("comment")==login and r not in own for r in rules):
+            raise InputError("Комментарий VPN используется в другом NAT-правиле.")
         ids=lambda rows: sorted(str(x.get(".id","")) for x in rows)
-        if ids(narrow.get("nat_rules",[]))!=ids(own) or ids(narrow.get("secrets",[]))!=[target[".id"]]:
-            raise InputError("Снимки конфигурации расходятся. Повторите проверку.")
-        return hashlib.sha256(json.dumps([target,matches[0],sorted(own,key=lambda r:r[".id"])],sort_keys=True,default=str).encode()).hexdigest()
+        nat_ids=ids(own)
+        if len(set(nat_ids))!=len(nat_ids): raise InputError("Обнаружены повторяющиеся NAT ID.")
+        if check_narrow:
+            narrow=svc.fetch_client_snapshot(h,self.o.w.session,login)
+            if ids(narrow.get("nat_rules",[]))!=nat_ids or ids(narrow.get("secrets",[]))!=[target[".id"]] or ids(narrow.get("profiles",[]))!=[matches[0][".id"]] or narrow.get("actives"):
+                raise InputError("Снимки конфигурации расходятся. Повторите проверку.")
+        # Exclude volatile NAT counters, not configuration, and keep password in
+        # the private digest only. Never send it, a snapshot or IDs to Electron.
+        volatile={"bytes","packets","packet-count","packet-bytes","orig-bytes","repl-bytes","orig-packets","repl-packets"}
+        stable=[target,matches[0],[{k:v for k,v in r.items() if k not in volatile} for r in sorted(own,key=lambda r:r[".id"])]]
+        return {"digest":hashlib.sha256(json.dumps(stable,sort_keys=True,default=str).encode()).hexdigest(),"secret":target[".id"],"profile":matches[0][".id"],"nat":nat_ids}
+    def delete_revision(self,h,login):
+        return self.delete_state(h,login)["digest"]
+    def confirmed_delete(self,h,login,revision,cancel,emit):
+        from desktop_v4.operations import InputError
+        import uuid
+        svc=self.o.w.service;creds=self.o.w.session
+        if cancel.is_set(): raise InputError("Операция отменена.")
+        before=self.delete_state(h,login)
+        if before["digest"]!=revision: raise InputError("Конфигурация изменилась. Повторите проверку.")
+        emit("FULL backup перед удалением")
+        backup=self.backup_service().backup_one(h,creds,prefix="BEFORE_DELETE_"+uuid.uuid4().hex[:12])
+        if not backup.ok or cancel.is_set(): raise InputError("FULL backup не подтверждён. Удаление не начато.")
+        try:
+            payload=json.loads(backup.json_path.read_text(encoding="utf-8"))
+            if payload.get("server")!=h or payload.get("format_version")!=1: raise ValueError()
+            sections=payload["sections"]
+            snapshot={k:sections[v] for k,v in {"secrets":"ppp_secrets","profiles":"ppp_profiles","actives":"ppp_active_snapshot","nat_rules":"firewall_nat"}.items()}
+            saved=self.delete_state(h,login,snapshot,check_narrow=False)
+            manifest=json.loads((backup.json_path.parent/"manifest.json").read_text(encoding="utf-8"))
+            if h not in manifest.get("servers_ok",[]) or not any(f.get("name")==backup.json_path.name and f.get("sha256")==hashlib.sha256(backup.json_path.read_bytes()).hexdigest() for f in manifest.get("files",[])):
+                raise ValueError()
+        except Exception as ex:
+            raise InputError("Резервная копия не содержит проверяемой конфигурации клиента. Ничего не удалено.") from ex
+        if saved["digest"]!=revision or self.delete_revision(h,login)!=revision:
+            raise InputError("Конфигурация изменилась между проверкой и резервной копией. Ничего не удалено.")
+        if cancel.is_set(): raise InputError("Операция отменена.")
+        # Reuse the stable service; its RouterOS operations are not atomic.
+        # Do not retry if any response or read-back is unknown.
+        svc.delete_client(h,creds,login)
+        after=svc.fetch_config_snapshot(h,creds)
+        if any(not isinstance(after.get(k),list) for k in ("secrets","profiles","nat_rules")):
+            raise InputError("Проверка после удаления не завершена.")
+        if any(r.get("name")==login or r.get(".id")==before["secret"] for r in after["secrets"]) or any(r.get("name")==login or r.get(".id")==before["profile"] for r in after["profiles"]) or any(r.get(".id") in before["nat"] or r.get("comment")==login for r in after["nat_rules"]):
+            raise InputError("Удаление всех объектов не подтверждено. Проверьте MikroTik вручную.")
+        return {"deleted":True,"server":h,"login":login}
     def search_cloud_archive(self,query):
         self.cloud_deleted={}
         if self.cloud is None:
@@ -341,17 +390,15 @@ class Extended:
             if not isinstance(result,dict) or result.get("ok") is not True: raise InputError("Восстановление не подтверждено. Проверьте MikroTik.")
             self.cloud_deleted.pop((h,login),None)
             return {"restored":True,"server":h,"login":login}
-        if kind in ("delete","restore"):
+        if kind=="delete":
             o.admin_only();self.destructive_enabled();h,login=p
-            if kind=="delete" and self.delete_revision(h,login)!=revision: raise InputError("Конфигурация изменилась.")
+            return self.confirmed_delete(h,login,revision,cancel,emit)
+        if kind=="restore":
+            o.admin_only();self.destructive_enabled();h,login=p
             emit("Проверка FULL backup")
             result=self.backup_service().backup_one(h,creds,prefix="BEFORE_"+kind.upper())
             if not result.ok or cancel.is_set(): raise InputError("FULL backup не подтверждён. Операция не начата.")
-            if kind=="delete":
-                if self.delete_revision(h,login)!=revision: raise InputError("Конфигурация изменилась после backup.")
-                svc.delete_client(h,creds,login)
-                if svc.get_client(h,creds,login) is not None: raise InputError("Удаление не подтверждено.")
-                return {"deleted":True}
+            if svc.get_client(h,creds,login) is not None: raise InputError("Клиент уже существует на MikroTik.")
             return asdict(self.restore_service().restore(h,creds,login))
         if kind=="sheets":
             o.admin_only()

@@ -233,9 +233,11 @@ class Operations:
         if method=="inactive_batch_preview":
             self.admin_only();self.writes_enabled()
             action=text(a,"action",16)
-            if action not in ("enable","disable"): raise InputError("Недопустимое массовое действие.")
+            if action not in ("enable","disable","delete"): raise InputError("Недопустимое массовое действие.")
+            if action=="delete": self.extra.destructive_enabled()
             targets=a.get("targets")
             if not isinstance(targets,list) or not 1<=len(targets)<=50: raise InputError("Выберите от 1 до 50 учёток.")
+            if action=="delete" and text(a,"confirm",50)!=f"УДАЛИТЬ {len(targets)}": raise InputError("Введите УДАЛИТЬ "+str(len(targets))+" для подтверждения списка.")
             prepared=[];seen=set()
             for i,item in enumerate(targets):
                 if not isinstance(item,dict): raise InputError("Некорректная учётка.")
@@ -244,11 +246,14 @@ class Operations:
                 seen.add((h,login))
                 if cancel.is_set(): raise InputError("Операция отменена.")
                 c=self.get_client(h,login)
-                if c.is_online or c.is_enabled==(action=="enable"): raise InputError("Состояние "+login+" изменилось или уже соответствует действию. Повторите проверку.")
-                prepared.append((h,login,self.client_revision(c)))
+                if c.is_online or (action!="delete" and c.is_enabled==(action=="enable")): raise InputError("Состояние "+login+" изменилось или уже соответствует действию. Повторите проверку.")
+                scanned=self.inactive_records[(h,login)]
+                if action=="delete" and (not scanned.last_logged_out_dt or c.last_logged_out!=scanned.last_logged_out or c.remote_address!=scanned.remote_address or c.is_enabled!=scanned.is_enabled): raise InputError("Активность или конфигурация "+login+" изменилась/неизвестна. Повторите проверку.")
+                rev=self.extra.delete_revision(h,login) if action=="delete" else self.client_revision(c)
+                prepared.append((h,login,rev))
                 emit("Проверка учёток",round((i+1)*100/len(targets)))
-            verb="Включить" if action=="enable" else "Отключить"
-            return self.stage("inactive_batch",(action,tuple(prepared)),f"{verb} {len(prepared)} неактивных VPN: "+", ".join(h+"/"+login for h,login,_ in prepared[:5])+("…" if len(prepared)>5 else "")+". Отдельные операции без автоматического отката.")
+            verb={"enable":"Включить","disable":"Отключить","delete":"Удалить"}[action]
+            return self.stage("inactive_batch",(action,tuple(prepared)),f"{verb} {len(prepared)} неактивных VPN: "+", ".join(h+"/"+login for h,login,_ in prepared[:5])+("…" if len(prepared)>5 else "")+(". FULL backup каждой конфигурации перед удалением." if action=="delete" else ". Отдельные операции без автоматического отката."))
         if method=="create_auto":
             region=text(a,"country",50)
             hosts=[h for h,row in self.w.hosts.items() if row.country==region]
@@ -578,10 +583,18 @@ class Operations:
             return self.extra.execute(kind,p,revision,cancel,emit)
         if kind=="inactive_batch":
             self.admin_only();action,targets=p;results=[]
+            if action=="delete": self.extra.destructive_enabled()
             for i,(h,login,revision) in enumerate(targets):
                 if cancel.is_set(): break
                 emit("Обработка "+str(i+1)+"/"+str(len(targets)),round(i*100/len(targets)))
                 try:
+                    if action=="delete":
+                        if self.extra.delete_revision(h,login)!=revision:
+                            results.append({"server":h,"login":login,"status":"changed"});break
+                        self.extra.confirmed_delete(h,login,revision,cancel,emit)
+                        results.append({"server":h,"login":login,"status":"confirmed"})
+                        self.extra.audit("delete",(h,login),True)
+                        continue
                     current=self.get_client(h,login)
                     if current.is_online or self.client_revision(current)!=revision:
                         results.append({"server":h,"login":login,"status":"changed"});break
@@ -591,7 +604,10 @@ class Operations:
                     self.extra.audit("vpn",(h,login,action,None),confirmed)
                     if not confirmed: break
                 except Exception:
-                    results.append({"server":h,"login":login,"status":"unknown"});self.extra.audit("vpn",(h,login,action,None),False);break
+                    results.append({"server":h,"login":login,"status":"unknown"})
+                    if action=="delete": self.extra.audit("delete",(h,login),False)
+                    else: self.extra.audit("vpn",(h,login,action,None),False)
+                    break
             for h,login,_ in targets[len(results):]: results.append({"server":h,"login":login,"status":"not_attempted"})
             self.inactive_records={}
             return {"items":results}
