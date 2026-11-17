@@ -1,0 +1,84 @@
+name: LinkVideo.Helper 4 Native Preview
+on:
+  push:
+    branches: [v4/native]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: helper4-native-preview
+  cancel-in-progress: false
+jobs:
+  native:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.x'
+      - name: Install original desktop dependencies
+        run: python -m pip install -r requirements.txt pyinstaller
+      - name: Compile actual 3.0.27 UI and isolated Native4 entry
+        run: python -m compileall -q linkvideo_vpn_helper desktop_native4
+      - name: Smoke test original PySide6 login and desktop, collect screenshots
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          LV4_NATIVE_SCREENSHOT: dist-v4-native/screenshots
+        run: |
+          python desktop_native4/native_entry.py --lv4-native-smoke
+          if ($LASTEXITCODE -ne 0) { throw 'Native desktop smoke failed' }
+      - name: Build native desktop without Electron or Chromium
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --name LinkVideo.Helper.4 --icon icon.ico --add-data "icon.ico;." --distpath dist-v4-native --workpath build-v4-native --specpath build-v4-native --paths . --exclude-module PySide6.QtWebEngine --exclude-module PySide6.QtQml --exclude-module PySide6.QtQuick --exclude-module PySide6.QtMultimedia --exclude-module PySide6.QtCharts desktop_native4/native_entry.py
+          if ($LASTEXITCODE -ne 0) { throw 'Native PyInstaller failed' }
+          if (!(Test-Path dist-v4-native/LinkVideo.Helper.4/LinkVideo.Helper.4.exe)) { throw 'Native EXE missing' }
+      - name: Smoke test packaged native desktop offline
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $p=Start-Process -FilePath (Resolve-Path 'dist-v4-native/LinkVideo.Helper.4/LinkVideo.Helper.4.exe') -ArgumentList '--lv4-native-smoke' -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw 'Native EXE failed offline smoke' }
+      - name: Build original-style custom Go installer for Native4
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist-v4-native/output | Out-Null
+          python -c "import zipfile;zipfile.ZipFile('installer_native4/payload.zip','w').close()"
+          Push-Location installer_native4
+          go build -trimpath -ldflags "-H=windowsgui -X main.version=4.0.0-alpha.14 -X main.buildMode=uninstaller" -o ../dist-v4-native/output/Uninstall.exe .
+          if ($LASTEXITCODE -ne 0) { throw 'Native4 uninstaller failed' }
+          Pop-Location
+          Copy-Item dist-v4-native/output/Uninstall.exe dist-v4-native/LinkVideo.Helper.4/Uninstall.exe
+          python -c "import pathlib,zipfile;src=pathlib.Path('dist-v4-native/LinkVideo.Helper.4');z=zipfile.ZipFile('installer_native4/payload.zip','w',compression=zipfile.ZIP_DEFLATED,compresslevel=9);[(z.write(p,p.relative_to(src).as_posix())) for p in src.rglob('*') if p.is_file()];z.close()"
+          Push-Location installer_native4
+          go build -trimpath -ldflags "-H=windowsgui -X main.version=4.0.0-alpha.14 -X main.buildMode=installer" -o ../dist-v4-native/output/LinkVideo.Helper.4.0.0-alpha.14-Setup.exe .
+          if ($LASTEXITCODE -ne 0) { throw 'Native4 installer failed' }
+          Pop-Location
+          python -c "import zipfile;f='installer_native4/payload.zip';names=zipfile.ZipFile(f).namelist();assert 'LinkVideo.Helper.4.exe' in names and 'Uninstall.exe' in names;assert not any(x.endswith('ffmpeg.exe') for x in names);print('Native4 payload verified:',len(names),'files')"
+          Get-FileHash dist-v4-native/output/*-Setup.exe -Algorithm SHA256 | Format-List
+          Get-ChildItem dist-v4-native/output/*-Setup.exe | Select-Object Name,Length | Format-Table
+      - name: Verify the installer does not touch stable 3 paths
+        shell: pwsh
+        run: |
+          $s=Get-Content installer_native4/backend_windows.go -Raw
+          foreach ($bad in @('removeLegacyHelperBotTask','removeSilentUpdateTask','HKCU\Software\LinkVideo\VPNHelper','LinkVideo.Helper.Updater.exe')) {
+            if ($s.Contains($bad)) { throw "Unexpected stable 3.x reference: $bad" }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LinkVideo.Helper-4-Native-Installer
+          path: dist-v4-native/output/*-Setup.exe
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LinkVideo.Helper-4-Native-Screenshots
+          path: dist-v4-native/screenshots/
+          if-no-files-found: error
+          retention-days: 14
