@@ -35,7 +35,8 @@ jobs:
       - name: Build native desktop without Electron or Chromium
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --onedir --windowed --name LinkVideo.Helper.4 --icon icon.ico --add-data "icon.ico;." --distpath dist-v4-native --workpath build-v4-native --specpath build-v4-native --paths . --exclude-module PySide6.QtWebEngine --exclude-module PySide6.QtQml --exclude-module PySide6.QtQuick --exclude-module PySide6.QtMultimedia --exclude-module PySide6.QtCharts desktop_native4/native_entry.py
+          $icon = (Resolve-Path 'icon.ico').Path
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --name LinkVideo.Helper.4 --icon "$icon" --add-data "$icon;." --distpath dist-v4-native --workpath build-v4-native --specpath build-v4-native --paths . --exclude-module PySide6.QtWebEngine --exclude-module PySide6.QtQml --exclude-module PySide6.QtQuick --exclude-module PySide6.QtMultimedia --exclude-module PySide6.QtCharts desktop_native4/native_entry.py
           if ($LASTEXITCODE -ne 0) { throw 'Native PyInstaller failed' }
           if (!(Test-Path dist-v4-native/LinkVideo.Helper.4/LinkVideo.Helper.4.exe)) { throw 'Native EXE missing' }
       - name: Smoke test packaged native desktop offline
