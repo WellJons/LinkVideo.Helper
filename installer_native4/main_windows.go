@@ -236,6 +236,10 @@ var (
 )
 
 func main() {
+    if hasArg("--lv4-native-installer-selftest") {
+        if err := verifyEmbeddedPayload(); err != nil { os.Exit(2) }
+        os.Exit(0)
+    }
     // Run from a neutral directory before elevation. Otherwise Setup can
     // itself hold the installation folder open and block the .rollback rename.
     if err := detachInstallerWorkingDirectory(); err != nil {

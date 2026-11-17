@@ -218,3 +218,17 @@ func launchApplication(app string)error{
  cmd.SysProcAttr=&syscall.SysProcAttr{HideWindow:true}
  return cmd.Start()
 }
+
+// Read-only packaged installer verification. Does not touch registry or install files.
+func verifyEmbeddedPayload() error {
+    if len(payload) < 500000 { return errors.New("Native4 installer payload is empty") }
+    zr,err:=zip.NewReader(bytes.NewReader(payload),int64(len(payload)));if err!=nil{return err}
+    foundApp:=false;foundUninstaller:=false
+    for _,f:=range zr.File {
+        if _,err:=validateEntry(f.Name);err!=nil{return err}
+        if f.Name==appExeName { foundApp=true }
+        if f.Name=="Uninstall.exe" { foundUninstaller=true }
+    }
+    if !foundApp||!foundUninstaller{return errors.New("Missing Native4 executable/uninstaller")}
+    return nil
+}
