@@ -93,6 +93,15 @@ class TestWorkspace(unittest.TestCase):
             ops.agent.get_image_enhance=lambda c:{"ImageRotation":2}
             with self.assertRaises(InputError):self.w.dispatch("commit",{"token":plan["token"]})
         self.assertEqual(calls,[])
+    def test_camera_requests_are_bound_to_current_card(self):
+        self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
+        ops=self.w.ops;ops.b2o_ready=True;ops.archive=NS(b2o=NS())
+        ops.extra.camera_report=NS(camera_id="linkvideo_101");ops.extra.camera_operator=241
+        for method in ("camera_live","camera_image"):
+            with self.assertRaises(InputError):self.w.dispatch(method,{"id":"linkvideo_102"})
+        ops.clear_b2o()
+        self.assertIsNone(ops.extra.camera_report)
+        self.assertIsNone(ops.extra.camera_operator)
     def test_create_exact_login_and_per_server_ip(self):
         self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
         self.w.search.search_exact_login=lambda *a:NS(matches=[],checked=1,total=1,errors=[])

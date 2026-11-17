@@ -98,7 +98,7 @@ class Operations:
     def clear_b2o(self):
         self.archive=self.discovery=None
         self.download_token=None
-        self.extra.camera_report=None;self.b2o_ready=False;self.admin_credentials=None;self.plan=None
+        self.extra.camera_report=None;self.extra.camera_operator=None;self.b2o_ready=False;self.admin_credentials=None;self.plan=None
         self.settings.remove("b2o")
 
     def clear_admin(self):

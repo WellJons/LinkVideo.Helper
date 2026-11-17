@@ -10,10 +10,10 @@ import re
 import subprocess
 import shutil
 
-METHODS=frozenset(("copy_vpn","copy_vpn_batch","backup","delete_preview","backup_status","backup_inventory","backup_verify","cloud_deleted_search","sheets_load","deleted_search","restore_preview","sheets_preview","cloud_connect","cloud_status","cloud_disconnect","cloud_restore_preview","activity","camera_inspect","camera_live","agent_image","b2o_read","b2o_create_preview","billing_recipient","billing_transfer_preview","templates_import","templates_attach","templates_reply","templates_images","templates_detach","winbox","registry_list","registry_update"))
+METHODS=frozenset(("copy_vpn","copy_vpn_batch","backup","delete_preview","backup_status","backup_inventory","backup_verify","cloud_deleted_search","sheets_load","deleted_search","restore_preview","sheets_preview","cloud_connect","cloud_status","cloud_disconnect","cloud_restore_preview","activity","camera_inspect","camera_live","camera_image","agent_image","b2o_read","b2o_create_preview","billing_recipient","billing_transfer_preview","templates_import","templates_attach","templates_reply","templates_images","templates_detach","winbox","registry_list","registry_update"))
 class Extended:
     def __init__(self,ops):
-        self.o=ops;self.cloud=None;self.sheets=None;self.deleted={};self.cloud_deleted={};self.recipients={};self.camera_report=None
+        self.o=ops;self.cloud=None;self.sheets=None;self.deleted={};self.cloud_deleted={};self.recipients={};self.camera_report=None;self.camera_operator=None
     def backup_service(self):
         from linkvideo_vpn_helper.services.vpn_backup_service import VPNBackupService
         class PrivateBackup(VPNBackupService):
@@ -346,17 +346,49 @@ class Extended:
             return result
         if m=="camera_inspect":
             from linkvideo_vpn_helper.services.camera_diagnostics import inspect_camera
+            from linkvideo_vpn_helper.services.camera_stream_format import camera_address,evaluate_transcode,load_transcode_rules,readable_audio_codec,readable_video_codec
             b2o=o.archives().b2o
-            self.camera_report=None
-            c=inspect_camera(b2o,text(a,"camera"),o.operator(a),with_preview=False,with_network=True)
-            self.camera_report=c
-            return {k:getattr(c,k) for k in ("camera_id","server","ip","rtsp_port","ping_text","tcp_text","operator","name","status","serial","account_id","archive_depth","model","port_source","rtsp_host","last_stream")}
-        if m=="camera_live":
-            from linkvideo_vpn_helper.services.camera_live_probe import probe_live_camera
-            o.archives()
-            if self.camera_report is None: raise InputError("Сначала выполните диагностику камеры.")
-            result=probe_live_camera(self.camera_report)
-            return {k:getattr(result,k) for k in ("bitrate_mbps","last_stream","connectivity","detail","video_codec","audio_codec","resolution","fps","source")}
+            self.camera_report=None;self.camera_operator=None
+            query=text(a,"camera");operator=o.operator(a)
+            c=inspect_camera(b2o,query,operator,with_preview=False,with_network=True)
+            # A serial search can resolve to another operator; bind the API
+            # country/returned ID, not just the user's original selection.
+            resolved={"Россия":241,"Казахстан":1721,"Беларусь":1741}.get(c.operator,operator)
+            self.camera_report=c;self.camera_operator=b2o.resolve_operator_id(c.camera_id,resolved)
+            metadata=c.metadata if isinstance(c.metadata,dict) else {}
+            transcode,check=evaluate_transcode(metadata,load_transcode_rules(o.settings))
+            bandwidth=str(metadata.get("nimble_main_bandwidth") or "")
+            return {**{k:getattr(c,k) for k in ("camera_id","server","ip","rtsp_port","ping_text","tcp_text","operator","name","status","serial","account_id","archive_depth","model","port_source","rtsp_host","last_stream")},
+                "address":camera_address(metadata),"transcode":transcode,"transcode_check":check,
+                "b2o_resolution":str(metadata.get("nimble_main_resolution") or "")[:80],
+                "b2o_video_codec":readable_video_codec(metadata.get("nimble_main_video_codec")),
+                "b2o_audio_codec":readable_audio_codec(metadata.get("nimble_main_audio_codec")),
+                "b2o_bitrate":f"{int(bandwidth)/1000000:.2f} Мбит/с" if bandwidth.isascii() and bandwidth.isdigit() and len(bandwidth)<15 else ""}
+        if m in ("camera_live","camera_image"):
+            archive=o.archives();b2o=archive.b2o;c=self.camera_report
+            if c is None or self.camera_operator is None or text(a,"id",128)!=c.camera_id:raise InputError("Карточка камеры изменилась. Повторите диагностику.")
+            if cancel.is_set():raise InputError("Операция отменена.")
+            if m=="camera_image":
+                from linkvideo_vpn_helper.services.b2o_camera_preview import fetch_camera_preview
+                number,_=b2o.normalize_camera_id(c.camera_id,self.camera_operator)
+                try:raw=fetch_camera_preview(c.operator,number,b2o.token())
+                except Exception:raise InputError("Последнее изображение B2O недоступно.") from None
+                mime="image/jpeg" if raw.startswith(b"\xff\xd8") else "image/png" if raw.startswith(b"\x89PNG\r\n\x1a\n") else "image/webp" if raw[:4]==b"RIFF" and raw[8:12]==b"WEBP" else ""
+                if not mime or len(raw)>5*1024*1024:raise InputError("B2O не вернул поддерживаемое изображение.")
+                return {"id":c.camera_id,"src":"data:"+mime+";base64,"+base64.b64encode(raw).decode("ascii")}
+            from dataclasses import replace
+            from linkvideo_vpn_helper.services.b2o_rtsp_probe import fetch_camera_stream_with_status
+            from linkvideo_vpn_helper.services.camera_live_probe import probe_live_camera,_cached_ffmpeg
+            stream,status=fetch_camera_stream_with_status(b2o,c.camera_id,self.camera_operator)
+            sample=replace(c,rtsp_url=stream.url,rtsp_host=stream.host,rtsp_port=stream.port,port_source="camera-streams-urls") if stream else c
+            if sample.rtsp_url and not _cached_ffmpeg():
+                emit("Подготовка FFmpeg для RTSP-замера")
+                try:archive.ensure_ffmpeg(cancel_event=cancel,progress=lambda *_:emit("Подготовка проверенного FFmpeg"))
+                except Exception:emit("FFmpeg недоступен. Проверка доступного архива.")
+            if cancel.is_set():raise InputError("Операция отменена.")
+            result=probe_live_camera(sample)
+            if cancel.is_set():raise InputError("Операция отменена.")
+            return {"id":c.camera_id,**{k:getattr(result,k) for k in ("bitrate_mbps","last_stream","connectivity","video_codec","audio_codec","resolution","fps","source")},"detail":(status+"\n" if status else "")+result.detail}
         if m=="agent_image":
             from linkvideo_vpn_helper.services.agent_b2o_preview import load_b2o_preview_for_serial
             if o.camera is None: raise InputError("Сначала найдите камеру агента.")
