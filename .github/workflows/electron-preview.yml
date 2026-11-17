@@ -28,9 +28,9 @@ jobs:
           $v = (Get-Content desktop_v4/package.json -Raw | ConvertFrom-Json).version
           if ($env:GITHUB_REF_NAME -cne ('v' + $v) -or $v -notmatch '^4\.\d+\.\d+-(alpha|beta|rc)\.\d+$') { throw 'Invalid Helper 4 release tag' }
       - name: Install Python runtime build dependencies
-        run: python -m pip install -r requirements.txt pyinstaller
+        run: python -m pip install -r desktop_v4/requirements-worker.txt pyinstaller
       - name: Test Python RPC without production connections
-        run: python -m unittest desktop_v4.test_worker desktop_v4.test_template_migration desktop_v4.test_delete_recovery desktop_v4.test_billing_parity desktop_v4.test_archive_report desktop_v4.test_backup_inventory desktop_v4.test_background
+        run: python -m unittest desktop_v4.test_worker desktop_v4.test_template_migration desktop_v4.test_delete_recovery desktop_v4.test_billing_parity desktop_v4.test_archive_report desktop_v4.test_backup_inventory desktop_v4.test_background desktop_v4.test_clipboard_images
       - name: Run original 3.0.27 offline CRM protocol regression scripts
         shell: pwsh
         run: |
@@ -56,9 +56,14 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force build-v4-core | Out-Null
-          python -m PyInstaller --noconfirm --clean --onedir --console --name helper-core --distpath dist-v4-core --workpath build-v4-core --specpath build-v4-core --paths . --exclude-module PySide6.QtWebEngine --exclude-module PySide6.QtQml desktop_v4/worker.py
+          python -m PyInstaller --noconfirm --clean --onedir --console --name helper-core --distpath dist-v4-core --workpath build-v4-core --specpath build-v4-core --paths . --exclude-module PySide6.QtWebEngine --exclude-module PySide6.QtQml --exclude-module PySide6.QtWidgets --exclude-module PySide6.QtGui --exclude-module PySide6.QtNetwork --exclude-module PySide6.QtPrintSupport --exclude-module PySide6.QtSvg desktop_v4/worker.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Move-Item dist-v4-core/helper-core dist-v4-core/worker
+          $unexpected = Get-ChildItem dist-v4-core/worker -File -Recurse | Where-Object { $_.Name -match '^Qt6(Gui|Widgets|Network)\.dll$' }
+          if ($unexpected) { throw ('Unused Qt DLLs bundled: ' + ($unexpected.FullName -join ', ')) }
+          $files=Get-ChildItem dist-v4-core/worker -File -Recurse | Sort-Object Length -Descending
+          Write-Host ('LV4_CORE_SIZE_BYTES=' + (($files | Measure-Object Length -Sum).Sum))
+          $files | Select-Object -First 15 @{n='MiB';e={[math]::Round($_.Length/1MB,2)}},Name | Format-Table -AutoSize
       - name: Package Windows Electron application
         working-directory: desktop_v4
         run: npm run package:win
@@ -71,6 +76,14 @@ jobs:
           $app = Resolve-Path 'dist-v4/LinkVideo.Helper.4-win32-x64/LinkVideo.Helper.4.exe'
           $p = Start-Process -FilePath $app -ArgumentList '--lv4-smoke' -PassThru -Wait
           if ($p.ExitCode -ne 0) { throw "Packaged smoke test failed: $($p.ExitCode)" }
+      - name: Record optimized runtime sizes
+        shell: pwsh
+        run: |
+          $all=Get-ChildItem dist-v4/LinkVideo.Helper.4-win32-x64 -File -Recurse
+          $total=($all | Measure-Object Length -Sum).Sum
+          $worker=($all | Where-Object { $_.FullName -match '[\\/]resources[\\/]worker[\\/]' } | Measure-Object Length -Sum).Sum
+          @('Total bytes: '+$total,'Python worker bytes: '+$worker,'Electron/app bytes: '+($total-$worker),'Largest 30 files:',($all | Sort-Object Length -Descending | Select-Object -First 30 @{n='MiB';e={[math]::Round($_.Length/1MB,2)}},FullName | Out-String)) | Set-Content dist-v4/size-report.txt -Encoding UTF8
+          Get-Content dist-v4/size-report.txt
       - name: Build isolated Windows installer
         shell: pwsh
         run: |
@@ -131,6 +144,7 @@ jobs:
             dist-v4/*-Setup.exe
             dist-v4/SHA256.txt
             dist-v4/performance.json
+            dist-v4/size-report.txt
             dist-v4/layout/
           if-no-files-found: error
           retention-days: 14

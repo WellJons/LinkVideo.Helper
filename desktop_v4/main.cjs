@@ -132,14 +132,25 @@ handle('helper:template-copy',async a=>{
  if(!Number.isSafeInteger(a?.id)||a.id<1||a.image!=null&&(!Number.isSafeInteger(a.image)||a.image<1))throw Error('Выберите шаблон.');
  const reply=await bridge.request('templates_reply',{id:a.id,image:a.image??null});
  const text=typeof reply?.text==='string'?reply.text:'';
- const images=Array.isArray(reply?.images)?reply.images.filter(s=>typeof s==='string'&&/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(s)).slice(0,12):[];
- const decoded=images.map(s=>[s,nativeImage.createFromDataURL(s)]).filter(x=>!x[1].isEmpty());
- if(!decoded.length){clipboard.writeText(text);return {count:0,skipped:reply.skipped||0}}
- if(a.image!=null){clipboard.writeImage(decoded[0][1]);return {count:1,skipped:0}}
+ const decoded=[];let skipped=0,total=0;
+ for(const src of Array.isArray(reply?.images)?reply.images:[]){
+  try{
+   if(decoded.length>=12||typeof src!=='string'||src.length>7*1024*1024||!/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/i.test(src))throw Error('Unsupported image');
+   const img=nativeImage.createFromDataURL(src);if(img.isEmpty())throw Error('Invalid image');
+   const sz=img.getSize();if(sz.width<1||sz.height<1||sz.width>16000||sz.height>16000||sz.width*sz.height>24000000)throw Error('Image too large');
+   const scaled=Math.max(sz.width,sz.height)>1600?img.resize(sz.width>=sz.height?{width:1600}:{height:1600}):img;
+   if(scaled.isEmpty())throw Error('Invalid resize');
+   const png=scaled.toPNG();if(!png.length||total+png.length>18*1024*1024)throw Error('Image budget');
+   total+=png.length;decoded.push({image:scaled,src:'data:image/png;base64,'+png.toString('base64')});
+  }catch{skipped++}
+ }
+ if(!decoded.length){clipboard.writeText(text);return {count:0,skipped:(reply.skipped||0)+skipped}}
+ if(a.image!=null){clipboard.writeImage(decoded[0].image);return {count:1,skipped}}
  const escaped=text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
- const html='<html><body><div style="white-space:pre-wrap">'+escaped+'</div>'+decoded.map(([src])=>'<p><img src="'+src+'" style="max-width:100%;height:auto"></p>').join('')+'</body></html>';
- clipboard.write({text,html,image:decoded[0][1]});
- return {count:decoded.length,skipped:(reply.skipped||0)+images.length-decoded.length};
+ const html='<html><body><div style="white-space:pre-wrap">'+escaped+'</div>'+decoded.map(x=>'<p><img src="'+x.src+'" style="max-width:100%;height:auto"></p>').join('')+'</body></html>';
+ clipboard.write({text,html,image:decoded[0].image});
+ return {count:decoded.length,skipped:(reply.skipped||0)+skipped};
+
 });
 handle('helper:copy-vpn-batch',async a=>{
  if(!Array.isArray(a?.targets)||a.targets.length<1||a.targets.length>20)throw Error('Нет созданных учёток.');
@@ -224,7 +235,7 @@ function open(){
 async function smoke(){
  const cold=performance.now();await bridge.request('status');const coldMs=performance.now()-cold;
  const timings=[];for(let i=0;i<15;i++){const started=performance.now();await bridge.request('status');timings.push(performance.now()-started)}
- const attempt=await win.webContents.executeJavaScript(`(async()=>{const wait=()=>new Promise(r=>setTimeout(r,300));const get=id=>document.getElementById(id);if(!window.helper||get('login').hidden)throw Error('Missing login');const core=await window.helper.status();if(!core.ok||core.data.authenticated||core.data.version!=='4.0.0-alpha.12')throw Error('Worker not reachable');get('preview').click();await wait();if(get('workspace').hidden||!get('page').innerText.includes('Демонстрационный режим'))throw Error('Preview missing');const nav=label=>[...get('nav').querySelectorAll('button')].find(b=>b.innerText.includes(label));nav('Поиск клиентов').click();await wait();if(!get('page').querySelector('button[type=submit]').disabled)throw Error('Preview search active');nav('Настройки').click();await wait();const sw=get('page').querySelector('[role=switch]');const before=sw.getAttribute('aria-checked');sw.click();if(get('page').querySelector('[role=switch]').getAttribute('aria-checked')===before)throw Error('Motion switch failed');for(const label of ['Создание VPN','Неактивные VPN','LV-автоматика','Резерв / восстановление','Биллинг','Архивы','Диагностика','Новый Агент','Камеры / B2O','Шаблоны','CRM / B2O']){nav(label).click();await wait();if(!get('page').querySelector('h1'))throw Error('Missing view: '+label)}nav('Настройки').click();get('theme').click();await wait();if(!document.documentElement.classList.contains('light'))throw Error('Theme failed');get('logout').click();await wait();if(get('login').hidden||!get('workspace').hidden)throw Error('Logout failed');enter({username:'Offline employee UI test',role:'employee',writes:false});await wait();if(nav('VPN-серверы')||nav('Неактивные VPN')||nav('LV-автоматика')||nav('Резерв / восстановление'))throw Error('Employee infrastructure visible');if(!nav('Поиск клиентов')||!nav('Создание VPN'))throw Error('Employee support inaccessible');const old=page;go('inactive');if(page!==old)throw Error('Restricted route accepted');window.lvModules.reset();identity=null;get('workspace').hidden=true;get('login').hidden=false;const gate=await window.helper.status();if(!gate.ok||gate.data.authenticated)throw Error('UI fixture changed worker auth');return true})()`);
+ const attempt=await win.webContents.executeJavaScript(`(async()=>{const wait=()=>new Promise(r=>setTimeout(r,300));const get=id=>document.getElementById(id);if(!window.helper||get('login').hidden)throw Error('Missing login');const core=await window.helper.status();if(!core.ok||core.data.authenticated||core.data.version!=='4.0.0-alpha.13')throw Error('Worker not reachable');get('preview').click();await wait();if(get('workspace').hidden||!get('page').innerText.includes('Демонстрационный режим'))throw Error('Preview missing');const nav=label=>[...get('nav').querySelectorAll('button')].find(b=>b.innerText.includes(label));nav('Поиск клиентов').click();await wait();if(!get('page').querySelector('button[type=submit]').disabled)throw Error('Preview search active');nav('Настройки').click();await wait();const sw=get('page').querySelector('[role=switch]');const before=sw.getAttribute('aria-checked');sw.click();if(get('page').querySelector('[role=switch]').getAttribute('aria-checked')===before)throw Error('Motion switch failed');for(const label of ['Создание VPN','Неактивные VPN','LV-автоматика','Резерв / восстановление','Биллинг','Архивы','Диагностика','Новый Агент','Камеры / B2O','Шаблоны','CRM / B2O']){nav(label).click();await wait();if(!get('page').querySelector('h1'))throw Error('Missing view: '+label)}nav('Настройки').click();get('theme').click();await wait();if(!document.documentElement.classList.contains('light'))throw Error('Theme failed');get('logout').click();await wait();if(get('login').hidden||!get('workspace').hidden)throw Error('Logout failed');enter({username:'Offline employee UI test',role:'employee',writes:false});await wait();if(nav('VPN-серверы')||nav('Неактивные VPN')||nav('LV-автоматика')||nav('Резерв / восстановление'))throw Error('Employee infrastructure visible');if(!nav('Поиск клиентов')||!nav('Создание VPN'))throw Error('Employee support inaccessible');const old=page;go('inactive');if(page!==old)throw Error('Restricted route accepted');window.lvModules.reset();identity=null;get('workspace').hidden=true;get('login').hidden=false;const gate=await window.helper.status();if(!gate.ok||gate.data.authenticated)throw Error('UI fixture changed worker auth');return true})()`);
  if(!attempt)throw Error('Smoke test failed');
  const {layoutSmoke}=require('./layout-smoke.cjs');const layoutResults=[];
  const reportDir=process.env.LV4_METRICS_PATH?path.join(path.dirname(process.env.LV4_METRICS_PATH),'layout'):null;
