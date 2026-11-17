@@ -53,21 +53,23 @@ jobs:
           python -c "import zipfile;zipfile.ZipFile('installer_native4/payload.zip','w').close()"
           Push-Location installer_native4
           $icon = (Resolve-Path '../icon.ico').Path
-          go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -64 -icon $icon -o resource.syso -company LinkVideo -file-version 4.0.0.14 -product-version 4.0.0.14 -product-name "LinkVideo.Helper 4" -description "LinkVideo.Helper 4 Native Uninstaller" -original-name "Uninstall.exe" -internal-name "LinkVideo.Helper.4.Uninstall"
+          [System.IO.File]::WriteAllText((Join-Path (Get-Location) 'versioninfo.generated.json'),'{}',(New-Object System.Text.UTF8Encoding($false)))
+          go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -64 -icon $icon -o resource.syso -company LinkVideo -file-version 4.0.0.14 -product-version 4.0.0.14 -product-name "LinkVideo.Helper 4" -description "LinkVideo.Helper 4 Native Uninstaller" -original-name "Uninstall.exe" -internal-name "LinkVideo.Helper.4.Uninstall" versioninfo.generated.json
           if ($LASTEXITCODE -ne 0) { throw 'Native4 uninstaller icon resource failed' }
           go build -trimpath -ldflags "-H=windowsgui -X main.version=4.0.0-alpha.14 -X main.buildMode=uninstaller" -o ../dist-v4-native/output/Uninstall.exe .
           if ($LASTEXITCODE -ne 0) { throw 'Native4 uninstaller failed' }
-          Remove-Item resource.syso -Force
+          Remove-Item resource.syso,versioninfo.generated.json -Force
           Pop-Location
           Copy-Item dist-v4-native/output/Uninstall.exe dist-v4-native/LinkVideo.Helper.4/Uninstall.exe
           python -c "import pathlib,zipfile;src=pathlib.Path('dist-v4-native/LinkVideo.Helper.4');z=zipfile.ZipFile('installer_native4/payload.zip','w',compression=zipfile.ZIP_DEFLATED,compresslevel=9);[(z.write(p,p.relative_to(src).as_posix())) for p in src.rglob('*') if p.is_file()];z.close()"
           Push-Location installer_native4
           $icon = (Resolve-Path '../icon.ico').Path
-          go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -64 -icon $icon -o resource.syso -company LinkVideo -file-version 4.0.0.14 -product-version 4.0.0.14 -product-name "LinkVideo.Helper 4" -description "LinkVideo.Helper 4 Native Setup" -original-name "LinkVideo.Helper.4.0.0-alpha.14-Setup.exe" -internal-name "LinkVideo.Helper.4.Setup"
+          [System.IO.File]::WriteAllText((Join-Path (Get-Location) 'versioninfo.generated.json'),'{}',(New-Object System.Text.UTF8Encoding($false)))
+          go run github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.7.0 -64 -icon $icon -o resource.syso -company LinkVideo -file-version 4.0.0.14 -product-version 4.0.0.14 -product-name "LinkVideo.Helper 4" -description "LinkVideo.Helper 4 Native Setup" -original-name "LinkVideo.Helper.4.0.0-alpha.14-Setup.exe" -internal-name "LinkVideo.Helper.4.Setup" versioninfo.generated.json
           if ($LASTEXITCODE -ne 0) { throw 'Native4 setup icon resource failed' }
           go build -trimpath -ldflags "-H=windowsgui -X main.version=4.0.0-alpha.14 -X main.buildMode=installer" -o ../dist-v4-native/output/LinkVideo.Helper.4.0.0-alpha.14-Setup.exe .
           if ($LASTEXITCODE -ne 0) { throw 'Native4 installer failed' }
-          Remove-Item resource.syso -Force
+          Remove-Item resource.syso,versioninfo.generated.json -Force
           Pop-Location
           $setup=(Resolve-Path 'dist-v4-native/output/LinkVideo.Helper.4.0.0-alpha.14-Setup.exe').Path
           $p=Start-Process -FilePath $setup -ArgumentList '--lv4-native-installer-selftest' -PassThru -Wait
