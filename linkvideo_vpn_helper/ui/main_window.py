@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import sys
 import threading
@@ -555,6 +556,12 @@ class MainWindow(QMainWindow):
         self.toast.raise_()
 
     def _check_updates(self, startup: bool = False):
+        # Native 4 has no approved update channel. Never offer stable 3.x.
+        if os.environ.get("LV4_NATIVE") == "1":
+            if not startup:
+                self.toast.showMessage("Обновления 4.0", "Канал обновлений будет подключён после проверки.", 3500)
+                self._position_toast()
+            return
         if self._update_check_busy:
             return
         self._update_check_busy = True
@@ -757,6 +764,7 @@ class MainWindow(QMainWindow):
         # If the next launch is interrupted, the old account still cannot be
         # re-imported; the explicit switch-account flag also disables auto-login.
         arguments = ([sys.executable, "--signed-out"] if getattr(sys, "frozen", False)
+                     else [sys.executable, "desktop_native4/native_entry.py", "--signed-out"] if os.environ.get("LV4_NATIVE") == "1"
                      else [sys.executable, "-m", "linkvideo_vpn_helper.app", "--signed-out"])
         try:
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0

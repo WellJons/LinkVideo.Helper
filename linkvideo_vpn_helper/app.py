@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import sys
+import os
 from pathlib import Path
+
+NATIVE4 = os.environ.get('LV4_NATIVE') == '1'
 
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QIcon
@@ -78,10 +81,11 @@ def _migrate_settings(settings: QSettings):
 def main() -> int:
     # The Scheduled Task invokes the same installed EXE in strictly headless
     # mode. Handle service actions before QApplication/login is ever created.
-    from linkvideo_vpn_helper.services.vpn_background_service import dispatch_command
-    background_result = dispatch_command(sys.argv[1:])
-    if background_result is not None:
-        return background_result
+    if not NATIVE4:
+        from linkvideo_vpn_helper.services.vpn_background_service import dispatch_command
+        background_result = dispatch_command(sys.argv[1:])
+        if background_result is not None:
+            return background_result
 
     # Install the Windows subprocess guard before any QApplication/setting
     # initializers or automatic login can launch auxiliary programs.
@@ -96,8 +100,12 @@ def main() -> int:
     app.setOrganizationName("LinkVideo")
     app.setQuitOnLastWindowClosed(True)
 
-    settings = QSettings("LinkVideo", "LinkVideo.Helper")
-    _migrate_settings(settings)
+    settings = QSettings("LinkVideo", "LinkVideo.Helper.Native4" if NATIVE4 else "LinkVideo.Helper")
+    if NATIVE4:
+        if not settings.contains("ui/theme_v2"):
+            settings.setValue("ui/theme_v2", "linkvideo_2026")
+    else:
+        _migrate_settings(settings)
     # A process explicitly opened by "switch account" MUST show a fresh login.
     if "--signed-out" in sys.argv:
         from linkvideo_vpn_helper.services.work_login_storage import force_fresh_login
@@ -162,7 +170,8 @@ def main() -> int:
     from linkvideo_vpn_helper.services.vpn_restore_compact_ports import install_vpn_restore_compact_ports
     install_vpn_restore_compact_ports()
     from linkvideo_vpn_helper.ui.background_ux_integration import install_background_ux
-    install_background_ux()
+    if not NATIVE4:
+        install_background_ux()
     from linkvideo_vpn_helper.ui.manual_scan_feedback import install_manual_scan_feedback
     install_manual_scan_feedback()
     from linkvideo_vpn_helper.services.archive_download_methods import install_archive_download_methods
@@ -174,7 +183,8 @@ def main() -> int:
     from linkvideo_vpn_helper.ui.access_policy_integration import install_access_policy
     install_access_policy()
     from linkvideo_vpn_helper.ui.update_ux_integration import install_update_ux
-    install_update_ux()
+    if not NATIVE4:
+        install_update_ux()
     from linkvideo_vpn_helper.ui.runtime_log_integration import install_runtime_log_ui
     install_runtime_log_ui()
     from linkvideo_vpn_helper.ui.nat_counter_integration import install_nat_counter_ui
@@ -213,9 +223,11 @@ def main() -> int:
     window = MainWindow(service, credentials, settings)
     # Google Sheets is retained only for explicit disaster-recovery export/restore.
     from linkvideo_vpn_helper.ui.vpn_sheets_sync_integration import attach_vpn_sheets_sync
-    attach_vpn_sheets_sync(window, service, credentials, settings)
+    if not NATIVE4:
+        attach_vpn_sheets_sync(window, service, credentials, settings)
     from linkvideo_vpn_helper.ui.vpn_sheets_emergency_only import install_sheets_emergency_ui
-    install_sheets_emergency_ui()
+    if not NATIVE4:
+        install_sheets_emergency_ui()
     # Search, creation and all interactive VPN management remain direct RouterOS calls.
     # Employee actions are mirrored asynchronously only for audit/history.
     from linkvideo_vpn_helper.ui.cloud_activity_bridge import install_cloud_activity_bridge
