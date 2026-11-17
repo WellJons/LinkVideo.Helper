@@ -2,6 +2,9 @@
 from __future__ import annotations
 import os
 import sys
+from pathlib import Path
+# Running from source must see the repository modules, not only this subdir.
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 os.environ["LV4_NATIVE"]="1"
 from linkvideo_vpn_helper import version
 version.APP_NAME="LinkVideo.Helper 4 Native Preview"

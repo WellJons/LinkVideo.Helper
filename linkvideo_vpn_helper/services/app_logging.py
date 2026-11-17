@@ -39,7 +39,8 @@ _SECRET_PATTERNS = (
 def log_dir() -> Path:
     base = str(os.getenv("LOCALAPPDATA", "") or "").strip()
     root = Path(base) if base else (Path.home() / "AppData" / "Local")
-    return root / "LinkVideo.Helper" / "Logs"
+    suffix = "LinkVideo.Helper.Native4" if os.getenv("LV4_NATIVE") == "1" else "LinkVideo.Helper"
+    return root / suffix / "Logs"
 
 
 def log_file() -> Path:
