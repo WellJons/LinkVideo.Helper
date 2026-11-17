@@ -760,7 +760,9 @@ class MainWindow(QMainWindow):
             return
         from linkvideo_vpn_helper.services.work_login_storage import clear_work_login
         self.work_account.clear()
-        clear_work_login(self.settings, QSettings("LinkVideo", "VPNHelper"))
+        legacy_settings = (self.settings if os.environ.get("LV4_NATIVE") == "1"
+                           else QSettings("LinkVideo", "VPNHelper"))
+        clear_work_login(self.settings, legacy_settings)
         # If the next launch is interrupted, the old account still cannot be
         # re-imported; the explicit switch-account flag also disables auto-login.
         arguments = ([sys.executable, "--signed-out"] if getattr(sys, "frozen", False)
