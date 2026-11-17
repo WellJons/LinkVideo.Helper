@@ -137,11 +137,19 @@ jobs:
           path: dist-v4-bg/
           if-no-files-found: error
           retention-days: 14
+      # For employees: setup artifact contains ONE installer and no reports.
+      # GitHub Actions automatically wraps downloaded artifacts in a ZIP.
       - uses: actions/upload-artifact@v4
         with:
           name: LinkVideo.Helper-4-Windows-Setup
+          path: dist-v4/*-Setup.exe
+          if-no-files-found: error
+          retention-days: 14
+      # Diagnostics are preserved separately for engineering and CI review.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LinkVideo.Helper-4-Diagnostics
           path: |
-            dist-v4/*-Setup.exe
             dist-v4/SHA256.txt
             dist-v4/performance.json
             dist-v4/size-report.txt
@@ -174,4 +182,5 @@ jobs:
           v="${GITHUB_REF_NAME#v}"
           [[ "$v" =~ ^4\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[0-9]+$ ]]
           test -f "release/LinkVideo.Helper.${v}-Setup.exe"
-          gh release create "$GITHUB_REF_NAME" "release/LinkVideo.Helper.${v}-Setup.exe" release/SHA256.txt release/performance.json -R "$GITHUB_REPOSITORY" --verify-tag --prerelease --latest=false --title "LinkVideo.Helper ${v}" --notes 'Preview 4.0. Isolated from 3.x. Production writes disabled by default.'
+          # Tagged prerelease has a direct-downloadable EXE asset, not a ZIP.
+          gh release create "$GITHUB_REF_NAME" "release/LinkVideo.Helper.${v}-Setup.exe" -R "$GITHUB_REPOSITORY" --verify-tag --prerelease --latest=false --title "LinkVideo.Helper ${v}" --notes 'Preview 4.0. Isolated from 3.x. Production writes disabled by default.'
