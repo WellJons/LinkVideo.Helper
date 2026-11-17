@@ -83,3 +83,5 @@ Alpha.10: проверка конфликта PostgreSQL возвращает т
 Background дополнительно проверяет владельцев/DACL и точный путь, включая запрет hardlink и reparse points. Отдельный установщик фиксирует ACL и владельца; замена требует отключения и удаления старого компонента. CI запускает установку/удаление без создания расписания; регистрация и реальный экспорт требуют отдельной проверки.
 
 UI review: cached navigation, 170 ms transitions, 140 ms toast, wrapping and local table scrolling, narrow/low-window adaptation, focus/table-scroll preservation. Foreground requests wait for the current lightweight poll; route change invalidates pending UI confirmations and prevents rendering stale results in another card. Tests of populated screens follow in CI.
+
+Alpha.12: restored all eight theme choices of 3.0.27 in new visual system, plus two 4.0 palettes. Offline layout regression uses synthetic long Cyrillic data in VPN, billing, archive diagnosis, camera, agent, templates, recovery and checks all navigation targets at 820×600, 1024×768 with 125% zoom, 1440×900. Captures billing screenshots and DOM overflow report under layout/; no production requests. CI result pending.

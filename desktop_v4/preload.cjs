@@ -1,6 +1,7 @@
 'use strict';
 const {contextBridge,ipcRenderer}=require('electron');
 contextBridge.exposeInMainWorld('helper',Object.freeze({
+ smokeMode:process.argv.includes('--lv4-layout-fixtures'),
  login:(username,password,remember)=>ipcRenderer.invoke('helper:login',{username,password,remember}),
  rememberStatus:()=>ipcRenderer.invoke('helper:remember-status'),
  loginSaved:()=>ipcRenderer.invoke('helper:login-saved'),

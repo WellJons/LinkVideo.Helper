@@ -1,4 +1,4 @@
-#define MyAppVersion "4.0.0-alpha.11"
+#define MyAppVersion "4.0.0-alpha.12"
 [Setup]
 AppId=LinkVideo.Helper.4.Background
 AppName=LinkVideo.Helper 4 Background (Optional)
