@@ -17,7 +17,7 @@ class TemplatesClipboardTests(unittest.TestCase):
             folder=Path(temp);raw=b"\x89PNG\r\n\x1a\n"+"test".encode()
             image=folder/"sample.png";image.write_bytes(raw)
             bad=folder/"wrong.jpg";bad.write_bytes(b"not an image")
-            obj=Extended(SimpleNamespace(template_store=lambda:Store([(1,image),(2,bad)])))
+            obj=Extended(SimpleNamespace(w=SimpleNamespace(service=None,session=None),template_store=lambda:Store([(1,image),(2,bad)])))
             result=obj.dispatch("templates_reply",{"id":1,"image":None},Event(),lambda *_:None)
             self.assertEqual(result["text"],"Проверка")
             self.assertEqual(result["skipped"],1)
