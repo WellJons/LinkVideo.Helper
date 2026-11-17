@@ -2,6 +2,7 @@
 (()=>{
  let S={};
  const reset=()=>{stopTraffic();stopRefresh();S={}};
+ const discardPlan=()=>{S.plan=null;S.outcome=null;S.planPage=null};
  const op=(method,args={})=>rpc('operation',method,args);
  const button=(name,fn,cls='quiet',disabled=false)=>{const b=btn(name,cls,fn);b.disabled=disabled;return b};
  const live=(text,fn,cls='quiet')=>button(text,fn,cls,preview);
@@ -18,14 +19,14 @@
  const value=(f)=>f.input.value.trim();
  const num=f=>Number(f.input.value);
  const error=err=>toast(err?.message||'Операция не выполнена.');
- const run=async(fn)=>{const owner=identity;try{return await fn()}catch(err){if(identity===owner)error(err)}finally{if(identity===owner&&owner)render(false)}};
+ const run=async(fn)=>{const owner=identity,route=epoch;try{return await fn()}catch(err){if(identity===owner)error(err)}finally{if(identity===owner&&owner&&epoch===route)render(false)}};
  const keyValue=(root,entries)=>{const d=el('div','kv-grid');for(const [k,v] of entries)d.append(add(el('div','kv'),el('small','',k),el('strong','',v==null||v===''?'—':Array.isArray(v)?v.join(', '):String(v))));root.append(d)};
  const status=v=>el('span',v?'online':'offline',v?'В сети':'Не в сети');
  const serverField=(title='VPN-сервер')=>field(title,'select',S.host||'',(S.hosts||[]).map(r=>[r.host,r.host+' · '+r.country]));
  const ensureHosts=(root)=>{if(S.hosts?.length)return true;root.append(notice('Загрузите список доступных серверов.'));action(root,live('Загрузить серверы',()=>run(async()=>{S.hosts=await rpc('servers');S.host=S.hosts[0]?.host||''}),'primary'));return false};
  const setHost=f=>{S.host=value(f);return S.host};
- const previewNotice=(root,plan,onConfirm)=>{if(!plan)return;const p=el('div','panel confirmation');p.append(el('p','eyebrow','ПОДТВЕРЖДЕНИЕ'),el('h3','',plan.label),el('p','','Одноразовое разрешение действует 120 секунд. Проверьте параметры до отправки.'));const b=live('Подтвердить',()=>run(async()=>{const token=plan.token;S.plan=null;try{S.outcome=await op('commit',{token});if(onConfirm)onConfirm(S.outcome)}finally{if(identity)render(false)}}),'primary');p.append(add(el('div','actionbar'),b,button('Отменить',()=>{S.plan=null;render(false)})));root.append(p)};
- const stage=(method,args)=>{const from=page;stopTraffic();return run(async()=>{S.plan=null;S.outcome=null;S.plan=await op(method,args);S.planPage=from})};
+ const previewNotice=(root,plan,onConfirm)=>{if(!plan)return;const p=el('div','panel confirmation');p.append(el('p','eyebrow','ПОДТВЕРЖДЕНИЕ'),el('h3','',plan.label),el('p','','Одноразовое разрешение действует 120 секунд. Проверьте параметры до отправки.'));const b=live('Подтвердить',()=>run(async()=>{const token=plan.token,owner=identity,from=epoch;S.plan=null;const out=await op('commit',{token});if(identity===owner&&epoch===from){S.outcome=out;if(onConfirm)onConfirm(out)}else if(identity===owner)toast('Операция завершена. Обновите прежний раздел для проверки результата.')}),'primary');p.append(add(el('div','actionbar'),b,button('Отменить',()=>{S.plan=null;render(false)})));root.append(p)};
+ const stage=(method,args)=>{const from=page,generation=epoch,owner=identity;stopTraffic();return run(async()=>{discardPlan();const plan=await op(method,args);if(epoch===generation&&identity===owner){S.plan=plan;S.planPage=from}else toast('Раздел изменился. Подготовьте действие заново.')})};
  const currentPlan=()=>S.planPage===page?S.plan:null;
  const resultNote=(root)=>{if(S.outcome&&S.planPage===page)root.append(notice('Операция завершена. Проверьте актуальное состояние целевой записи.'))};
  function imagePreview(root,result){if(!result?.src||!/^data:image\/(png|jpeg|webp);base64,/.test(result.src))return;const i=el('img','camera-thumb');i.alt='Кадр камеры';i.src=result.src;root.append(add(el('div','panel camera-preview'),el('h3','','Превью камеры'),i))}
@@ -63,10 +64,10 @@
   async function poll(){
    if(refresh!==x||x.stopped)return;
    if(page!=='search'||identity!==x.owner||S.client?.server!==x.host||S.client?.login!==x.login){stopRefresh();return}
-   if(document.hidden||taskBusy||S.plan||$ ('command-dialog')?.open){next();return}
-   taskBusy=true;
+   if(document.hidden||taskBusy||idleRead||S.plan||$ ('command-dialog')?.open){next();return}
+   
    try{
-    const reply=await window.helper.operation('client_refresh',{host:x.host,login:x.login});if(!reply.ok)throw Error(reply.error);
+    const reply=await backgroundRead('client_refresh',{host:x.host,login:x.login});if(!reply.ok)throw Error(reply.error);
     if(refresh!==x||x.stopped)return;
     if(!reply.data.found){S.refreshWarning='Учётка не найдена при обновлении. Проверьте поиск; изменения не выполнялись.';return}
     const before=S.client,now=reply.data.client;
@@ -79,7 +80,7 @@
     if(changed){S.camPorts=null;const box=$('client-camera-result');if(box)box.replaceChildren(notice('Порты изменились. Повторите сверку B2O.'))}
     syncResult(now);
    }catch{if(refresh===x)S.refreshWarning='Автообновление не подтверждено; показаны последние известные данные.'}
-   finally{taskBusy=false;if(refresh===x&&!x.stopped){const panel=$('client-live-card');if(panel&&S.client)updateClientCard(panel,S.client);next()}}
+   finally{if(refresh===x&&!x.stopped){const panel=$('client-live-card');if(panel&&S.client)updateClientCard(panel,S.client);next()}}
   }
   next();
  }
@@ -107,16 +108,16 @@
   async function poll(){
    if(x.stopped||traffic!==x)return;
    if(page!=='search'||identity!==x.owner||!S.client||S.client.server!==x.host||S.client.login!==x.login){stopTraffic();return}
-   if(document.hidden||taskBusy){x.timer=setTimeout(poll,2500);return}
-   taskBusy=true;
+   if(document.hidden||taskBusy||idleRead){x.timer=setTimeout(poll,2500);return}
+   
    try{
-    const result=await window.helper.operation('traffic_sample',{host:x.host,login:x.login});if(!result.ok)throw Error(result.error);
+    const result=await backgroundRead('traffic_sample',{host:x.host,login:x.login});if(!result.ok)throw Error(result.error);
     if(x.stopped||traffic!==x)return;
     const s=result.data,p=x.last,dt=p?s.sample_time-p.sample_time:0;
     const valid=p&&s.online&&p.online&&s.interface===p.interface&&dt>=.2&&s.rx>=p.rx&&s.tx>=p.tx;
     x.points.push({rx:valid?(s.rx-p.rx)*8/dt/1e6:null,tx:valid?(s.tx-p.tx)*8/dt/1e6:null});if(x.points.length>60)x.points.shift();x.last=s;x.error=null;
    }catch(err){if(traffic===x){x.error='Не удалось получить новый образец трафика.';x.last=null;x.points.push({rx:null,tx:null});if(x.points.length>60)x.points.shift()}}
-   finally{taskBusy=false;if(!x.stopped&&traffic===x){drawTraffic();x.timer=setTimeout(poll,2500)}}
+   finally{if(!x.stopped&&traffic===x){drawTraffic();x.timer=setTimeout(poll,2500)}}
   }
   x.timer=setTimeout(poll,10);
  }
@@ -382,5 +383,5 @@
   previewNotice(root,currentPlan(),out=>{if(out?.background&&S.background)S.background.v4=out.background});resultNote(root);
 
  }
- window.lvModules=Object.freeze({reset,client,stopTraffic,stopRefresh,cloudRestore:c=>stage("cloud_restore_preview",{host:c.server,login:c.login}),dashboard,settings:workspaceSettings,clearClient:()=>{stopTraffic();stopRefresh();S.newPorts=[];S.refreshWarning='';S.clientHistory=null;S.camPorts=null;S.client=null;S.plan=null;S.outcome=null},renderClient,render:(name,root)=>{({create,inactive,lv,recovery,admin,billing,archives:r=>archive(r,false),diagnostics:r=>archive(r,true),agent,camera,templates})[name]?.(root)}});
+ window.lvModules=Object.freeze({reset,discardPlan,client,stopTraffic,stopRefresh,cloudRestore:c=>stage("cloud_restore_preview",{host:c.server,login:c.login}),dashboard,settings:workspaceSettings,clearClient:()=>{stopTraffic();stopRefresh();S.newPorts=[];S.refreshWarning='';S.clientHistory=null;S.camPorts=null;S.client=null;S.plan=null;S.outcome=null},renderClient,render:(name,root)=>{({create,inactive,lv,recovery,admin,billing,archives:r=>archive(r,false),diagnostics:r=>archive(r,true),agent,camera,templates})[name]?.(root)}});
 })();
