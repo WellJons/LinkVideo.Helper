@@ -19,7 +19,7 @@
  const value=(f)=>f.input.value.trim();
  const num=f=>Number(f.input.value);
  const error=err=>toast(err?.message||'Операция не выполнена.');
- const run=async(fn)=>{const owner=identity,route=epoch;try{return await fn()}catch(err){if(identity===owner)error(err)}finally{if(identity===owner&&owner&&epoch===route)render(false)}};
+ const run=async(fn)=>{if(taskBusy){toast('Дождитесь завершения текущей операции.');return}const owner=identity,route=epoch;try{return await fn()}catch(err){if(identity===owner)error(err)}finally{if(identity===owner&&owner&&epoch===route)render(false)}};
  const keyValue=(root,entries)=>{const d=el('div','kv-grid');for(const [k,v] of entries)d.append(add(el('div','kv'),el('small','',k),el('strong','',v==null||v===''?'—':Array.isArray(v)?v.join(', '):String(v))));root.append(d)};
  const status=v=>el('span',v?'online':'offline',v?'В сети':'Не в сети');
  const serverField=(title='VPN-сервер')=>field(title,'select',S.host||'',(S.hosts||[]).map(r=>[r.host,r.host+' · '+r.country]));
@@ -38,17 +38,17 @@
  }
  function showThumb(node,src){
   if(!node||typeof src!=='string'||!/^data:image\/(png|jpeg|webp);base64,/.test(src))return;
-  const im=el('img');im.alt='Кадр камеры';im.src=src;node.replaceChildren(im)
+  const im=el('img');im.alt='Кадр камеры';im.decoding='async';im.onerror=()=>{if(im.parentNode===node)node.replaceChildren(el('span','muted','Нет превью'))};im.onload=()=>{if(im.isConnected&&motion&&!reduced.matches)im.animate([{opacity:.35},{opacity:1}],{duration:160,easing:'ease-out'})};node.replaceChildren(im);im.src=src
  }
  function queueThumbs(kind,source,targets,state){
   if(preview||!S.admin?.b2o||!targets.length)return;
-  if(thumbJob?.state===state)return;
+  if(thumbJob?.state===state&&thumbJob.route===epoch)return;
   stopThumbs();
   const owner=identity,route=epoch;
-  const job={state,timer:null};thumbJob=job;
+  const job={state,timer:null,route};thumbJob=job;
   const valid=()=>thumbJob===job&&identity===owner&&epoch===route&&!preview&&!!S.admin?.b2o&&
     (kind==='billing'?page==='billing'&&(S.billingTab||'search')==='search'&&(S.billingCardTab||'services')==='services'&&S.billingClient===source:page==='camera'&&!S.cameraInfo&&S.cameraChoices===source);
-  const next=ms=>{if(valid())job.timer=setTimeout(step,ms);else if(thumbJob===job)stopThumbs()};
+  const next=ms=>{clearTimeout(job.timer);if(valid())job.timer=setTimeout(step,ms);else if(thumbJob===job)stopThumbs()};
   async function step(){
    if(!valid()){if(thumbJob===job)stopThumbs();return}
    if(taskBusy||idleRead||S.plan||document.hidden){next(500);return}
@@ -57,7 +57,7 @@
    try{
     const reply=await backgroundRead(target.method,target.args);
     if(!valid())return;
-    if(!reply){next(500);return}
+    if(!reply)return;
     state.attempted.add(target.key);
     const src=reply.ok?reply.data?.src:null;
     if(typeof src==='string'&&src.length<=1500000&&state.bytes+src.length<=8*1024*1024&&/^data:image\/(png|jpeg|webp);base64,/.test(src)){

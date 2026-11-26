@@ -14,7 +14,7 @@ let theme=preference('lv4-theme','dark'),motion=preference('lv4-motion','on')!==
 if(!themes.some(x=>x[0]===theme))theme='dark';
 const isLight=()=>!!themes.find(x=>x[0]===theme)?.[2];
 const reduced=matchMedia('(prefers-reduced-motion: reduce)');
-function preferences(){document.documentElement.classList.toggle('light',isLight());document.documentElement.dataset.theme=theme;document.documentElement.classList.toggle('reduce-motion',!motion||reduced.matches);$('theme').textContent=isLight()?'Тёмная тема':'Светлая тема'}
+function preferences(){document.documentElement.classList.toggle('light',isLight());document.documentElement.dataset.theme=theme;document.documentElement.classList.toggle('reduce-motion',!motion||reduced.matches);$('theme').textContent=isLight()?'Тёмная тема':'Светлая тема';if(!motion||reduced.matches)for(const animation of document.getAnimations())animation.cancel()}
 preferences();reduced.addEventListener('change',preferences);
 function setTheme(next){if(!themes.some(x=>x[0]===next))return;theme=next;save('lv4-theme',theme);preferences();if(page==='settings'&&identity)render(false)}
 function toggleTheme(){setTheme(isLight()?'dark':'light')}
@@ -26,9 +26,23 @@ function hero(k,title,desc){return add(el('section','hero'),el('p','eyebrow',k),
 function notice(text){return el('div','notice',text)}
 function busy(text){return add(el('div','notice'),el('span','loading'),el('span','',text))}
 function toast(text){$('toast').textContent=text;$('toast').hidden=false;const node=$('toast');node.getAnimations().forEach(a=>a.cancel());if(motion&&!reduced.matches)node.animate([{opacity:0,transform:'translateY(5px)'},{opacity:1,transform:'translateY(0)'}],{duration:140,easing:'ease-out'});clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,4000)}
-async function rpc(method,...args){if(!window.helper)throw Error('Запустите интерфейс через Electron.');const tracked=!['logout','cancel','copy'].includes(method);if(tracked&&idleRead)await idleRead.catch(()=>{});if(tracked&&taskBusy)throw Error('Дождитесь завершения текущей операции.');if(tracked){taskBusy=true;$('global-task').hidden=false;$('task-label').textContent='Выполняется операция…';$('task-progress').removeAttribute('value');$('cancel-task').disabled=false}try{const result=await window.helper[method](...args);if(!result.ok)throw Error(result.error);return result.data}finally{if(tracked){taskBusy=false;$('global-task').hidden=true}}}
+function taskUI(active,label='Выполняется операция…',cancelable=true){
+ $('global-task').hidden=!active;$('workspace').classList.toggle('task-active',active);$('page').setAttribute('aria-busy',String(active));$('task-label').textContent=label;$('task-progress').removeAttribute('value');$('cancel-task').disabled=!cancelable
+}
+async function rpc(method,...args){
+ if(!window.helper)throw Error('Запустите интерфейс через Electron.');
+ const tracked=!['logout','cancel','copy'].includes(method);
+ // Claim the foreground slot before waiting for a background thumbnail.
+ if(tracked&&taskBusy)throw Error('Дождитесь завершения текущей операции.');
+ if(tracked){taskBusy=true;taskUI(true,idleRead?'Завершаю фоновое чтение…':'Выполняется операция…',!idleRead)}
+ try{
+  if(tracked&&idleRead)await idleRead.catch(()=>{});
+  if(tracked)taskUI(true);
+  const result=await window.helper[method](...args);if(!result.ok)throw Error(result.error);return result.data
+ }finally{if(tracked){taskBusy=false;taskUI(false)}}
+}
 $('cancel-task').onclick=async()=>{try{await rpc('cancel');$('task-label').textContent='Запрошена отмена. Ожидаю завершения…';$('cancel-task').disabled=true}catch(err){toast(err.message)}};
-if(window.helper?.onProgress)window.helper.onProgress(p=>{if(taskBusy&&typeof p.label==='string'){$('task-label').textContent=p.label+(typeof p.value==='number'?' · '+Math.round(p.value)+'%':'');if(typeof p.value==='number')$('task-progress').value=Math.min(100,Math.max(0,p.value));else $('task-progress').removeAttribute('value')}});
+if(window.helper?.onProgress)window.helper.onProgress(p=>{if(taskBusy&&!$('cancel-task').disabled&&typeof p.label==='string'){$('task-label').textContent=p.label+(typeof p.value==='number'?' · '+Math.round(p.value)+'%':'');if(typeof p.value==='number')$('task-progress').value=Math.min(100,Math.max(0,p.value));else $('task-progress').removeAttribute('value')}});
 
 function enter(user,isPreview=false){identity=user;preview=isPreview;settingsTab='appearance';if(window.lvModules)window.lvModules.reset();searchState=null;serverState=null;$('login').hidden=true;$('workspace').hidden=false;$('account').textContent=user.username;$('account').title=user.username;$('role').textContent=preview?'Без подключения':user.role==='employee'?'Техподдержка':'Системный администратор';$('session-dot').classList.toggle('preview',preview);go('create')}
 $('login-form').onsubmit=async e=>{e.preventDefault();const button=$('sign-in');button.disabled=true;$('preview').disabled=true;button.textContent='Проверка учётной записи…';$('login-error').textContent='';let password=$('password').value;$('password').value='';try{const result=await rpc('login',$('username').value,password,$('remember-work').checked);enter(result);void window.lvModules?.loadCreateHosts();if($('remember-work').checked&&!result.remembered)toast('Не удалось сохранить вход через шифрование Windows.')}catch(err){$('login-error').textContent=err.message}finally{password='';button.disabled=false;$('preview').disabled=false;button.textContent='Войти в рабочую область'}};
@@ -42,7 +56,7 @@ function navIcon(id,icon){const s=document.createElementNS('http://www.w3.org/20
 function commands(){const dialog=$('command-dialog');if(!identity||dialog.open)return;dialog.showModal();$('command-query').value='';commandResults();$('command-query').focus()}
 function commandResults(){const q=$('command-query').value.toLowerCase().trim();const target=$('command-results');target.replaceChildren();for(const [id,icon,label] of pages.filter(x=>pageAllowed(x[0])&&(!q||x[2].toLowerCase().includes(q)))){const b=btn('','command-row',()=>{$('command-dialog').close();go(id)});b.append(navIcon(id,icon),el('span','',label));target.append(b)}}
 $('command-open').onclick=commands;$('command-query').oninput=commandResults;$('command-close').onclick=()=>$('command-dialog').close();
-document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();commands()}if($('command-dialog').open&&e.key==='Enter'&&document.activeElement===$('command-query')){$('command-results').querySelector('button')?.click();e.preventDefault()}if($('command-dialog').open&&e.key==='ArrowDown'){e.preventDefault();$('command-results').querySelector('button')?.focus()}});
+document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();commands()}if($('command-dialog').open&&e.key==='Enter'&&document.activeElement===$('command-query')){$('command-results').querySelector('button')?.click();e.preventDefault()}if($('command-dialog').open&&['ArrowDown','ArrowUp'].includes(e.key)){const rows=[...$('command-results').querySelectorAll('button')];if(!rows.length)return;e.preventDefault();const i=rows.indexOf(document.activeElement);rows[e.key==='ArrowDown'?(i+1)%rows.length:(i<=0?rows.length-1:i-1)].focus()}});
 const adminPages=new Set(['servers','inactive','lv','recovery']);
 const pageAllowed=id=>preview||identity?.role==='sysadmin'||!adminPages.has(id);
 function go(next){if(!pages.some(p=>p[0]===next&&!p[3])||!pageAllowed(next))return;if(next!==page)window.lvModules?.discardPlan();if(next!=='search'){window.lvModules?.stopTraffic();window.lvModules?.stopRefresh()}page=next;epoch++;render(true);window.lvModules?.enterPage(next)}
@@ -61,33 +75,34 @@ function restoreScroll(snapshot){
  window.scrollTo({left:snapshot.x,top:snapshot.y,behavior:'instant'});
 }
 function preserveScroll(fn){const snapshot=scrollSnapshot();try{return fn()}finally{restoreScroll(snapshot)}}
+function controlKey(node){if(!node)return '';if(node.id)return 'id:'+node.id;for(const name of ['portSelect','themeChoice','billingTab','settingsTab','agentAction','templateId','sectionRoute','searchMode','createControl','createAction'])if(node.dataset?.[name]!=null)return name+':'+node.dataset[name];return ''}
 function render(animate){
  const nav=$('nav'),key=(preview?'preview':identity?.role)||'none';
  if(navRole!==key||!nav.children.length){
   navRole=key;nav.replaceChildren();
-  for(const [id,icon,label,soon] of primaryPages){if(!pageAllowed(id))continue;const b=btn('','',()=>go(id));b.dataset.page=id;add(b,navIcon(id,icon),el('span','',label));if(soon){b.disabled=true;add(b,el('span','soon','СКОРО'))}nav.append(b)}
+  for(const [id,icon,label,soon] of primaryPages){if(!pageAllowed(id))continue;const b=btn('','',()=>{if(page!==id)go(id)});b.dataset.page=id;add(b,navIcon(id,icon),el('span','',label));if(soon){b.disabled=true;add(b,el('span','soon','СКОРО'))}nav.append(b)}
  }
  for(const b of nav.querySelectorAll('button[data-page]')){if(b.dataset.page===primaryRoute(page))b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')}
- const active=nav.querySelector('[aria-current=page]');if(animate&&active){const a=active.getBoundingClientRect(),n=nav.getBoundingClientRect();if(a.top<n.top||a.bottom>n.bottom)active.scrollIntoView({block:'nearest',inline:'nearest'})}
+ const active=nav.querySelector('[aria-current=page]');if(animate&&active){const a=active.getBoundingClientRect(),n=nav.getBoundingClientRect();if(a.top<n.top)nav.scrollTop+=a.top-n.top;else if(a.bottom>n.bottom)nav.scrollTop+=a.bottom-n.bottom}
  $('location').textContent=pages.find(p=>p[0]===page)[2];
- const root=$('page');for(const a of root.getAnimations())a.cancel();
- const focus=document.activeElement,controls=[...root.querySelectorAll('input,select,textarea,button')],idx=controls.indexOf(focus),tag=focus?.tagName,type=focus?.type,caption=focus?.closest('label')?.textContent||focus?.textContent;
+ const root=$('page');for(const a of root.getAnimations({subtree:true}))a.cancel();
+ const focus=document.activeElement,controls=[...root.querySelectorAll('input,select,textarea,button')],idx=controls.indexOf(focus),tag=focus?.tagName,type=focus?.type,caption=focus?.closest('label')?.textContent||focus?.textContent,focusKey=controlKey(focus);
  const scroll=animate?null:scrollSnapshot();
  root.replaceChildren();if(preview)root.append(notice('Демонстрационный режим. Подключения и реальные данные отключены.'));
  const fn={home,search,servers,settings}[page];if(fn)fn(root);else window.lvModules?.render(page,root);
  const parent=primaryRoute(page),related=pages.filter(([id])=>secondaryRoutes[id]===parent&&pageAllowed(id));
- if(related.length){const local=el('div','desktop-section-nav');local.setAttribute('role','group');local.setAttribute('aria-label','Инструменты раздела');for(const [id,,label] of [pages.find(p=>p[0]===parent),...related]){const tabLabel=parent==='search'?(id==='search'?'VPN · поиск и управление':'Информация по камере'):label;const b=btn(tabLabel,'quiet',()=>go(id));b.dataset.sectionRoute=id;b.setAttribute('aria-pressed',String(page===id));local.append(b)}const heroNode=root.querySelector('.hero');if(heroNode)heroNode.after(local);else root.prepend(local);}
+ if(related.length){const local=el('div','desktop-section-nav');local.setAttribute('role','group');local.setAttribute('aria-label','Инструменты раздела');for(const [id,,label] of [pages.find(p=>p[0]===parent),...related]){const tabLabel=parent==='search'?(id==='search'?'VPN · поиск и управление':'Информация по камере'):label;const b=btn(tabLabel,'quiet',()=>{if(page!==id)go(id)});b.dataset.sectionRoute=id;b.setAttribute('aria-pressed',String(page===id));local.append(b)}const heroNode=root.querySelector('.hero');if(heroNode)heroNode.after(local);else root.prepend(local);}
  if(!animate){
-  const candidate=root.querySelectorAll('input,select,textarea,button')[idx];if(candidate&&candidate.tagName===tag&&candidate.type===type&&(candidate.closest('label')?.textContent||candidate.textContent)===caption&&!candidate.disabled)candidate.focus({preventScroll:true});
+  const next=[...root.querySelectorAll('input,select,textarea,button')];let candidate=focusKey?next.find(n=>controlKey(n)===focusKey):null;if(!candidate&&idx>=0){const matching=next.filter(n=>n.tagName===tag&&n.type===type&&(n.closest('label')?.textContent||n.textContent)===caption);candidate=matching.length===1?matching[0]:next[idx];if(candidate&&!matching.includes(candidate))candidate=null}if(candidate&&!candidate.disabled)candidate.focus({preventScroll:true});
   restoreScroll(scroll);
  }else{
   window.scrollTo(0,0);
-  if(motion&&!reduced.matches&&!document.hidden)root.animate([{opacity:.72,transform:'translateY(5px)'},{opacity:1,transform:'translateY(0)'}],{duration:170,easing:'cubic-bezier(.2,.7,.2,1)'});
+  if(motion&&!reduced.matches&&!document.hidden){const blocks=[...root.children].filter(n=>!n.classList.contains('notice')).slice(0,3);for(const [i,n] of blocks.entries())n.animate([{opacity:.65,transform:'translateY(7px)'},{opacity:1,transform:'translateY(0)'}],{duration:190,delay:i*22,easing:'cubic-bezier(.2,.75,.2,1)',fill:'backwards'})}
  }
 }
 function home(root){root.append(hero('РАБОЧАЯ ОБЛАСТЬ / 04','Рабочая панель','Управление инфраструктурой и обслуживание клиентов.'));const banner=el('div','home-banner');banner.append(add(el('div'),el('p','eyebrow',preview?'ДЕМОНСТРАЦИЯ':'РАБОЧАЯ СЕССИЯ'),el('h2','','Ваш центр управления'),el('p','',preview?'Разделы доступны для знакомства. Реальные запросы отключены.':'VPN, видеонаблюдение, биллинг и диагностика — в одном приложении.')),add(el('div','home-emblem','04'),el('small','','LINKVIDEO HELPER')));root.append(banner);const g=el('div','grid');for(const [id,icon,title,desc] of [['search','⌕','Поиск клиентов','По логину или NAT-порту'],['servers','▤','VPN-серверы','Состояние и ресурсы'],['settings','⚙','Настройки','Оформление и движение']]){if(!pageAllowed(id))continue;const b=btn('','tile',()=>go(id));add(b,add(el('span','symbol'),navIcon(id,icon)),el('strong','',title),el('p','',desc));g.append(b)}root.append(g);if(window.lvModules)window.lvModules.dashboard(root);root.append(notice(preview?'Демонстрационная сессия.':identity?.writes?(identity.destructive?'Тестовый режим записи и удаления разрешён внешней конфигурацией. Используйте только проверенный стенд.':'Тестовый режим записи разрешён внешней конфигурацией; удаление и восстановление запрещены.'):'Режим проверки: изменения корпоративных данных отключены по умолчанию.'))}
 function table(headers,rows){const wrap=el('div','table-wrap'),t=el('table'),head=el('thead'),hr=el('tr'),body=el('tbody');wrap.tabIndex=0;wrap.setAttribute('role','region');wrap.setAttribute('aria-label','Таблица: '+headers.filter(Boolean).join(', '));for(const h of headers){const th=el('th','',h);th.scope='col';hr.append(th)}head.append(hr);for(const row of rows){const tr=el('tr');for(const c of row){const td=el('td');if(c instanceof Node)td.append(c);else td.textContent=String(c??'—');tr.append(td)}body.append(tr)}return add(wrap,add(t,head,body))}
-function showMatches(root,state){root.replaceChildren();if(!state)return;if(state.loading){root.append(busy('Проверяю VPN-серверы…'));return}if(state.error){root.append(notice(state.error));return}const r=state.data;root.append(notice('Проверено: '+r.checked+' / '+r.total+' · Найдено: '+r.matches.length+(r.errors.length?' · Не ответили или ошибка: '+r.errors.map(e=>e.server).join(', '):'')));if(!r.matches.length){root.append(notice(r.errors.length?'Совпадений в доступных ответах нет. Поиск неполный.':'Активных совпадений не найдено.'));if(r.archive_error)root.append(notice(r.archive_error));if(r.deleted?.length){root.append(el('h3','section-head','Архив PostgreSQL'));root.append(table(['Логин','Сервер','VPN IP','Удалён','Порты','Пароль',''],r.deleted.map(c=>{const action=btn('Восстановить','quiet',()=>window.lvModules.cloudRestore(c));action.disabled=identity?.role!=='sysadmin'||!c.password_saved;return [c.login,c.server,c.remote_address,c.deleted_at,c.ports.join(', '),c.password_saved?'Сохранён':'Нет',action]})))}return}root.append(table(['Логин','Сервер','VPN IP','Порты','Статус',''],r.matches.map(c=>[c.login,c.server,c.remote_address||'—',c.ports.join(', ')||'—',el('span',c.is_online?'online':'offline',c.is_online?'В сети':'Не в сети'),btn('Карточка','quiet',()=>window.lvModules.client(c.server,c.login))])))}
+function showMatches(root,state){root.replaceChildren();if(!state||(!state.loading&&!state.error&&!state.data))return;if(state.loading){root.append(busy('Проверяю VPN-серверы…'));return}if(state.error){root.append(notice(state.error));return}const r=state.data;root.append(notice('Проверено: '+r.checked+' / '+r.total+' · Найдено: '+r.matches.length+(r.errors.length?' · Не ответили или ошибка: '+r.errors.map(e=>e.server).join(', '):'')));if(!r.matches.length){root.append(notice(r.errors.length?'Совпадений в доступных ответах нет. Поиск неполный.':'Активных совпадений не найдено.'));if(r.archive_error)root.append(notice(r.archive_error));if(r.deleted?.length){root.append(el('h3','section-head','Архив PostgreSQL'));root.append(table(['Логин','Сервер','VPN IP','Удалён','Порты','Пароль',''],r.deleted.map(c=>{const action=btn('Восстановить','quiet',()=>window.lvModules.cloudRestore(c));action.disabled=identity?.role!=='sysadmin'||!c.password_saved;return [c.login,c.server,c.remote_address,c.deleted_at,c.ports.join(', '),c.password_saved?'Сохранён':'Нет',action]})))}return}root.append(table(['Логин','Сервер','VPN IP','Порты','Статус',''],r.matches.map(c=>[c.login,c.server,c.remote_address||'—',c.ports.join(', ')||'—',el('span',c.is_online?'online':'offline',c.is_online?'В сети':'Не в сети'),btn('Карточка','quiet',()=>window.lvModules.client(c.server,c.login))])))}
 function search(root){
  root.append(hero('VPN / SEARCH','Поиск и управление','Найдите клиента, проверьте состояние VPN и управляйте его портами.'));
  const selected=window.lvModules?.selectedClient();
@@ -97,17 +112,17 @@ function search(root){
   window.lvModules.renderClient(root);return;
  }
  const form=el('form','panel search-form-desktop'),input=el('input'),submit=el('button','primary','Найти'),result=el('div');result.id='search-results';input.id='search-query';
- let kind=searchState?.mode||'login';
- input.value=searchState?.query||'';input.maxLength=128;input.required=true;input.setAttribute('aria-label','Поисковый запрос');
+ let kind=searchState?.draftMode||searchState?.mode||'login';
+ input.value=searchState?.draft??searchState?.query??'';input.maxLength=128;input.required=true;input.setAttribute('aria-label','Поисковый запрос');
  submit.type='submit';submit.disabled=preview||!!searchState?.loading;
  const refreshButton=btn('Обновить','quiet',()=>form.requestSubmit());refreshButton.disabled=submit.disabled||!input.value.trim();
- input.oninput=()=>{refreshButton.disabled=submit.disabled||!input.value.trim()};
+ input.oninput=()=>{if(!searchState)searchState={};searchState.draft=input.value;refreshButton.disabled=submit.disabled||!input.value.trim()};
  const row=add(el('div','search-query-row'),input,submit,refreshButton),modes=el('div','desktop-section-nav search-modes');
  modes.setAttribute('role','group');modes.setAttribute('aria-label','Тип поиска');
- for(const [id,label] of [['login','По логину'],['port','По порту']]){const b=btn(label,'quiet',()=>{kind=id;syncMode()});b.dataset.searchMode=id;b.disabled=!!searchState?.loading;modes.append(b)}
+ for(const [id,label] of [['login','По логину'],['port','По порту']]){const b=btn(label,'quiet',()=>{kind=id;if(!searchState)searchState={};searchState.draftMode=id;syncMode()});b.dataset.searchMode=id;b.disabled=!!searchState?.loading;modes.append(b)}
  function syncMode(){input.placeholder=kind==='port'?'Введите NAT-порт':'Введите логин клиента';for(const b of modes.children)b.setAttribute('aria-pressed',String(b.dataset.searchMode===kind))}
  syncMode();form.append(row,modes);root.append(form,result);showMatches(result,searchState);window.lvModules?.renderClient(root);
- form.onsubmit=async e=>{e.preventDefault();if(preview||searchState?.loading)return;const query=input.value.trim();if(!query)return;const owner=identity;window.lvModules.clearClient();searchState={query,mode:kind,loading:true};render(false);try{const data=await rpc('search',query,kind);if(identity===owner)searchState={query,mode:kind,data}}catch(err){if(identity===owner)searchState={query,mode:kind,error:err.message}}if(identity===owner&&page==='search')render(false)};
+ form.onsubmit=async e=>{e.preventDefault();if(preview||taskBusy||searchState?.loading)return;const query=input.value.trim();if(!query)return;const owner=identity;window.lvModules.clearClient();searchState={query,mode:kind,loading:true};render(false);try{const data=await rpc('search',query,kind);if(identity===owner)searchState={query,mode:kind,data,draft:searchState?.draft??query,draftMode:searchState?.draftMode??kind}}catch(err){if(identity===owner)searchState={query,mode:kind,error:err.message,draft:searchState?.draft??query,draftMode:searchState?.draftMode??kind}}if(identity===owner&&page==='search')render(false)};
 }
 
 function servers(root){

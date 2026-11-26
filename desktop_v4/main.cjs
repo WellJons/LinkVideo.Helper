@@ -61,9 +61,9 @@ handle('helper:operation',async a=>{
  if(a.method==='b2o_create_preview')clearB2OCopy();
  if(a.method==='commit'){
   if(!approved||approved.token!==a.args.token||Date.now()>approved.deadline){approved=null;throw Error('Подтверждение устарело.');}
-  confirmed=approved;approved=null;
+  confirmed={...approved,b2o:approved.b2o?{...approved.b2o}:null};if(approved.b2o){approved.b2o.login=null;approved.b2o.password=null}approved=null;
   const answer=await dialog.showMessageBox(win,{type:'warning',buttons:['Отмена','Подтвердить'],defaultId:0,cancelId:0,title:'LinkVideo.Helper 4',message:confirmed.label,detail:'Проверьте выбранные данные. При неизвестном результате не повторяйте запрос автоматически.'});
-  if(answer.response!==1)throw Error('Подтверждение отменено.');
+  if(answer.response!==1)throw Error('Подтверждение отменено.');if(Date.now()>confirmed.deadline)throw Error('Подтверждение устарело.');
  }
  if(a.method==='registry_update'&&a.args.action==='trust'){
  const target=clean(a.args.host,253);if(!target)throw Error('Некорректный сервер.');
