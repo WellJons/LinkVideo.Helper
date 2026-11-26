@@ -31,7 +31,7 @@
  const resultNote=(root)=>{if(S.outcome&&S.planPage===page)root.append(notice('Операция завершена. Проверьте актуальное состояние целевой записи.'))};
  function imagePreview(root,result){if(!result?.src||!/^data:image\/(png|jpeg|webp);base64,/.test(result.src))return;const i=el('img','camera-thumb');i.alt='Кадр камеры';i.src=result.src;root.append(add(el('div','panel camera-preview'),el('h3','','Превью камеры'),i))}
  function create(root){
-  root.append(hero('VPN / PROVISIONING','Создание VPN-клиентов','Используется существующий распределитель адресов и портов RouterOS.'));
+  root.append(hero('VPN / PROVISIONING','Создание клиента','Используется существующий распределитель адресов и портов RouterOS.'));
   if(!ensureHosts(root))return;
   const h=serverField(),l=field('Базовый логин','text',S.createLogin||''),p=field('Портов на учётку','number',S.createPorts||2),c=field('Количество учёток','number',S.createCount||1),ip=field('Начальный Remote Address','text',S.createIP||'172.16.0.1');
   p.input.min=1;p.input.max=14;c.input.min=1;c.input.max=20;const countries=[...new Set(S.hosts.map(x=>x.country))],region=field('Регион для автоподбора','select',S.createRegion||countries[0],countries.map(x=>[x,x]));

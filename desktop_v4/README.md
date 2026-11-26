@@ -90,3 +90,6 @@ Camera parity: returned B2O preview, installation address, original transcode po
 
 ### Packaging size optimization / alpha.13
 В Windows worker оставлены PySide6-Essentials/QtCore для QSettings и сервисов. Графические QtGui/QtWidgets/QtNetwork/QtWebEngine исключены из PyInstaller; изображения шаблонов масштабирует штатный Electron/nativeImage (PNG/JPEG/WEBP/GIF). У Chromium оставлены ru/en-US/en-GB; лицензии и рабочие системные DLL не удаляются. CI сохраняет size-report.txt, показывает крупнейшие файлы и проверяет, что в worker нет Qt6Gui/Qt6Widgets/Qt6Network. Корпоративные запросы не затрагиваются.
+
+### Desktop navigation parity (development after alpha.13)
+За основу навигации принят `linkvideo_vpn_helper/ui/main_window.py` из desktop 3.0.27: девять рабочих разделов в исходном порядке и настройки. После входа открывается «Создание клиента», а не обзор веб-ориентированной рабочей области. Дополнительные экраны Electron не удалены: камеры внутри поиска, CRM/B2O внутри клиентов и тарифов, LV и резервирование внутри VPN-серверов. Обзор и быстрый переход сохранены через Ctrl+K. Ограничения ролей и RPC не изменены. Smoke проверяет порядок, названия, старт, переходы и запрет инфраструктурных маршрутов для сотрудника. Это первый шаг восстановления интерфейса, не заявление о полном паритете форм, операций или оформления.
