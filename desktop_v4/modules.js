@@ -21,7 +21,9 @@
  const num=f=>Number(f.input.value);
  const error=err=>toast(err?.message||'Операция не выполнена.');
  const run=async(fn)=>{if(taskBusy){toast('Дождитесь завершения текущей операции.');return}const owner=identity,route=epoch;try{return await fn()}catch(err){if(identity===owner)error(err)}finally{if(identity===owner&&owner&&epoch===route)render(false)}};
- const keyValue=(root,entries)=>{const d=el('div','kv-grid');for(const [k,v] of entries)d.append(add(el('div','kv'),el('small','',k),el('strong','',v==null||v===''?'—':Array.isArray(v)?v.join(', '):String(v))));root.append(d)};
+ const factValue=v=>v==null||v===''?'—':Array.isArray(v)?v.join(', '):String(v);
+ const factWide=v=>v.length>54||/[^\s]{36,}/.test(v);
+ const keyValue=(root,entries)=>{const d=el('div','kv-grid');for(const [k,v] of entries){const value=factValue(v),card=add(el('div','kv'),el('small','',k),el('strong','',value));if(factWide(value))card.dataset.wide='true';d.append(card)}root.append(d)};
  const status=v=>el('span',v?'online':'offline',v?'В сети':'Не в сети');
  const serverField=(title='VPN-сервер')=>field(title,'select',S.host||'',(S.hosts||[]).map(r=>[r.host,r.host+' · '+r.country]));
  const ensureHosts=(root)=>{if(S.hosts?.length)return true;root.append(notice('Загрузите список доступных серверов.'));action(root,live('Загрузить серверы',()=>run(async()=>{S.hosts=await rpc('servers');S.host=S.hosts[0]?.host||''}),'primary'));return false};
@@ -203,7 +205,7 @@
  function updateFacts(node,entries){
   if(!node.children.length)keyValue(node,entries);
   const fields=node.querySelectorAll('.kv strong');
-  entries.forEach(([k,v],i)=>{if(fields[i])setText(fields[i],v==null||v===''?'—':Array.isArray(v)?v.join(', '):v)})
+  entries.forEach(([k,v],i)=>{if(fields[i]){const value=factValue(v);setText(fields[i],value);const card=fields[i].closest('.kv');if(factWide(value))card.dataset.wide='true';else delete card.dataset.wide}})
  }
  function updateClientCard(root,c){
   const key=JSON.stringify([c.server,c.login]);
@@ -402,7 +404,7 @@
  function clearB2OView(){stopThumbs();S.billingThumbs=null;S.cameraThumbs=null;S.b2oDraft=null;S.b2oCreated=null;S.b2oAccess=null;S.b2oClient=null;S.b2oReadId=null;S.archive=null;S.archiveSaved=null;S.cameraInfo=null;S.cameraChoices=null;S.cameraLive=null;S.cameraImage=null;S.billingImage=null;S.agentImage=null;S.camPorts=null;S.plan=null;S.outcome=null}
  function sessionStrip(root,kind){
   const connected=!!S.admin?.[kind];const panel=el('div','panel session-strip');
-  panel.append(add(el('div'),el('p','eyebrow','РАБОЧАЯ УЧЁТНАЯ ЗАПИСЬ'),el('h3','',kind==='crm'?'CRM / Биллинг':'B2O / Видео'),el('p','muted',connected?'Последний вход подтверждён · '+S.admin.username:'Подключение не подтверждено.')));
+  const account=el('div','session-account'),line=add(el('div','session-title'),el('h3','',kind==='crm'?'CRM / Биллинг':'B2O / Видео'),el('span',connected?'online':'offline',connected?'Подключено':'Не подключено'));account.append(line);const description=el('p','muted session-description',connected?'Рабочая учётная запись · '+S.admin.username:'Войдите в рабочую учётную запись.');description.title=description.textContent;account.append(description);panel.append(account);
   const bar=el('div','actionbar');bar.append(live('Проверить сессию',()=>run(async()=>{S.admin=await op('admin_status')})),live('Повторить вход',()=>run(async()=>{if(kind==='crm')clearBillingView();else clearB2OView();S.admin=await op('admin_retry',{target:kind});for(const e of S.admin.errors||[])toast(e)})),button('Админка',()=>go('admin')));
   panel.append(bar);root.append(panel);
  }
@@ -614,7 +616,7 @@
   if(!items.length)list.append(notice('Пока нет ответов. Создайте шаблон или импортируйте DOCX.'));
   const select=async t=>{S.templateSelected=t.id;S.templateCurrent=t;S.editTemplate=null;S.imageTemplate=t.id;S.images=null;if(!preview)await loadImages(t.id)};
   const loadImages=async id=>{S.images=await op('templates_images',{id})};
-  for(const t of items){const row=button('',()=>{},'template-list-item');row.onclick=()=>run(()=>select(t));row.dataset.templateId=String(t.id);row.setAttribute('aria-pressed',String(t.id===S.templateSelected));row.append(el('strong','',t.title+(t.favorite?' · ★':'')),el('small','muted',t.category),el('span','template-excerpt',t.body.slice(0,180)));list.append(row)}
+  for(const t of items){const row=button('',()=>{},'template-list-item');row.onclick=()=>run(()=>select(t));row.dataset.templateId=String(t.id);row.setAttribute('aria-pressed',String(t.id===S.templateSelected));const title=el('strong','template-list-title',t.title+(t.favorite?' · ★':''));title.title=t.title;row.append(title,el('small','muted',t.category),el('span','template-excerpt',t.body.slice(0,180)));list.append(row)}
   library.append(list,el('p','muted','Сохранение локальное · без отправки на сервер'));
   library.append(add(el('div','actionbar'),live('Импортировать DOCX',()=>run(async()=>{const r=await rpc('fileAction','templates_import',{category:value(cat)});await load();toast('Импортировано: '+r.count)})),live('Перенести библиотеку 3.x',()=>run(async()=>{S.migrateResult=await rpc('fileAction','templates_migrate');await load()}))));
   if(S.migrateResult)keyValue(library,[['Перенесено',S.migrateResult.imported],['Уже имеются',S.migrateResult.skipped],['Изображений',S.migrateResult.images],['Недоступные вложения',S.migrateResult.missing]]);

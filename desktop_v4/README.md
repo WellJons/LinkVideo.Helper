@@ -138,3 +138,5 @@ Quick period buttons (5/15 minutes, 1/3/24 hours), selected duration, accessible
 
 ### Theme contrast checks
 Measured contrast of all ten palettes. Adjusted muted text, selected control backgrounds and primary hover in light palettes; placeholders now use the full text color. Added offline Chromium contrast regression check for eight foreground/background pairs in every palette (minimum 4.5:1). This checks specified pairs, not an exhaustive accessibility certification.
+
+Visual audit of the 14 Windows section screenshots from run 45760990694: long synthetic account names and paths could stretch narrow information cards. Long values now span the full row and no longer stretch adjacent metrics; compact session headers and template titles improve density, with full title available in the selected response. Navigation and field labels are slightly larger. Offline test covers wide layout for a long login.
