@@ -26,6 +26,7 @@ async function layoutSmoke(){
  for(const name of ['home','search','servers','create','inactive','lv','recovery','billing','archives','diagnostics','agent','camera','templates','admin','settings']){
   go(name);window.lvModules.fixture(name,data);await wait();check(name);
  }
+ go('templates');window.lvModules.fixture('templates',{...data,editTemplate:null});await wait();const item=document.querySelector('[data-template-id="1"]');if(!item)throw Error('Missing template library');item.click();await wait();if(!document.querySelector('.template-answer'))throw Error('Missing selected template');check('templates:selection');
  go('archives');window.lvModules.fixture('archives',data);await wait();
  if(!document.querySelector('.archive-workspace')||!document.querySelector('[data-archive-folder]')||[...document.querySelectorAll('input[type=datetime-local]')].some(x=>!x.value))throw Error('Archive workflow missing');
  go('diagnostics');window.lvModules.fixture('diagnostics',data);await wait();const extra=document.querySelector('.archive-extra-rows');extra.querySelector('button').click();if(!extra.querySelector('input'))throw Error('Cannot add camera comparison');extra.querySelector('input').value='fixture';extra.querySelector('input').dispatchEvent(new Event('input'));render(false);if(document.querySelector('.archive-extra-rows input').value!=='fixture')throw Error('Comparison input lost');check('diagnostics:extra');

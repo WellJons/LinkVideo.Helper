@@ -45,7 +45,7 @@ $('command-open').onclick=commands;$('command-query').oninput=commandResults;$('
 document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();commands()}if($('command-dialog').open&&e.key==='Enter'&&document.activeElement===$('command-query')){$('command-results').querySelector('button')?.click();e.preventDefault()}if($('command-dialog').open&&e.key==='ArrowDown'){e.preventDefault();$('command-results').querySelector('button')?.focus()}});
 const adminPages=new Set(['servers','inactive','lv','recovery']);
 const pageAllowed=id=>preview||identity?.role==='sysadmin'||!adminPages.has(id);
-function go(next){if(!pages.some(p=>p[0]===next&&!p[3])||!pageAllowed(next))return;if(next!==page)window.lvModules?.discardPlan();if(next!=='search'){window.lvModules?.stopTraffic();window.lvModules?.stopRefresh()}page=next;epoch++;render(true)}
+function go(next){if(!pages.some(p=>p[0]===next&&!p[3])||!pageAllowed(next))return;if(next!==page)window.lvModules?.discardPlan();if(next!=='search'){window.lvModules?.stopTraffic();window.lvModules?.stopRefresh()}page=next;epoch++;render(true);window.lvModules?.enterPage(next)}
 // Additional tools are kept inside their original desktop workspace.
 let navRole=null;
 // Keep the viewport, independent client panes and nested table positions
