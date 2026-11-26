@@ -5,7 +5,7 @@
   "main": "main.cjs",
   "scripts": {
     "start": "electron .",
-    "check": "node --check main.cjs && node --check bridge.cjs && node --check preload.cjs && node --check renderer.js && node --check modules.js && node --check credentials.cjs && node --check updater.cjs && node --check runtime-log.cjs && node --check package-win.cjs && node --test test/*.test.cjs",
+    "check": "node --check layout-smoke.cjs && node --check main.cjs && node --check bridge.cjs && node --check preload.cjs && node --check renderer.js && node --check modules.js && node --check credentials.cjs && node --check updater.cjs && node --check runtime-log.cjs && node --check package-win.cjs && node --test test/*.test.cjs",
     "test": "node --test test/*.test.cjs",
     "package:win": "node package-win.cjs"
   },

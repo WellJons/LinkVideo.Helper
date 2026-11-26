@@ -12,10 +12,11 @@ async function layoutSmoke(){
  function check(name){
   const width=document.documentElement.clientWidth,scroll=document.documentElement.scrollWidth;
   if(scroll>width+3)throw Error('Horizontal document overflow: '+name+' '+scroll+'/'+width);
-  for(const n of document.querySelectorAll('#page button,#page label,#page h1,#page h2,#page h3,#page .kv strong,#page .notice,#nav button')){
+  for(const n of document.querySelectorAll('#page button,#page label,#page h1,#page h2,#page h3,#page .kv strong,#page .notice,#nav button,#page input,#page select,#page textarea')){
    if(!n.getClientRects().length)continue;
    if(n.closest('.table-wrap'))continue;
-   if(n.clientWidth>0&&n.scrollWidth>n.clientWidth+4)throw Error('Clipped text: '+name+' '+n.textContent.slice(0,90));
+   const box=n.getBoundingClientRect();if(box.left< -3||box.right>width+3)throw Error('Control escaped viewport: '+name+' '+n.tagName+' '+n.textContent.slice(0,60));
+   if(!['INPUT','SELECT','TEXTAREA'].includes(n.tagName)&&n.clientWidth>0&&n.scrollWidth>n.clientWidth+4)throw Error('Clipped text: '+name+' '+n.textContent.slice(0,90));
   }
   for(const t of document.querySelectorAll('.table-wrap')){const b=t.getBoundingClientRect();if(b.right>width+3||b.left< -3)throw Error('Table escaped viewport: '+name)}
   checks.push(name);
@@ -53,8 +54,9 @@ async function layoutSmoke(){
  if(positions().some((v,i)=>Math.abs(v-saved[i])>2)||document.activeElement!==actionInput||actionInput.value!=='unsaved input')throw Error('Live VPN refresh moved viewport or lost input: '+positions()+' / '+saved);
  if(document.getElementById('client-online').textContent!=='Не в сети')throw Error('Live status did not change');if(document.querySelector('[data-port-select="20020"]').getAttribute('aria-pressed')!=='true')throw Error('Selected port lost during refresh');
  render(false);await wait();if(positions().some((v,i)=>Math.abs(v-saved[i])>2))throw Error('Full render lost client scroll: '+positions()+' / '+saved);
+ const beforeTask=positions();taskUI(true,'Synthetic progress');await wait();if(positions().some((v,i)=>Math.abs(v-beforeTask[i])>2))throw Error('Progress overlay shifted scroll');taskUI(false);await wait();if(positions().some((v,i)=>Math.abs(v-beforeTask[i])>2))throw Error('Closing progress shifted scroll');
  check('search:scroll-preservation');
- document.querySelector('.search-compact button').click();await wait();if(!document.getElementById('search-query'))throw Error('Cannot return to search');
+ document.querySelector('.search-compact button').click();await wait();if(!document.getElementById('search-query'))throw Error('Cannot return to search');const draft=$('search-query');draft.value='unsent_fixture';draft.dispatchEvent(new Event('input'));document.querySelector('[data-search-mode="port"]').click();draft.focus({preventScroll:true});render(false);if($('search-query').value!=='unsent_fixture'||document.activeElement!==$('search-query')||document.querySelector('[data-search-mode="port"]').getAttribute('aria-pressed')!=='true')throw Error('Search draft/focus lost');check('search:draft');
  go('create');window.lvModules.fixture('create',{hosts:[{host:'ru.example.invalid',country:'Россия'},{host:'kz.example.invalid',country:'Казахстан'}],createRegion:'Россия',createHost:'',createPorts:3,createCount:1});await wait();
  const control=id=>document.querySelector('[data-create-control="'+id+'"]');
  if(control('ports').value!=='3'||control('count').value!=='1'||control('host').value!=='ru.example.invalid'||!document.querySelector('.create-result'))throw Error('Desktop create defaults differ');
@@ -64,8 +66,9 @@ async function layoutSmoke(){
  country('Россия');check('create:region');
  go('settings');for(const id of ['cloud','archive','servers','about','appearance']){const b=document.querySelector('[data-settings-tab="'+id+'"]');if(!b)throw Error('Missing native settings tab '+id);b.click();await wait();check('settings:'+id)}if(document.querySelectorAll('[data-theme-choice]').length!==themes.length)throw Error('Missing theme choices');
  go('settings');for(const [id] of themes){setTheme(id);await wait();check('theme:'+id)}
- setTheme('dark');motion=false;preferences();go('home');await wait();if($('page').getAnimations().length)throw Error('Animation active with reduced motion');
+ setTheme('dark');motion=false;preferences();go('home');await wait();if($('page').getAnimations({subtree:true}).length)throw Error('Animation active with reduced motion');
  motion=true;preferences();go('billing');window.lvModules.fixture('billing',data);await wait();check('billing:screenshot');
+ window.__lv4CaptureFixture=async name=>{motion=false;preferences();go(name);window.lvModules.fixture(name,{...data,editTemplate:null,billingTab:'search',billingCardTab:'services'});if(name==='servers'){serverState={rows:[{host,country:'Россия',metrics:{server:host,clients_online:3,clients_total:8,ports_active:5,ports_total:12,cpu_load:27,memory_usage_percent:45}}],metric:{server:host,clients_online:3,clients_total:8,ports_active:5,ports_total:12,cpu_load:27,memory_usage_percent:45}};render(false)}if(name==='templates')document.querySelector('[data-template-id="1"]')?.click();await wait();};
  return {checks,viewport:[innerWidth,innerHeight]};
 }
 module.exports={layoutSmoke};

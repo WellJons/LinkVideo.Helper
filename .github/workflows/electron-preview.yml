@@ -40,7 +40,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
       - name: Compile Python adapters
-        run: python -m compileall -q desktop_v4
+        run: python -m compileall -q desktop_v4 linkvideo_vpn_helper
       - name: Install Electron dependencies
         working-directory: desktop_v4
         run: npm install --no-audit --no-fund
