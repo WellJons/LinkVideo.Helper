@@ -166,6 +166,9 @@ def main():
         if active: active["event"].set()
 
 if __name__=="__main__":
+    if sys.argv[1:] == ["--lv4-runtime-selftest"]:
+        from desktop_v4.runtime_selftest import run
+        sys.exit(run(build))
     from desktop_v4.background import dispatch_cli
     code=dispatch_cli(sys.argv[1:])
     if code is not None: sys.exit(code)

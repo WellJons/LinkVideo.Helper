@@ -43,6 +43,8 @@ jobs:
           python -c "import importlib.util; assert importlib.util.find_spec('PySide6') is None; assert importlib.util.find_spec('shiboken6') is None"
       - name: Test Python RPC without production connections
         run: python -m unittest desktop_v4.test_settings_store desktop_v4.test_worker desktop_v4.test_template_migration desktop_v4.test_delete_recovery desktop_v4.test_billing_parity desktop_v4.test_archive_report desktop_v4.test_backup_inventory desktop_v4.test_background desktop_v4.test_clipboard_images
+      - name: Test full headless runtime without network
+        run: python -m desktop_v4.worker --lv4-runtime-selftest
       - name: Run original 3.0.27 offline CRM protocol regression scripts
         shell: pwsh
         run: |
@@ -76,6 +78,12 @@ jobs:
           $files=Get-ChildItem dist-v4-core/worker -File -Recurse | Sort-Object Length -Descending
           Write-Host ('LV4_CORE_SIZE_BYTES=' + (($files | Measure-Object Length -Sum).Sum))
           $files | Select-Object -First 15 @{n='MiB';e={[math]::Round($_.Length/1MB,2)}},Name | Format-Table -AutoSize
+      - name: Validate frozen core dependencies and signing offline
+        shell: pwsh
+        run: |
+          $core = Resolve-Path 'dist-v4-core/worker/helper-core.exe'
+          & $core --lv4-runtime-selftest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Package Windows Electron application
         working-directory: desktop_v4
         run: npm run package:win
@@ -105,6 +113,9 @@ jobs:
           & $iscc desktop_v4/installer.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-FileHash dist-v4/*-Setup.exe -Algorithm SHA256 | Format-List | Out-File dist-v4/SHA256.txt
+          $setup = Get-ChildItem dist-v4/*-Setup.exe | Select-Object -First 1
+          Write-Host ('LV4_SETUP_BYTES=' + $setup.Length)
+          Add-Content dist-v4/size-report.txt ('Installer bytes: ' + $setup.Length)
       - name: Smoke test actual installed application
         shell: pwsh
         env:
@@ -114,6 +125,8 @@ jobs:
           $installer = (Get-ChildItem dist-v4/*-Setup.exe | Select-Object -First 1).FullName
           $p = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOICONS',('/DIR="' + $dest + '"')) -PassThru -Wait
           if ($p.ExitCode -ne 0) { throw "Setup failed: $($p.ExitCode)" }
+          & (Join-Path $dest 'resources/worker/helper-core.exe') --lv4-runtime-selftest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $p = Start-Process -FilePath (Join-Path $dest 'LinkVideo.Helper.4.exe') -ArgumentList '--lv4-smoke' -PassThru -Wait
           if ($p.ExitCode -ne 0) { throw "Installed app failed: $($p.ExitCode)" }
           $uninstaller = Get-ChildItem $dest/unins*.exe | Select-Object -First 1
@@ -130,6 +143,9 @@ jobs:
           $p = Start-Process -FilePath $local -ArgumentList '--lv4-background-check-installation' -PassThru -Wait
           if ($p.ExitCode -ne 3) { throw 'Unprotected worker accepted background mode' }
           Get-FileHash dist-v4-bg/*-Setup.exe -Algorithm SHA256 | Format-List | Out-File dist-v4-bg/SHA256.txt
+          $setup = Get-ChildItem dist-v4-bg/*-Setup.exe | Select-Object -First 1
+          Write-Host ('LV4_BACKGROUND_SETUP_BYTES=' + $setup.Length)
+          Add-Content dist-v4/size-report.txt ('Background installer bytes: ' + $setup.Length)
       - name: Smoke test protected component installation only (no task or external requests)
         shell: pwsh
         run: |
@@ -171,6 +187,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: LinkVideo.Helper-4-Portable
+          compression-level: 9
           path: dist-v4/LinkVideo.Helper.4-win32-x64/
           if-no-files-found: error
           retention-days: 14
