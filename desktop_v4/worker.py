@@ -114,10 +114,10 @@ def build():
     workspace=Workspace(ServerRegistry, verify_routeros_user, service, FastSearchService(service), SessionCredentials, is_employee_username)
     import os
     from pathlib import Path
-    from PySide6.QtCore import QSettings
+    from desktop_v4.settings_store import ProfileSettings
     profile=Path(os.environ.get('LV4_DATA_DIR') or (Path.home()/'.linkvideo-helper-v4'))
     profile.mkdir(parents=True,exist_ok=True)
-    workspace.registry=ServerRegistry(QSettings(str(profile/'servers.ini'),QSettings.Format.IniFormat))
+    workspace.registry=ServerRegistry(ProfileSettings(profile/'servers.json', legacy=profile/'servers.ini'))
     return workspace
 
 def main():

@@ -17,7 +17,6 @@ import uuid
 import zipfile
 from xml.etree import ElementTree as ET
 
-from PySide6.QtCore import QStandardPaths
 
 
 DEFAULT_CATEGORIES = (
@@ -42,6 +41,8 @@ class Template:
 class TemplateStore:
     def __init__(self, root: Path | None = None):
         if root is None:
+            # Native 3.x supplies Qt; the 4.x worker always passes an explicit root.
+            from PySide6.QtCore import QStandardPaths
             location = QStandardPaths.writableLocation(
                 QStandardPaths.StandardLocation.AppDataLocation)
             root = Path(location) / "support_templates"

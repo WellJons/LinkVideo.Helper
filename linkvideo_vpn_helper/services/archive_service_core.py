@@ -16,7 +16,10 @@ from pathlib import Path
 from typing import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from PySide6.QtCore import QSettings
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from PySide6.QtCore import QSettings
 
 from linkvideo_vpn_helper.services.errors import OperationCancelled
 

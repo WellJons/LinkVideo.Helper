@@ -6,7 +6,7 @@ const {packager}=require('@electron/packager');
  const root=path.resolve(__dirname,'..');
  const worker=path.join(root,'dist-v4-core','worker');
  if(!fs.existsSync(path.join(worker,'helper-core.exe')))throw Error('Python worker missing. Build it first.');
- const result=await packager({dir:__dirname,name:'LinkVideo.Helper.4',platform:'win32',arch:'x64',out:path.join(root,'dist-v4'),overwrite:true,asar:true,prune:true,icon:path.join(root,'icon.ico'),extraResource:[worker],ignore:[/^\/test(?:\/|$)/,/^\/test_worker\.py$/,/^\/__pycache__(?:\/|$)/,/^\/operations\.py$/,/^\/worker\.py$/,/^\/package-win\.cjs$/,/^\/installer\.iss$/]});
+ const result=await packager({dir:__dirname,name:'LinkVideo.Helper.4',platform:'win32',arch:'x64',out:path.join(root,'dist-v4'),overwrite:true,asar:true,prune:true,icon:path.join(root,'icon.ico'),extraResource:[worker],ignore:[/^\/test(?:\/|$)/,/^\/__pycache__(?:\/|$)/,/^\/[^/]+\.(?:py|ps1|iss|md|txt)$/i,/^\/package-win\.cjs$/,/^\/\.gitignore$/]});
  // Only the Russian interface and English fallback are supported.
  for(const folder of result){
    const locales=path.join(folder,'locales');if(!fs.existsSync(locales))continue;

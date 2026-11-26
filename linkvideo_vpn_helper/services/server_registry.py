@@ -4,7 +4,10 @@ import json
 import re
 from dataclasses import dataclass
 
-from PySide6.QtCore import QSettings
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from PySide6.QtCore import QSettings
 
 
 @dataclass(slots=True, frozen=True)

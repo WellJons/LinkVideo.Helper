@@ -1,6 +1,4 @@
-# Electron and headless Python worker: QtCore is required by legacy services.
-# Qt GUI, Widgets, WebEngine and Addons are not packaged.
-PySide6-Essentials>=6.6,<7
+# Electron headless Python worker: no Qt or shiboken runtime.
 requests>=2.31,<3
 certifi>=2024.7.4
 google-auth>=2.30,<3
