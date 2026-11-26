@@ -21,6 +21,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
       - name: Verify release tag matches packaged version
         if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
@@ -109,9 +112,7 @@ jobs:
         run: |
           $iscc = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Inno Setup 6\ISCC.exe'
           if (!(Test-Path $iscc)) { choco install innosetup --yes --no-progress; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
-          & ./desktop_v4/installer-brand.ps1
-          & $iscc desktop_v4/installer.iss
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./desktop_v4/build-native-installer.ps1
           Get-FileHash dist-v4/*-Setup.exe -Algorithm SHA256 | Format-List | Out-File dist-v4/SHA256.txt
           $setup = Get-ChildItem dist-v4/*-Setup.exe | Select-Object -First 1
           Write-Host ('LV4_SETUP_BYTES=' + $setup.Length)
@@ -121,18 +122,22 @@ jobs:
         env:
           LV4_SMOKE: '1'
         run: |
-          $dest = Join-Path $env:RUNNER_TEMP 'LV4-Installer-Smoke'
+          $dest = Join-Path $env:LOCALAPPDATA 'Programs/LinkVideo.Helper.4'
           $installer = (Get-ChildItem dist-v4/*-Setup.exe | Select-Object -First 1).FullName
-          $p = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOICONS',('/DIR="' + $dest + '"')) -PassThru -Wait
+          $p = Start-Process -FilePath $installer -ArgumentList '--quiet' -PassThru -Wait
           if ($p.ExitCode -ne 0) { throw "Setup failed: $($p.ExitCode)" }
           & (Join-Path $dest 'resources/worker/helper-core.exe') --lv4-runtime-selftest
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $p = Start-Process -FilePath (Join-Path $dest 'LinkVideo.Helper.4.exe') -ArgumentList '--lv4-smoke' -PassThru -Wait
           if ($p.ExitCode -ne 0) { throw "Installed app failed: $($p.ExitCode)" }
-          $uninstaller = Get-ChildItem $dest/unins*.exe | Select-Object -First 1
-          if (!$uninstaller) { throw 'Missing uninstaller' }
-          $p = Start-Process -FilePath $uninstaller.FullName -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') -PassThru -Wait
-          if ($p.ExitCode -ne 0) { throw "Uninstall failed: $($p.ExitCode)" }
+          $uninstaller = Join-Path $dest 'Uninstall.exe'
+          if (!(Test-Path $uninstaller)) { throw 'Missing native uninstaller' }
+          $entry = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\LinkVideo.Helper.4.Preview_is1'
+          if ($entry.UninstallString -notlike '*Uninstall.exe*') { throw 'Windows does not point to native uninstaller' }
+          $copy = Join-Path $env:RUNNER_TEMP 'LV4-Native-Uninstall.exe'
+          Copy-Item $uninstaller $copy -Force
+          $p = Start-Process -FilePath $copy -ArgumentList '--quiet' -PassThru -Wait
+          if ($p.ExitCode -ne 0 -or (Test-Path (Join-Path $dest 'LinkVideo.Helper.4.exe'))) { throw "Uninstall failed: $($p.ExitCode)" }
       - name: Build separate protected Windows background component
         shell: pwsh
         run: |

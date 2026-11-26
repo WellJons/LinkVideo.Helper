@@ -10,8 +10,8 @@ DefaultGroupName=LinkVideo.Helper 4
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-OutputDir=..\dist-v4
-OutputBaseFilename=LinkVideo.Helper.4.0.0-alpha.13-Setup
+OutputDir=..\installer_v4
+OutputBaseFilename=payload
 Compression=lzma2/ultra
 SolidCompression=yes
 WizardStyle=modern
@@ -27,6 +27,7 @@ CloseApplications=yes
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 [Files]
 Source: "..\dist-v4\LinkVideo.Helper.4-win32-x64\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\installer_v4\Uninstall.exe"; DestDir: "{app}"; Flags: ignoreversion
 [Icons]
 Name: "{autoprograms}\LinkVideo.Helper 4 Preview"; Filename: "{app}\LinkVideo.Helper.4.exe"
 Name: "{autodesktop}\LinkVideo.Helper 4 Preview"; Filename: "{app}\LinkVideo.Helper.4.exe"; Tasks: desktopicon
@@ -37,6 +38,6 @@ Filename: "{app}\LinkVideo.Helper.4.exe"; Description: "Запустить LinkV
 
 [Messages]
 russian.WelcomeLabel1=LinkVideo.Helper 4.0
-russian.WelcomeLabel2=Установка новой рабочей области технической поддержки LinkVideo.%n%nВерсия 4.0 устанавливается отдельно от Helper 3.x и не изменяет его данные.%n%nНажмите «Далее», чтобы продолжить.
+russian.WelcomeLabel2=Версия 4.0 устанавливается отдельно от Helper 3.x и не изменяет его данные.
 russian.FinishedHeadingLabel=Рабочая область готова
 russian.FinishedLabel=LinkVideo.Helper 4.0 установлен. Теперь можно запустить приложение и войти в рабочий аккаунт.
