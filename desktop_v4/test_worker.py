@@ -147,6 +147,23 @@ class TestWorkspace(unittest.TestCase):
     def test_camera_lookup_requires_independent_b2o(self):
         self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
         with self.assertRaises(InputError): self.w.dispatch("camera_lookup",{"query":"client"})
+    def test_unified_camera_lookup_and_b2o_access(self):
+        self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
+        ops=self.w.ops
+        ops.admin_credentials=NS(username="staff",password="test")
+        ops.b2o_ready=True
+        ops.archive=NS(b2o=NS(token=lambda:"offline-token"))
+        choice=NS(camera_id="42",operator_id=241,country="Россия",label="Fixture",
+                  customer_login="",status="online",tariff="")
+        with patch("linkvideo_vpn_helper.services.camera_lookup.search_all_cameras",return_value=[choice]) as search:
+            result=self.w.dispatch("camera_lookup",{"query":"linkvideo_42"})
+            self.assertEqual(result[0]["camera_id"],"42")
+            self.assertEqual(search.call_args.args[0],"linkvideo_42")
+            self.assertNotIn("password",result[0])
+        with patch("linkvideo_vpn_helper.services.b2o_client_admin.B2OOperatorReadOnly.check_access",return_value={"token":"not-for-renderer"}) as check:
+            result=self.w.dispatch("b2o_access",{"country":"Россия"})
+            self.assertEqual(result,{"country":"Россия","ok":True})
+            check.assert_called_once_with("Россия")
     def test_manual_archive_command(self):
         from desktop_v4.archive_command import validate_command
         from linkvideo_vpn_helper.services.archive_download_methods import MANUAL_FFMPEG_TEMPLATE

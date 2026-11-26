@@ -289,10 +289,10 @@ class Operations:
             if c is None: raise InputError("Клиент не найден.")
             return {"server":h,"login":login,"online":bool(c.is_online),"rx":max(0,int(c.rx_bytes or 0)),"tx":max(0,int(c.tx_bytes or 0)),"uptime":str(c.uptime or ""),"interface":str(c.interface_name or ""),"sample_time":time.monotonic()}
         if method=="camera_lookup":
-            from linkvideo_vpn_helper.services.camera_lookup import search_by_login
+            from linkvideo_vpn_helper.services.camera_lookup import search_all_cameras
             if self.admin_credentials is None: raise InputError("Выполните независимый вход в Админку.")
             query=text(a,"query",100)
-            rows=search_by_login(query,self.archives().b2o,self.admin_credentials)
+            rows=search_all_cameras(query,self.archives().b2o,self.admin_credentials)
             return [{k:getattr(c,k) for k in ("camera_id","operator_id","country","label","customer_login","status","tariff")} for c in rows][:200]
         if method=="camera_ports":
             from linkvideo_vpn_helper.services.vpn_camera_port_match import match_vpn_ports
