@@ -2,7 +2,7 @@
 (()=>{
  let S={};
  const reset=()=>{stopTraffic();stopRefresh();stopThumbs();S={}};
- const discardPlan=()=>{S.plan=null;S.outcome=null;S.planPage=null};
+ const discardPlan=()=>{S.planGeneration=(S.planGeneration||0)+1;S.plan=null;S.outcome=null;S.planPage=null};
  const op=(method,args={})=>rpc('operation',method,args);
  const button=(name,fn,cls='quiet',disabled=false)=>{const b=btn(name,cls,fn);b.disabled=disabled;return b};
  const live=(text,fn,cls='quiet')=>button(text,fn,cls,preview);
@@ -26,7 +26,7 @@
  const ensureHosts=(root)=>{if(S.hosts?.length)return true;root.append(notice('Загрузите список доступных серверов.'));action(root,live('Загрузить серверы',()=>run(async()=>{S.hosts=await rpc('servers');S.host=S.hosts[0]?.host||''}),'primary'));return false};
  const setHost=f=>{S.host=value(f);return S.host};
  const previewNotice=(root,plan,onConfirm)=>{if(!plan)return;const p=el('div','panel confirmation');p.append(el('p','eyebrow','ПОДТВЕРЖДЕНИЕ'),el('h3','',plan.label),el('p','','Одноразовое разрешение действует 120 секунд. Проверьте параметры до отправки.'));const b=live('Подтвердить',()=>run(async()=>{const token=plan.token,owner=identity,from=epoch;S.plan=null;const out=await op('commit',{token});if(identity===owner&&epoch===from){S.outcome=out;if(onConfirm)onConfirm(out)}else if(identity===owner)toast('Операция завершена. Обновите прежний раздел для проверки результата.')}),'primary');p.append(add(el('div','actionbar'),b,button('Отменить',()=>{S.plan=null;render(false)})));root.append(p)};
- const stage=(method,args)=>{const from=page,generation=epoch,owner=identity;stopTraffic();return run(async()=>{discardPlan();const plan=await op(method,args);if(epoch===generation&&identity===owner){S.plan=plan;S.planPage=from}else toast('Раздел изменился. Подготовьте действие заново.')})};
+ const stage=(method,args)=>{const from=page,generation=epoch,owner=identity;stopTraffic();return run(async()=>{discardPlan();const planGeneration=S.planGeneration;const plan=await op(method,args);if(epoch===generation&&identity===owner&&S.planGeneration===planGeneration){S.plan=plan;S.planPage=from}else toast('Раздел или параметры изменились. Подготовьте действие заново.')})};
  const currentPlan=()=>S.planPage===page?S.plan:null;
  const resultNote=(root)=>{if(S.outcome&&S.planPage===page)root.append(notice('Операция завершена. Проверьте актуальное состояние целевой записи.'))};
  let thumbJob=null;

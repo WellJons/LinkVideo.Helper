@@ -12,7 +12,7 @@ app.setName('LinkVideo.Helper 4 Preview');
 app.setPath('userData',process.argv.includes('--lv4-smoke')&&process.env.LV4_SMOKE==='1'?require('node:fs').mkdtempSync(path.join(require('node:os').tmpdir(),'lv4-smoke-')):path.join(app.getPath('appData'),'LinkVideo.Helper.v4-preview'));
 if(!app.requestSingleInstanceLock()){app.quit()}else{
 let win=null,approved=null,updateAbort=null,installBusy=false,lastArchive=null,createdB2O=null;
-function clearB2OCopy(){createdB2O=null}
+function clearB2OCopy(){if(createdB2O){createdB2O.login=null;createdB2O.password=null}createdB2O=null}
 function expireRecord(record,clear,ms){const timer=setTimeout(()=>clear(record),ms);timer.unref()}
 const updater=new Updater(appVersion);
 const vault=new CredentialVault(app.getPath('userData'),safeStorage);
@@ -72,7 +72,7 @@ handle('helper:operation',async a=>{
  if(a.method.endsWith('_preview')&&data?.token&&data?.label){
   const record={token:data.token,label:String(data.label).slice(0,600),deadline:Date.now()+120000};
   if(a.method==='b2o_create_preview')record.b2o={login:clean(a.args.login,100),password:clean(a.args.password,128)};
-  approved=record;expireRecord(record,x=>{if(approved===x)approved=null},120000);
+  approved=record;expireRecord(record,x=>{if(approved===x)approved=null;if(x.b2o){x.b2o.login=null;x.b2o.password=null}},120000);
  }
  if(confirmed?.b2o&&Number.isSafeInteger(data?.id_account)&&data.id_account>0){
   const record={id:data.id_account,login:confirmed.b2o.login,password:confirmed.b2o.password,deadline:Date.now()+300000};
