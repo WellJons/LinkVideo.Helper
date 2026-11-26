@@ -47,10 +47,11 @@ async function layoutSmoke(){
  info.scrollTop=250;actions.scrollTop=280;window.scrollTo(0,Math.min(150,document.scrollingElement.scrollHeight-innerHeight));await wait();
  const positions=()=>[window.scrollY,pane('vpn-info').scrollTop,pane('vpn-actions').scrollTop];
  const saved=positions();if(saved[1]<=0||saved[2]<=0)throw Error('Scroll test did not scroll both panes');
+ const portButton=document.querySelector('[data-port-select="20020"]');if(!portButton)throw Error('Missing native NAT port card');portButton.click();if(document.getElementById('vpn-selected-port').textContent!=='Выбран порт 20020')throw Error('Selected port not linked to controls');
  const actionInput=pane('vpn-actions').querySelector('input');actionInput.value='unsaved input';actionInput.focus({preventScroll:true});
  window.lvModules.refreshFixture({...crowded,rx_bytes:99999999,uptime:'3д',is_online:false});await wait();
  if(positions().some((v,i)=>Math.abs(v-saved[i])>2)||document.activeElement!==actionInput||actionInput.value!=='unsaved input')throw Error('Live VPN refresh moved viewport or lost input: '+positions()+' / '+saved);
- if(document.getElementById('client-online').textContent!=='Не в сети')throw Error('Live status did not change');
+ if(document.getElementById('client-online').textContent!=='Не в сети')throw Error('Live status did not change');if(document.querySelector('[data-port-select="20020"]').getAttribute('aria-pressed')!=='true')throw Error('Selected port lost during refresh');
  render(false);await wait();if(positions().some((v,i)=>Math.abs(v-saved[i])>2))throw Error('Full render lost client scroll: '+positions()+' / '+saved);
  check('search:scroll-preservation');
  document.querySelector('.search-compact button').click();await wait();if(!document.getElementById('search-query'))throw Error('Cannot return to search');
