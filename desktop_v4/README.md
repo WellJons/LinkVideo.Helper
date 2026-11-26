@@ -129,3 +129,6 @@ Camera parity: returned B2O preview, installation address, original transcode po
 - Offline smoke now checks 100%, 125%, 150% scaling, controls outside viewport, draft/focus, no scroll jump from progress, reduced motion, foreground lock and renderer runtime exceptions. Diagnostics artifact captures all primary and secondary sections. Python compile covers original package plus adapters; JavaScript check includes layout script. No production API writes.
 
 Дополнительно: подтверждение показывает оставшийся срок действия, по истечении автоматически блокируется и освобождает фоновые чтения. Черновики строк поиска CRM, камер и шаблонов не сбрасываются при служебном обновлении. Положение курсора/выделение текста восстанавливается, пароли не переносятся при перерисовке. Smoke проверяет истечение подтверждения и сохранение выделения текста.
+
+### Live rendering optimization
+Client status and NAT counters now update existing elements instead of rebuilding the entire card. NAT rows are keyed by port; unchanged rows retain identity and focus, and expanded recorder groups remain open. The RX/TX chart also keeps its SVG and patches paths/labels. Structural changes still update only affected rows; scroll is preserved. Traffic reads pause during confirmation. Offline smoke asserts DOM identity and graph updates in addition to prior scroll tests.

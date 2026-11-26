@@ -165,6 +165,7 @@
  function applyClientRefresh(now,full=false){
   const before=S.client;if(!before||before.server!==now.server||before.login!==now.login)return;
   const changed=JSON.stringify([before.ports,before.disabled_ports,before.remote_address])!==JSON.stringify([now.ports,now.disabled_ports,now.remote_address]);
+  if(changed&&S.plan)invalidateClientPlan();
   if(!full){now.conflicts_verified=!changed&&before.conflicts_verified===true;now.port_conflicts=now.conflicts_verified?before.port_conflicts:{}}
   S.client=now;S.newPorts=(S.newPorts||[]).filter(p=>now.ports.includes(p));S.refreshWarning='';if(!now.ports.includes(S.selectedPort))S.selectedPort=now.ports[0]??null;
   if(changed){S.camPorts=null;const box=$('client-camera-result');if(box)box.replaceChildren(notice('Порты изменились. Повторите сверку B2O.'))}
@@ -172,7 +173,9 @@
  }
  function paintClient(){
   const panel=$('client-live-card');if(!panel||!S.client)return;
-  preserveScroll(()=>{const active=document.activeElement,controls=[...panel.querySelectorAll('button')],i=controls.indexOf(active),label=active?.textContent;updateClientCard(panel,S.client);const b=panel.querySelectorAll('button')[i];if(b&&b.textContent===label&&!b.disabled)b.focus({preventScroll:true});const status=$('client-online');if(status){status.textContent=S.client.is_online?'В сети':'Не в сети';status.className=S.client.is_online?'online':'offline'}paintPortControls()});
+  preserveScroll(()=>{const active=document.activeElement,port=active?.closest('[data-vpn-port]')?.dataset.vpnPort,controls=[...panel.querySelectorAll('button,summary')],i=controls.indexOf(active),label=active?.textContent;updateClientCard(panel,S.client);
+   if(active&&!active.isConnected&&i>=0){const row=port?[...panel.querySelectorAll('[data-vpn-port]')].find(x=>x.dataset.vpnPort===port):null;const b=row?[...row.querySelectorAll('button,summary')].find(x=>x.textContent===label):panel.querySelectorAll('button,summary')[i];if(b&&b.textContent===label&&!b.disabled)b.focus({preventScroll:true})}
+   const status=$('client-online');if(status){setText(status,S.client.is_online?'В сети':'Не в сети');status.className=S.client.is_online?'online':'offline'}paintPortControls()});
  }
  async function refreshClient(){
   const c=S.client,owner=identity,route=epoch;if(!c||preview||taskBusy)return;
@@ -196,36 +199,65 @@
   for(const [id,label] of [['vpn-toggle-port',p?(disabled?'Включить порт ':'Отключить порт ')+p:'Выберите порт'],['vpn-remove-port',p?'Удалить порт '+p:'Удалить порт'],['vpn-recreate-port',p?'Пересоздать порт '+p:'Пересоздать порт']]){const n=$(id);if(n){n.textContent=label;n.disabled=!writable||!p||conflict}}
   const account=$('vpn-account-toggle');if(account){account.textContent=c.is_enabled?'Отключить учётку':'Включить учётку';account.disabled=!writable}
  }
+ function setText(node,value){const next=String(value??'—');if(node.textContent!==next)node.textContent=next}
+ function updateFacts(node,entries){
+  if(!node.children.length)keyValue(node,entries);
+  const fields=node.querySelectorAll('.kv strong');
+  entries.forEach(([k,v],i)=>{if(fields[i])setText(fields[i],v==null||v===''?'—':Array.isArray(v)?v.join(', '):v)})
+ }
  function updateClientCard(root,c){
-  root.replaceChildren();
-  section(root,'Данные клиента');
-  keyValue(root,[['Сервер',c.server],['Логин',c.login],['VPN IP',c.remote_address],['IP источника',c.tunnel_source_ip]]);
-  section(root,'Состояние VPN');
-  keyValue(root,[['Статус',c.is_online?'В сети':'Не в сети'],['Учётка',c.is_enabled?'Включена':'Отключена'],['Uptime',c.uptime],['Последний выход',c.last_logged_out],['RX, байт',c.rx_bytes],['TX, байт',c.tx_bytes]]);
-  const fresh=new Set(S.newPorts||[]);
-  if(fresh.size){root.append(notice('Добавлены порты: '+[...fresh].join(', ')));action(root,live('Копировать новые порты',()=>rpc('copy',[...fresh].join(', ')).then(()=>toast('Новые порты скопированы')).catch(error)))}
+  const key=JSON.stringify([c.server,c.login]);
+  if(root.dataset.clientKey!==key){
+   root.replaceChildren();root.dataset.clientKey=key;
+   section(root,'Данные клиента');const facts=el('div');facts.dataset.clientFacts='';root.append(facts);
+   section(root,'Состояние VPN');const state=el('div');state.dataset.clientState='';root.append(state);
+   const newPorts=el('div');newPorts.dataset.clientNewPorts='';root.append(newPorts);
+   const title=el('h2','section-head');title.dataset.clientPortTitle='';root.append(title);
+   const list=el('div','vpn-port-list');list.dataset.clientPortList='';root.append(list);
+   const hint=el('p','muted');hint.dataset.clientHint='';root.append(hint)
+  }
+  updateFacts(root.querySelector('[data-client-facts]'),[['Сервер',c.server],['Логин',c.login],['VPN IP',c.remote_address],['IP источника',c.tunnel_source_ip]]);
+  updateFacts(root.querySelector('[data-client-state]'),[['Статус',c.is_online?'В сети':'Не в сети'],['Учётка',c.is_enabled?'Включена':'Отключена'],['Uptime',c.uptime],['Последний выход',c.last_logged_out],['RX, байт',c.rx_bytes],['TX, байт',c.tx_bytes]]);
+  const fresh=new Set(S.newPorts||[]),freshKey=JSON.stringify([...fresh]),newBox=root.querySelector('[data-client-new-ports]');
+  if(newBox.dataset.freshKey!==freshKey){newBox.dataset.freshKey=freshKey;newBox.replaceChildren();if(fresh.size){newBox.append(notice('Добавлены порты: '+[...fresh].join(', ')));action(newBox,live('Копировать новые порты',()=>rpc('copy',[...fresh].join(', ')).then(()=>toast('Новые порты скопированы')).catch(error)))}}
   if(!c.ports.includes(S.selectedPort))S.selectedPort=c.ports[0]??null;
   if(!S.expandedPorts)S.expandedPorts=new Set();
-  section(root,'Порты NAT · '+c.ports.length);
-  const list=el('div','vpn-port-list'),links=new Map(),groups=new Map(S.camPorts?.grouped||[]);
+  setText(root.querySelector('[data-client-port-title]'),'Порты NAT · '+c.ports.length);
+  const list=root.querySelector('[data-client-port-list]'),links=new Map(),groups=new Map(S.camPorts?.grouped||[]),existing=new Map([...list.querySelectorAll('[data-vpn-port]')].map(n=>[Number(n.dataset.vpnPort),n]));
   for(const link of S.camPorts?.links||[])links.set(Number(link.port),link);
+  const enabled=new Set(c.active_ports),disabled=new Set(c.disabled_ports),wanted=new Set(c.ports);
+  for(const [p,card] of existing)if(!wanted.has(p)){card.remove();S.expandedPorts.delete(p)}
+  list.querySelector('[data-empty-ports]')?.remove();
+  let cursor=list.firstElementChild;
   for(const p of c.ports){
-   const conflict=c.port_conflicts?.[p],card=el('article','vpn-port-card'),selected=button('Порт '+p+(fresh.has(p)?' · новый':''),()=>choosePort(p),'quiet');selected.dataset.portSelect=String(p);selected.setAttribute('aria-pressed',String(S.selectedPort===p));
-   card.append(add(el('div','vpn-port-head'),selected,el('span',c.disabled_ports.includes(p)?'muted':'online',c.disabled_ports.includes(p)?'Отключён':c.active_ports.includes(p)?'Активен':'Включён'),live('Копировать',()=>rpc('copy',String(p)).then(()=>toast('Порт скопирован')).catch(error))));
-   card.append(el('p','muted','TCP · dst-nat · NAT-трафик: '+(c.port_nat_bytes?.[p]??'—')+' байт · Пакеты: '+(c.port_nat_packets?.[p]??'—')));
-   if(conflict)card.append(notice('Конфликт внешнего порта: '+conflict));
-   else if(c.conflicts_verified!==true)card.append(el('small','muted','Конфликты NAT не проверены'));
-   if(!conflict&&links.has(p)){const link=links.get(p);card.append(add(el('div','vpn-port-link'),el('strong','','ID камеры B2O: '+link.camera_id),live('Копировать ID',()=>rpc('copy',String(link.camera_id)).then(()=>toast('ID скопирован')).catch(error))))}
-   if(!conflict&&(groups.get(p)||groups.get(String(p)))?.length){
-    const matched=groups.get(p)||groups.get(String(p)),details=el('details','vpn-port-cameras');details.open=S.expandedPorts.has(p);
-    details.append(el('summary','','Найдено камер регистратора: '+matched.length));
-    for(const link of matched)details.append(add(el('div','vpn-port-link'),el('span','',link.label+' · ID '+link.camera_id),live('Копировать ID',()=>rpc('copy',String(link.camera_id)).then(()=>toast('ID скопирован')).catch(error))));
-    details.ontoggle=()=>{if(S.client?.server===c.server&&S.client?.login===c.login){if(details.open)S.expandedPorts.add(p);else S.expandedPorts.delete(p)}};card.append(details)
+   const conflict=c.port_conflicts?.[p],link=!conflict?links.get(p):null,matched=!conflict?(groups.get(p)||groups.get(String(p))||[]):[];
+   // Structural changes only; status and counters are patched in place.
+   const signature=JSON.stringify([conflict||null,c.conflicts_verified===true,link||null,matched]);
+   let card=existing.get(p);
+   if(!card||card.dataset.signature!==signature){
+    const old=card;card=el('article','vpn-port-card');card.dataset.vpnPort=String(p);card.dataset.signature=signature;
+    const selected=button('',()=>choosePort(p),'quiet');selected.dataset.portSelect=String(p);
+    const status=el('span');status.dataset.portStatus='';
+    card.append(add(el('div','vpn-port-head'),selected,status,live('Копировать',()=>rpc('copy',String(p)).then(()=>toast('Порт скопирован')).catch(error))));
+    const counters=el('p','muted');counters.dataset.portCounters='';card.append(counters);
+    if(conflict)card.append(notice('Конфликт внешнего порта: '+conflict));
+    else if(c.conflicts_verified!==true)card.append(el('small','muted','Конфликты NAT не проверены'));
+    if(link)card.append(add(el('div','vpn-port-link'),el('strong','','ID камеры B2O: '+link.camera_id),live('Копировать ID',()=>rpc('copy',String(link.camera_id)).then(()=>toast('ID скопирован')).catch(error))));
+    if(matched.length){const details=el('details','vpn-port-cameras');details.open=S.expandedPorts.has(p);
+     details.append(el('summary','','Найдено камер регистратора: '+matched.length));
+     for(const link of matched)details.append(add(el('div','vpn-port-link'),el('span','',link.label+' · ID '+link.camera_id),live('Копировать ID',()=>rpc('copy',String(link.camera_id)).then(()=>toast('ID скопирован')).catch(error))));
+     details.ontoggle=()=>{if(details.isConnected&&S.client?.server===c.server&&S.client?.login===c.login){if(details.open)S.expandedPorts.add(p);else S.expandedPorts.delete(p)}};card.append(details)
+    }
+    if(old?.isConnected){if(cursor===old)cursor=card;old.replaceWith(card)}
    }
-   list.append(card)
+   const selected=card.querySelector('[data-port-select]'),status=card.querySelector('[data-port-status]');
+   setText(selected,'Порт '+p+(fresh.has(p)?' · новый':''));selected.setAttribute('aria-pressed',String(S.selectedPort===p));
+   status.className=disabled.has(p)?'muted':'online';setText(status,disabled.has(p)?'Отключён':enabled.has(p)?'Активен':'Включён');
+   setText(card.querySelector('[data-port-counters]'),'TCP · dst-nat · NAT-трафик: '+(c.port_nat_bytes?.[p]??'—')+' байт · Пакеты: '+(c.port_nat_packets?.[p]??'—'));
+   if(card!==cursor)list.insertBefore(card,cursor);cursor=card.nextElementSibling
   }
-  if(!c.ports.length)list.append(notice('Порты не найдены.'));
-  root.append(list,el('p','muted',S.refreshWarning||'Автообновление каждые 15 секунд; конфликты NAT проверяются при полном обновлении.'));
+  if(!c.ports.length){const empty=notice('Порты не найдены.');empty.dataset.emptyPorts='';list.append(empty)}
+  setText(root.querySelector('[data-client-hint]'),S.refreshWarning||'Автообновление каждые 15 секунд; конфликты NAT проверяются при полном обновлении.')
  }
  function startRefresh(){
   stopRefresh();const selected=S.client;if(!selected||preview||page!=='search')return;
@@ -254,23 +286,37 @@
   card.append(title);const view=el('div');view.id='traffic-view';card.append(view,el('p','muted','Общий RX/TX VPN-сессии, не отдельных NAT-портов. Обновление каждые 2,5 сек.'));root.append(card);drawTraffic();
  }
  function drawTraffic(){
-  const view=$('traffic-view');if(!view)return;view.replaceChildren();
-  if(!traffic){view.append(el('p','muted','Мониторинг выключен.'));return}
+  const view=$('traffic-view');if(!view)return;
+  preserveScroll(()=>updateTrafficView(view))
+ }
+ function updateTrafficView(view){
+  if(!traffic){if(view.dataset.mode!=='off'){view.dataset.mode='off';view.replaceChildren(el('p','muted','Мониторинг выключен.'))}return}
   const x=traffic,s=x.last,pts=x.points,fmt=n=>n==null?'—':n.toFixed(2)+' Мбит/с',last=pts.at(-1)||{};
-  keyValue(view,[['Получение',fmt(last.rx)],['Отправка',fmt(last.tx)],['Состояние',x.error?'Нет подтверждения':!s?'Ожидание':s.online?'Онлайн':'Офлайн'],['Uptime',s?.uptime]]);
-  if(x.error)view.append(notice(x.error));
-  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 800 200');svg.setAttribute('class','traffic-chart');svg.setAttribute('role','img');svg.setAttribute('aria-label','График скорости RX и TX VPN');
-  const max=Math.max(1,...pts.flatMap(p=>[p.rx||0,p.tx||0]))*1.1;const node=(name,attrs)=>{const n=document.createElementNS(svg.namespaceURI,name);for(const [k,v] of Object.entries(attrs))n.setAttribute(k,String(v));return n};
-  for(let z=0;z<5;z++){const y=10+z*42;svg.append(node('line',{x1:54,y1:y,x2:790,y2:y,class:'traffic-grid'}));const label=node('text',{x:4,y:y+4,class:'traffic-axis'});label.textContent=(max*(1-z/4)).toFixed(1);svg.append(label)}
-  for(const [key,cls] of [['rx','rx-line'],['tx','tx-line']]){let line='';let pen=false;for(let i=0;i<pts.length;i++){const p=pts[i];if(p[key]==null){pen=false;continue}const x=54+i*736/59,y=178-p[key]/max*168;line+=(pen?' L ':' M ')+x+' '+y;pen=true}if(line)svg.append(node('path',{d:line,class:cls,fill:'none','stroke-width':2.4,'stroke-linecap':'round','stroke-linejoin':'round'}))}
-  view.append(svg,add(el('div','traffic-legend'),el('span','','RX · получение'),el('span','','TX · отправка')));
+  const node=(name,attrs)=>{const n=document.createElementNS('http://www.w3.org/2000/svg',name);for(const [k,v] of Object.entries(attrs))n.setAttribute(k,String(v));return n};
+  if(view.dataset.mode!=='on'){
+   view.dataset.mode='on';view.replaceChildren();
+   const facts=el('div');facts.dataset.trafficFacts='';const error=notice('');error.dataset.trafficError='';error.hidden=true;
+   const svg=node('svg',{viewBox:'0 0 800 200',class:'traffic-chart',role:'img','aria-label':'График скорости RX и TX VPN'});
+   for(let z=0;z<5;z++){const y=10+z*42;svg.append(node('line',{x1:54,y1:y,x2:790,y2:y,class:'traffic-grid'}));svg.append(node('text',{x:4,y:y+4,class:'traffic-axis'}))}
+   for(const cls of ['rx-line','tx-line'])svg.append(node('path',{d:'',class:cls,fill:'none','stroke-width':2.4,'stroke-linecap':'round','stroke-linejoin':'round'}));
+   view.append(facts,error,svg,add(el('div','traffic-legend'),el('span','','RX · получение'),el('span','','TX · отправка')))
+  }
+  updateFacts(view.querySelector('[data-traffic-facts]'),[['Получение',fmt(last.rx)],['Отправка',fmt(last.tx)],['Состояние',x.error?'Нет подтверждения':!s?'Ожидание':s.online?'Онлайн':'Офлайн'],['Uptime',s?.uptime]]);
+  const err=view.querySelector('[data-traffic-error]');err.hidden=!x.error;setText(err,x.error||'');
+  const max=Math.max(1,...pts.flatMap(p=>[p.rx||0,p.tx||0]))*1.1,svg=view.querySelector('svg');
+  [...svg.querySelectorAll('.traffic-axis')].forEach((label,z)=>setText(label,(max*(1-z/4)).toFixed(1)));
+  for(const [key,cls] of [['rx','rx-line'],['tx','tx-line']]){
+   let line='',pen=false;
+   for(let i=0;i<pts.length;i++){const p=pts[i];if(p[key]==null){pen=false;continue}const px=54+i*736/59,y=178-p[key]/max*168;line+=(pen?' L ':' M ')+px+' '+y;pen=true}
+   svg.querySelector('.'+cls).setAttribute('d',line)
+  }
  }
  function startTraffic(c){
   stopTraffic();const x={host:c.server,login:c.login,owner:identity,stopped:false,last:null,points:[],error:null};traffic=x;
   async function poll(){
    if(x.stopped||traffic!==x)return;
    if(page!=='search'||identity!==x.owner||!S.client||S.client.server!==x.host||S.client.login!==x.login){stopTraffic();return}
-   if(document.hidden||taskBusy||idleRead){x.timer=setTimeout(poll,2500);return}
+   if(document.hidden||taskBusy||idleRead||S.plan){x.timer=setTimeout(poll,2500);return}
    
    try{
     const result=await backgroundRead('traffic_sample',{host:x.host,login:x.login});if(!result.ok)throw Error(result.error);
@@ -733,5 +779,5 @@
   previewNotice(root,currentPlan(),out=>{if(out?.background&&S.background)S.background.v4=out.background});resultNote(root);
 
  }
- window.lvModules=Object.freeze({...(window.helper?.smokeMode?{expireFixture:()=>{if(!preview)throw Error('Fixture requires offline preview');setPlan({token:'offline-fixture',label:'Тест подтверждения'},page,Date.now()+80);render(false)},fixture:(name,data)=>{if(!preview)throw Error('Fixture requires offline preview');Object.assign(S,data);if(name==='archives'||name==='diagnostics')S.archivePage=name;render(false)},refreshFixture:now=>{if(!preview)throw Error('Fixture requires offline preview');preserveScroll(()=>{applyClientRefresh(now);paintClient()})}}:{}),reset,enterPage,loadCreateHosts,discardPlan,client,selectedClient:()=>S.client,stopTraffic,stopRefresh,cloudRestore:c=>stage("cloud_restore_preview",{host:c.server,login:c.login}),dashboard,settings:workspaceSettings,infrastructure,infrastructureResults,lvLabel:host=>{const x=(S.lvFleet?.rows||[]).find(r=>r.server===host);return x&&!x.error?x.state_text:'Не проверено'},clearClient:()=>{stopTraffic();stopRefresh();S.selectedPort=null;S.expandedPorts=new Set();S.cameraMatchError='';S.newPorts=[];S.refreshWarning='';S.clientHistory=null;S.camPorts=null;S.client=null;S.plan=null;S.outcome=null},renderClient,render:(name,root)=>{({create,inactive,lv,recovery,admin,billing,archives:r=>archive(r,false),diagnostics:r=>archive(r,true),agent,camera,templates})[name]?.(root)}});
+ window.lvModules=Object.freeze({...(window.helper?.smokeMode?{expireFixture:()=>{if(!preview)throw Error('Fixture requires offline preview');setPlan({token:'offline-fixture',label:'Тест подтверждения'},page,Date.now()+80);render(false)},fixture:(name,data)=>{if(!preview)throw Error('Fixture requires offline preview');Object.assign(S,data);if(name==='archives'||name==='diagnostics')S.archivePage=name;render(false)},trafficFixture:points=>{if(!preview)throw Error('Fixture requires offline preview');traffic={host:S.client.server,login:S.client.login,points,last:{online:true,uptime:'2д'},error:null};drawTraffic()},refreshFixture:now=>{if(!preview)throw Error('Fixture requires offline preview');preserveScroll(()=>{applyClientRefresh(now);paintClient()})}}:{}),reset,enterPage,loadCreateHosts,discardPlan,client,selectedClient:()=>S.client,stopTraffic,stopRefresh,cloudRestore:c=>stage("cloud_restore_preview",{host:c.server,login:c.login}),dashboard,settings:workspaceSettings,infrastructure,infrastructureResults,lvLabel:host=>{const x=(S.lvFleet?.rows||[]).find(r=>r.server===host);return x&&!x.error?x.state_text:'Не проверено'},clearClient:()=>{stopTraffic();stopRefresh();S.selectedPort=null;S.expandedPorts=new Set();S.cameraMatchError='';S.newPorts=[];S.refreshWarning='';S.clientHistory=null;S.camPorts=null;S.client=null;S.plan=null;S.outcome=null},renderClient,render:(name,root)=>{({create,inactive,lv,recovery,admin,billing,archives:r=>archive(r,false),diagnostics:r=>archive(r,true),agent,camera,templates})[name]?.(root)}});
 })();

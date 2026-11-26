@@ -176,3 +176,5 @@ nav button{transition:color .16s,background .16s,border-color .16s}nav button[ar
 @media(max-height:560px){.sidebar{gap:6px;padding-top:8px}.sidebar nav{gap:2px}.sidebar nav button{min-height:32px}.sidebar .brand{padding-bottom:0}.sidebar-end{padding-top:8px}}
 
 .confirmation-time{font-size:12px;font-weight:650;color:var(--accent-text);margin-top:9px;font-variant-numeric:tabular-nums}.confirmation-expired{border-color:var(--line)}.confirmation-expired .confirmation-time{color:var(--danger)}body,.sidebar,.topbar{transition:background-color .18s var(--ease),border-color .18s var(--ease)}
+
+[data-client-new-ports]:empty{display:none}[data-client-facts] .kv-grid,[data-client-state] .kv-grid{margin:0 0 12px}.traffic-chart path{vector-effect:non-scaling-stroke}.traffic-chart .traffic-axis{font-variant-numeric:tabular-nums}[data-port-counters]{font-variant-numeric:tabular-nums}
