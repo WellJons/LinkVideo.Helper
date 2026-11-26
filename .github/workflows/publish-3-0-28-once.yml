@@ -1,0 +1,69 @@
+name: Publish approved stable 3.0.28
+on:
+  push:
+    branches: ['rc/publish-3.0.28']
+permissions:
+  contents: write
+  actions: write
+concurrency:
+  group: publish-approved-stable-3-0-28
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: v3.0.28
+      SOURCE: db3d324705ca4effdc79bd33afe8dc9a1d19073d
+      FINAL_RUN: '45774439140'
+    steps:
+      - name: Require exact final build success
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run watch "$FINAL_RUN" --repo "$GITHUB_REPOSITORY" --exit-status --interval 15
+          gh run view "$FINAL_RUN" --repo "$GITHUB_REPOSITORY" --json conclusion --jq '.conclusion' | grep -Fx success
+      - name: Verify draft assets and publish approved release
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual=$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq '.sha')
+          test "$actual" = "$SOURCE"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,tagName,assets > release.json
+          mkdir -p checked
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir checked --pattern LinkVideo.Helper_Setup.exe --pattern verification.json
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib
+          r = json.loads(pathlib.Path('release.json').read_text())
+          assert r['tagName'] == os.environ['TAG'] and not r['isPrerelease'], r
+          assert {'LinkVideo.Helper_Setup.exe','Uninstall.exe','LinkVideo.Helper_Payload_3.0.28.zip','LinkVideo.Helper_Payload_3.0.28.json','verification.json'} <= {a['name'] for a in r['assets']}
+          v = json.loads(pathlib.Path('checked/verification.json').read_text(encoding='utf-8-sig'))
+          assert v['version'] == '3.0.28' and v['source_commit'] == os.environ['SOURCE'], v
+          for k in ('app_product_version','setup_product_version','uninstall_product_version'):
+              assert v[k] in ('3.0.28','3.0.28.0'), (k,v[k])
+          for k in ('exact_setup_self_test','python_release_preflight','ruff_critical','go_vet','patch_pipeline_compile'):
+              assert v[k] == 'passed', (k,v[k])
+          p = pathlib.Path('checked/LinkVideo.Helper_Setup.exe')
+          assert p.stat().st_size == v['setup_size_bytes'] and p.stat().st_size > 10_000_000
+          data = p.read_bytes()
+          assert data[:2] == b'MZ' and hashlib.sha256(data).hexdigest() == v['setup_sha256'].lower()
+          PY
+          latest=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq '.tagName')
+          python3 - "$latest" <<'PY'
+          import re, sys
+          tag=sys.argv[1]
+          assert re.fullmatch(r'v\d+\.\d+\.\d+(?:\.\d+)?',tag),tag
+          v=tuple(map(int,tag[1:].split('.')))
+          assert v+(0,)*(4-len(v)) <= (3,0,28,0),tag
+          PY
+          if [ "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = true ]; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          fi
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,url
+      - name: Trigger existing guarded public update workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run publish-public-update.yml --repo "$GITHUB_REPOSITORY" --ref main -f tag="$TAG"
+          echo 'Existing public updater workflow dispatched; its own verification gates remain intact.'
