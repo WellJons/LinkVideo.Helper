@@ -312,6 +312,8 @@ class SearchManagePage(QWidget):
         self._camera_match_message = "Камеры пока не проверены."
         self._camera_lookup_override = ""
         self._camera_lookup_draft = ""
+        self._client_scroll_key = None
+        self._client_scroll_generation = 0
         self.cameraPortsReady.connect(self._on_camera_ports)
         self.searchReady.connect(self._on_search)
         self.progressReady.connect(self._on_progress)
@@ -613,6 +615,7 @@ class SearchManagePage(QWidget):
         self.left_card.hide()
         self.client_info_card.show()
         self.detail_panel.show()
+        self._client_scroll_key = None  # Only an explicit opening starts at the top.
         self._render_client()
         self._start_camera_port_check()
         QTimer.singleShot(0, lambda: self.page_scroll.verticalScrollBar().setValue(0))
@@ -622,6 +625,8 @@ class SearchManagePage(QWidget):
             return
         if immediate:
             self._deleted_current = None
+        self._client_scroll_key = None
+        self._client_scroll_generation += 1
         self.detail_panel.hide()
         self.client_info_card.hide()
         self.left_card.show()
@@ -1154,11 +1159,47 @@ class SearchManagePage(QWidget):
         self._clear_detail()
         self.detail_l.addWidget(EmptyState("Клиент не выбран", "Вернитесь к результатам поиска и выберите учётную запись.", "⌕"), 1)
 
+    def _capture_client_scroll(self, client):
+        """Keep all three scroll positions only for the same open account."""
+        key = (client.server, client.login)
+        same = self._client_scroll_key == key
+        self._client_scroll_key = key
+        self._client_scroll_generation += 1
+        bars = (self.page_scroll.verticalScrollBar(),
+                self.info_scroll.verticalScrollBar(),
+                self.detail_scroll.verticalScrollBar())
+        return (key, self._client_scroll_generation,
+                tuple(bar.value() if same else 0 for bar in bars), same)
+
+    def _restore_client_scroll(self, state):
+        key, generation, positions, same = state
+        bars = (self.page_scroll.verticalScrollBar(),
+                self.info_scroll.verticalScrollBar(),
+                self.detail_scroll.verticalScrollBar())
+        # Do not let a newly focused list item force the outer viewport up.
+        # The NAT counter integration may still resize rows after this method
+        # returns, so restore once more after the event-loop layout pass.
+        for bar, value in zip(bars, positions):
+            bar.setValue(min(value, bar.maximum()))
+        def restore_after_layout():
+            if (self._client_scroll_generation != generation
+                    or self._client_scroll_key != key
+                    or self.current is None
+                    or (self.current.server, self.current.login) != key
+                    or self.detail_panel.isHidden()):
+                return
+            for layout in (self.info_content, self.detail_l, self.workspace_layout, self.page_layout):
+                layout.activate()
+            for bar, value in zip(bars, positions):
+                bar.setValue(min(value, bar.maximum()))
+        QTimer.singleShot(0, self, restore_after_layout)
+
     def _render_client(self):
         c = self.current
         if not c:
             self._render_empty()
             return
+        scroll_state = self._capture_client_scroll(c)
         self._clear_detail()
 
         # Client header stays visible above the independently scrollable
@@ -1487,11 +1528,7 @@ class SearchManagePage(QWidget):
         self.detail_l.addWidget(control)
         self.detail_l.addStretch(1)
         self._sync_selected_port_controls()
-        self.info_scroll.verticalScrollBar().setValue(0)
-        self.detail_scroll.verticalScrollBar().setValue(0)
-        # Qt can auto-scroll to an initially focused list item after layout.
-        # Restore the profile's first row once geometry has settled.
-        QTimer.singleShot(0, lambda: self.info_scroll.verticalScrollBar().setValue(0))
+        self._restore_client_scroll(scroll_state)
 
     def _plain_data_line(self, name: str, value: str, suffix: str = "") -> QWidget:
         w = QWidget()

@@ -4,11 +4,15 @@ from __future__ import annotations
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPoint, QPointF, QSize, Qt
+from PySide6.QtCore import QPoint, QPointF, QSize, Qt, QSettings
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtWidgets import QApplication, QListWidgetItem, QScrollArea, QVBoxLayout, QWidget
 
-from linkvideo_vpn_helper.ui.pages.search_manage_page import ClientPortsList
+from linkvideo_vpn_helper.ui.pages.search_manage_page import ClientPortsList, SearchManagePage
+from linkvideo_vpn_helper.services.vpn_service import ClientRecord, SessionCredentials, VPNService
+from linkvideo_vpn_helper.services.server_registry import ServerRegistry
+from tempfile import TemporaryDirectory
+from pathlib import Path
 from linkvideo_vpn_helper.services.archive_diagnosis_engine import (
     ArchiveDiagnosisEngine, DiagnosisSide,
 )
@@ -71,6 +75,40 @@ assert port_list.height() >= 29*78+390
 assert bar.maximum() > 100
 port_list.close()
 outer.close()
+
+# Exercise the real desktop renderer without network. Preserve both client
+# panes and the outer viewport through repeated redraws of the same record.
+with TemporaryDirectory() as td:
+    settings = QSettings(str(Path(td) / "scroll.ini"), QSettings.Format.IniFormat)
+    page = SearchManagePage(VPNService(), None, SessionCredentials("staff", "offline"), ServerRegistry(settings))
+    page.resize(1020, 690)
+    page.show()
+    page.current = ClientRecord(server="fixture.example.invalid", login="scroll-test",
+                                password="offline", remote_address="172.16.0.2",
+                                ports=list(range(20000, 20060)))
+    page.left_card.hide()
+    page.client_info_card.show()
+    page.detail_panel.show()
+    page._render_client()
+    for _ in range(5): app.processEvents()
+    bars = (page.page_scroll.verticalScrollBar(), page.info_scroll.verticalScrollBar(),
+            page.detail_scroll.verticalScrollBar())
+    assert bars[1].maximum() > 200, bars[1].maximum()
+    for bar, value in zip(bars, (120, 400, 180)):
+        bar.setValue(min(value, bar.maximum()))
+    saved = tuple(bar.value() for bar in bars)
+    assert saved[1] > 0
+    page._render_client()
+    for _ in range(5): app.processEvents()
+    assert tuple(bar.value() for bar in bars) == saved, (saved, tuple(bar.value() for bar in bars))
+    # A new account must not inherit the previous account's scroll.
+    page.current = ClientRecord(server="fixture.example.invalid", login="different",
+                                password="offline", remote_address="172.16.0.3",
+                                ports=list(range(21000, 21060)))
+    page._render_client()
+    for _ in range(5): app.processEvents()
+    assert bars[1].value() == bars[2].value() == 0
+    page.close()
 
 engine = ArchiveDiagnosisEngine()
 camera = ArchiveCamera("123", "linkvideo_123", "vcore.example", "live/123", "", 7)
