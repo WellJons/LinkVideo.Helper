@@ -26,6 +26,10 @@ async function layoutSmoke(){
  for(const name of ['home','search','servers','create','inactive','lv','recovery','billing','archives','diagnostics','agent','camera','templates','admin','settings']){
   go(name);window.lvModules.fixture(name,data);await wait();check(name);
  }
+ go('archives');window.lvModules.fixture('archives',data);await wait();
+ if(!document.querySelector('.archive-workspace')||!document.querySelector('[data-archive-folder]')||[...document.querySelectorAll('input[type=datetime-local]')].some(x=>!x.value))throw Error('Archive workflow missing');
+ go('diagnostics');window.lvModules.fixture('diagnostics',data);await wait();const extra=document.querySelector('.archive-extra-rows');extra.querySelector('button').click();if(!extra.querySelector('input'))throw Error('Cannot add camera comparison');extra.querySelector('input').value='fixture';extra.querySelector('input').dispatchEvent(new Event('input'));render(false);if(document.querySelector('.archive-extra-rows input').value!=='fixture')throw Error('Comparison input lost');check('diagnostics:extra');
+ go('agent');window.lvModules.fixture('agent',data);await wait();if(!document.querySelector('.agent-workspace')||!document.querySelector('[data-agent-action="bitrate"]'))throw Error('Agent workflow missing');document.querySelector('[data-agent-action="timezone"]').click();await wait();if(!document.querySelector('#page').textContent.includes('ntp.goodline.info'))throw Error('Agent NTP setting missing');check('agent:timezone');
  go('billing');window.lvModules.fixture('billing',{...data,billingTab:'search',billingCardTab:'services',catalog:{...data.catalog,scope:'client'}});await wait();
  const billingTab=(kind,id)=>document.querySelector('[data-billing-tab="'+kind+':'+id+'"]');
  if(!document.querySelector('[data-billing-camera="001"]'))throw Error('Missing native camera card');

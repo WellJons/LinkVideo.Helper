@@ -107,13 +107,20 @@ handle('helper:task-scheduler',async()=>{
  const err=await shell.openPath(file);if(err)throw Error('Не удалось открыть планировщик.');
  return true;
 });
+let archiveFolder=null;
+handle('helper:archive-folder',async a=>{
+ if(!['get','choose'].includes(a?.action))throw Error('Неизвестное действие.');
+ if(a.action==='choose'){const r=await dialog.showOpenDialog(win,{title:'Папка архива',defaultPath:archiveFolder||app.getPath('videos'),properties:['openDirectory','createDirectory']});if(!r.canceled&&r.filePaths[0])archiveFolder=r.filePaths[0]}
+ return archiveFolder||app.getPath('videos');
+});
 handle('helper:archive-download',async a=>{
  if(!['ffmpeg','ffmpeg_no_audio','curl'].includes(a?.mode))throw Error('Выберите метод.');
  const manual=clean(a?.manual??'',4000);if(manual===null)throw Error('Слишком длинная команда FFmpeg.');
  const token=clean(a?.token,100);if(!token)throw Error('Повторите поиск архива.');
  const filename=typeof a.filename==='string'&&/^[A-Za-z0-9_.-]{1,180}\.mp4$/.test(a.filename)?a.filename:'archive.mp4';
- const result=await dialog.showSaveDialog(win,{title:'Сохранить архив',defaultPath:path.join(app.getPath('videos'),filename),filters:[{name:'Видео MP4',extensions:['mp4']}]});
+ const result=await dialog.showSaveDialog(win,{title:'Сохранить архив',defaultPath:path.join(archiveFolder||app.getPath('videos'),filename),filters:[{name:'Видео MP4',extensions:['mp4']}]});
  if(result.canceled||!result.filePath)throw Error('Сохранение отменено.');
+ archiveFolder=path.dirname(result.filePath);
  const out=await bridge.request('archive_download',{output:result.filePath,mode:a.mode,manual,token});lastArchive=out?.output===result.filePath?result.filePath:null;return out;
 });
 handle('helper:backup-folder',async()=>{
