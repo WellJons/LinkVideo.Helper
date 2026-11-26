@@ -26,6 +26,19 @@ async function layoutSmoke(){
  for(const name of ['home','search','servers','create','inactive','lv','recovery','billing','archives','diagnostics','agent','camera','templates','admin','settings']){
   go(name);window.lvModules.fixture(name,data);await wait();check(name);
  }
+ go('search');const many=Array.from({length:48},(_,i)=>20000+i);const crowded={...c,ports:many,active_ports:many,disabled_ports:[]};window.lvModules.fixture('search',{client:crowded,newPorts:[],clientHistory:Array.from({length:25},()=>({created_at:'2026-11-17',action:'client.create',details:{}}))});await wait();
+ const pane=key=>document.querySelector('[data-scroll-key="'+key+'"]');
+ const info=pane('vpn-info'),actions=pane('vpn-actions');if(!info||!actions||info.scrollHeight<=info.clientHeight||actions.scrollHeight<=actions.clientHeight)throw Error('Expected independent client scroll panes');
+ info.scrollTop=250;actions.scrollTop=280;window.scrollTo(0,Math.min(150,document.scrollingElement.scrollHeight-innerHeight));await wait();
+ const positions=()=>[window.scrollY,pane('vpn-info').scrollTop,pane('vpn-actions').scrollTop];
+ const saved=positions();if(saved[1]<=0||saved[2]<=0)throw Error('Scroll test did not scroll both panes');
+ const actionInput=pane('vpn-actions').querySelector('input');actionInput.value='unsaved input';actionInput.focus({preventScroll:true});
+ window.lvModules.refreshFixture({...crowded,rx_bytes:99999999,uptime:'3д',is_online:false});await wait();
+ if(positions().some((v,i)=>Math.abs(v-saved[i])>2)||document.activeElement!==actionInput||actionInput.value!=='unsaved input')throw Error('Live VPN refresh moved viewport or lost input: '+positions()+' / '+saved);
+ if(document.getElementById('client-online').textContent!=='Не в сети')throw Error('Live status did not change');
+ render(false);await wait();if(positions().some((v,i)=>Math.abs(v-saved[i])>2))throw Error('Full render lost client scroll: '+positions()+' / '+saved);
+ check('search:scroll-preservation');
+ document.querySelector('.search-compact button').click();await wait();if(!document.getElementById('search-query'))throw Error('Cannot return to search');
  go('create');window.lvModules.fixture('create',{hosts:[{host:'ru.example.invalid',country:'Россия'},{host:'kz.example.invalid',country:'Казахстан'}],createRegion:'Россия',createHost:'',createPorts:3,createCount:1});await wait();
  const control=id=>document.querySelector('[data-create-control="'+id+'"]');
  if(control('ports').value!=='3'||control('count').value!=='1'||control('host').value!=='ru.example.invalid'||!document.querySelector('.create-result'))throw Error('Desktop create defaults differ');

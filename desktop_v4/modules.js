@@ -89,10 +89,34 @@
   right.append(button('Копировать данные',()=>rpc('copyVpnBatch',rows.map(c=>({host:c.server,login:c.login}))).then(x=>toast('Скопировано: '+x.count)).catch(error),'quiet',preview||!rows.length));
   layout.append(left,right);root.append(layout);
  }
- async function client(host,login){stopTraffic();stopRefresh();S.clientHistory=null;S.camPorts=null;S.cameraLogin='';S.client=null;S.plan=null;S.outcome=null;S.newPorts=[];S.refreshWarning='';await run(async()=>{S.client=await op('client_detail',{host,login});syncResult(S.client);startRefresh()})}
+ async function client(host,login){
+  if(S.client?.server===host&&S.client?.login===login)return refreshClient();
+  stopTraffic();stopRefresh();S.clientHistory=null;S.camPorts=null;S.cameraLogin='';S.client=null;discardPlan();S.newPorts=[];S.refreshWarning='';
+  const owner=identity,route=epoch;
+  await run(async()=>{const data=await op('client_detail',{host,login});if(identity!==owner||epoch!==route||page!=='search')return;S.client=data;syncResult(data);render(true);startRefresh()});
+ }
  let refresh=null;
  function stopRefresh(){if(refresh){refresh.stopped=true;clearTimeout(refresh.timer);refresh=null}}
- function syncResult(c,remove=false){const data=searchState?.data;if(!data?.matches)return;const i=data.matches.findIndex(x=>x.server===c.server&&x.login===c.login);if(i>=0){if(remove)data.matches.splice(i,1);else data.matches[i]={...data.matches[i],...c};const result=$('search-results');if(result)showMatches(result,searchState)}}
+ function syncResult(c,remove=false){const data=searchState?.data;if(!data?.matches)return;const i=data.matches.findIndex(x=>x.server===c.server&&x.login===c.login);if(i>=0){if(remove)data.matches.splice(i,1);else data.matches[i]={...data.matches[i],...c};const result=$('search-results');if(result)preserveScroll(()=>showMatches(result,searchState))}}
+ function applyClientRefresh(now,full=false){
+  const before=S.client;if(!before||before.server!==now.server||before.login!==now.login)return;
+  const changed=JSON.stringify([before.ports,before.disabled_ports,before.remote_address])!==JSON.stringify([now.ports,now.disabled_ports,now.remote_address]);
+  if(!full){now.conflicts_verified=!changed&&before.conflicts_verified===true;now.port_conflicts=now.conflicts_verified?before.port_conflicts:{}}
+  S.client=now;S.newPorts=(S.newPorts||[]).filter(p=>now.ports.includes(p));S.refreshWarning='';
+  if(changed){S.camPorts=null;const box=$('client-camera-result');if(box)box.replaceChildren(notice('Порты изменились. Повторите сверку B2O.'))}
+  syncResult(now);
+ }
+ function paintClient(){
+  const panel=$('client-live-card');if(!panel||!S.client)return;
+  preserveScroll(()=>{const active=document.activeElement,controls=[...panel.querySelectorAll('button')],i=controls.indexOf(active),label=active?.textContent;updateClientCard(panel,S.client);const b=panel.querySelectorAll('button')[i];if(b&&b.textContent===label&&!b.disabled)b.focus({preventScroll:true});const status=$('client-online');if(status){status.textContent=S.client.is_online?'В сети':'Не в сети';status.className=S.client.is_online?'online':'offline'}});
+ }
+ async function refreshClient(){
+  const c=S.client,owner=identity,route=epoch;if(!c||preview||taskBusy)return;
+  stopRefresh();
+  try{const data=await op('client_detail',{host:c.server,login:c.login});if(identity===owner&&epoch===route&&S.client===c)preserveScroll(()=>{applyClientRefresh(data,true);paintClient()})}
+  catch(err){if(identity===owner&&epoch===route)error(err)}
+  finally{if(identity===owner&&epoch===route&&page==='search'&&S.client)startRefresh()}
+ }
  function updateClientCard(root,c){
   root.replaceChildren();
   keyValue(root,[['Сервер',c.server],['VPN IP',c.remote_address],['IP источника',c.tunnel_source_ip],['Статус',c.is_online?'В сети':'Не в сети'],['Учётка',c.is_enabled?'Включена':'Отключена'],['Uptime',c.uptime],['Последний выход',c.last_logged_out],['RX, байт',c.rx_bytes],['TX, байт',c.tx_bytes]]);
@@ -111,20 +135,12 @@
    if(document.hidden||taskBusy||idleRead||S.plan||$ ('command-dialog')?.open){next();return}
    
    try{
-    const reply=await backgroundRead('client_refresh',{host:x.host,login:x.login});if(!reply.ok)throw Error(reply.error);
+    const reply=await backgroundRead('client_refresh',{host:x.host,login:x.login});if(!reply)return;if(!reply.ok)throw Error(reply.error);
     if(refresh!==x||x.stopped)return;
     if(!reply.data.found){S.refreshWarning='Учётка не найдена при обновлении. Проверьте поиск; изменения не выполнялись.';return}
-    const before=S.client,now=reply.data.client;
-    const changed=JSON.stringify([before.ports,before.disabled_ports,before.remote_address])!==JSON.stringify([now.ports,now.disabled_ports,now.remote_address]);
-    // Targeted refresh never scans the entire NAT table. Preserve a known
-    // conflict result only when its underlying addresses and ports agree.
-    now.conflicts_verified=!changed&&before.conflicts_verified===true;
-    now.port_conflicts=now.conflicts_verified?before.port_conflicts:{};
-    S.client=now;S.newPorts=(S.newPorts||[]).filter(p=>now.ports.includes(p));S.refreshWarning='';
-    if(changed){S.camPorts=null;const box=$('client-camera-result');if(box)box.replaceChildren(notice('Порты изменились. Повторите сверку B2O.'))}
-    syncResult(now);
+    preserveScroll(()=>{applyClientRefresh(reply.data.client);paintClient()});
    }catch{if(refresh===x)S.refreshWarning='Автообновление не подтверждено; показаны последние известные данные.'}
-   finally{if(refresh===x&&!x.stopped){const panel=$('client-live-card');if(panel&&S.client)updateClientCard(panel,S.client);next()}}
+   finally{if(refresh===x&&!x.stopped){if(S.refreshWarning)paintClient();next()}}
   }
   next();
  }
@@ -167,8 +183,15 @@
  }
  function renderClient(root){
   const c=S.client;if(!c){if(currentPlan())previewNotice(root,currentPlan(),out=>{if(out?.restored&&out.client){S.client=out.client;S.camPorts=null;S.clientHistory=null;searchState=null;S.newPorts=[];startRefresh()}});resultNote(root);return;}
-  section(root,'Карточка VPN · '+c.login);
-  const panel=el('div','panel');panel.id='client-live-card';updateClientCard(panel,c);root.append(panel);if(!refresh)startRefresh();
+  const workspace=el('div','vpn-client-workspace'),left=el('div','panel vpn-client-column'),right=el('div','panel vpn-client-column');
+  const online=el('span',c.is_online?'online':'offline',c.is_online?'В сети':'Не в сети');online.id='client-online';
+  left.append(add(el('div','vpn-client-heading'),el('h2','','Клиент '+c.login),online));
+  right.append(el('h2','','Управление аккаунтом'));
+  const info=el('div','vpn-client-scroll'),detail=el('div','vpn-client-scroll');info.dataset.scrollKey='vpn-info';detail.dataset.scrollKey='vpn-actions';
+  info.tabIndex=0;detail.tabIndex=0;info.setAttribute('aria-label','Данные клиента и порты');detail.setAttribute('aria-label','Управление аккаунтом');
+  left.append(info);right.append(detail);workspace.append(left,right);root.append(workspace);
+  const panel=el('div','vpn-live-card');panel.id='client-live-card';updateClientCard(panel,c);info.append(panel);if(!refresh)startRefresh();
+  root=detail;
   trafficPanel(root,c);
   const cameraLogin=field("Уточнить логин B2O (необязательно)","text",S.cameraLogin||"");form(root,cameraLogin);action(root,live("Сверить NAT с камерами",()=>run(async()=>{S.cameraLogin=value(cameraLogin);S.camPorts=null;S.camPorts=await op("camera_ports",{host:c.server,login:c.login,override:S.cameraLogin})}),"primary"));
   const cameraBox=el('div');cameraBox.id='client-camera-result';root.append(cameraBox);
@@ -176,7 +199,7 @@
   action(root,live('Копировать VPN',()=>rpc('copyVpn',c.server,c.login).then(()=>toast('Конфигурация скопирована')).catch(error)));
   if(identity?.role==='sysadmin')action(root,live('WinBox',()=>run(()=>op('winbox',{host:c.server}))));
   const a=field('Действие','select','add',[['add','Добавить порты'],['disconnect','Разорвать сессию'],...(identity?.role==='sysadmin'?[['enable','Включить VPN'],['disable','Отключить VPN'],['port_enable','Включить порт'],['port_disable','Отключить порт'],['remove_port','Удалить порт'],['recreate_port','Пересоздать порт'],['password','Сменить пароль']]:[])]),p=field('Порт / количество','number',1),pw=field('Новый пароль','password');
-  form(root,a,p,pw);action(root,live('Подготовить действие',()=>{const args={host:c.server,login:c.login,action:value(a),count:num(p),port:num(p),password:pw.input.value};pw.input.value='';stage('vpn_preview',args)},'primary'));action(root,live('Обновить карточку',()=>client(c.server,c.login)));
+  form(root,a,p,pw);action(root,live('Подготовить действие',()=>{const args={host:c.server,login:c.login,action:value(a),count:num(p),port:num(p),password:pw.input.value};pw.input.value='';stage('vpn_preview',args)},'primary'));action(root,live('Обновить статус',refreshClient));
   if(identity?.role==='sysadmin'){const d=field('Для удаления: точный server/login','text');form(root,d);action(root,live('Подготовить удаление',()=>stage('delete_preview',{host:c.server,login:c.login,confirm:value(d)})))}
   previewNotice(root,currentPlan(),out=>{if(out?.deleted){stopTraffic();stopRefresh();syncResult(c,true);S.client=null;S.newPorts=[]}else if(out?.login){S.client=out;S.newPorts=Array.isArray(out.new_ports)?out.new_ports:(S.newPorts||[]).filter(p=>out.ports.includes(p));S.camPorts=null;S.clientHistory=null;syncResult(out);startRefresh()}else if(out?.disconnected!=null){S.refreshWarning='Сессия разорвана; ожидается повторная проверка.';startRefresh()}});resultNote(root);clientHistory(root,c);
  }
@@ -428,5 +451,5 @@
   previewNotice(root,currentPlan(),out=>{if(out?.background&&S.background)S.background.v4=out.background});resultNote(root);
 
  }
- window.lvModules=Object.freeze({...(window.helper?.smokeMode?{fixture:(name,data)=>{if(!preview)throw Error('Fixture requires offline preview');Object.assign(S,data);if(name==='archives'||name==='diagnostics')S.archivePage=name;render(false)}}:{}),reset,loadCreateHosts,discardPlan,client,stopTraffic,stopRefresh,cloudRestore:c=>stage("cloud_restore_preview",{host:c.server,login:c.login}),dashboard,settings:workspaceSettings,clearClient:()=>{stopTraffic();stopRefresh();S.newPorts=[];S.refreshWarning='';S.clientHistory=null;S.camPorts=null;S.client=null;S.plan=null;S.outcome=null},renderClient,render:(name,root)=>{({create,inactive,lv,recovery,admin,billing,archives:r=>archive(r,false),diagnostics:r=>archive(r,true),agent,camera,templates})[name]?.(root)}});
+ window.lvModules=Object.freeze({...(window.helper?.smokeMode?{fixture:(name,data)=>{if(!preview)throw Error('Fixture requires offline preview');Object.assign(S,data);if(name==='archives'||name==='diagnostics')S.archivePage=name;render(false)},refreshFixture:now=>{if(!preview)throw Error('Fixture requires offline preview');preserveScroll(()=>{applyClientRefresh(now);paintClient()})}}:{}),reset,loadCreateHosts,discardPlan,client,selectedClient:()=>S.client,stopTraffic,stopRefresh,cloudRestore:c=>stage("cloud_restore_preview",{host:c.server,login:c.login}),dashboard,settings:workspaceSettings,clearClient:()=>{stopTraffic();stopRefresh();S.newPorts=[];S.refreshWarning='';S.clientHistory=null;S.camPorts=null;S.client=null;S.plan=null;S.outcome=null},renderClient,render:(name,root)=>{({create,inactive,lv,recovery,admin,billing,archives:r=>archive(r,false),diagnostics:r=>archive(r,true),agent,camera,templates})[name]?.(root)}});
 })();
