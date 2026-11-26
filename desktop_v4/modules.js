@@ -30,20 +30,64 @@
  const currentPlan=()=>S.planPage===page?S.plan:null;
  const resultNote=(root)=>{if(S.outcome&&S.planPage===page)root.append(notice('Операция завершена. Проверьте актуальное состояние целевой записи.'))};
  function imagePreview(root,result){if(!result?.src||!/^data:image\/(png|jpeg|webp);base64,/.test(result.src))return;const i=el('img','camera-thumb');i.alt='Кадр камеры';i.src=result.src;root.append(add(el('div','panel camera-preview'),el('h3','','Превью камеры'),i))}
+ async function loadCreateHosts(){
+  const owner=identity;if(!owner||preview||S.createLoading)return;
+  S.createLoading=true;if(page==='create')render(false);
+  try{const hosts=await rpc('servers');if(identity===owner){S.hosts=hosts;S.createLoadError=null}}
+  catch(err){if(identity===owner)S.createLoadError=err.message}
+  finally{if(identity===owner){S.createLoading=false;if(page==='create')render(false)}}
+ }
  function create(root){
-  root.append(hero('VPN / PROVISIONING','Создание клиента','Используется существующий распределитель адресов и портов RouterOS.'));
-  if(!ensureHosts(root))return;
-  const h=serverField(),l=field('Базовый логин','text',S.createLogin||''),p=field('Портов на учётку','number',S.createPorts||2),c=field('Количество учёток','number',S.createCount||1),ip=field('Начальный Remote Address','text',S.createIP||'172.16.0.1');
-  p.input.min=1;p.input.max=14;c.input.min=1;c.input.max=20;const countries=[...new Set(S.hosts.map(x=>x.country))],region=field('Регион для автоподбора','select',S.createRegion||countries[0],countries.map(x=>[x,x]));
-  form(root,h,l,p,c,ip,region);
-  const capture=()=>{S.createLogin=value(l);S.createPorts=num(p);S.createCount=num(c);S.createRegion=value(region);S.createIP=value(ip)};
-  h.input.onchange=()=>{capture();S.createCheck=null;S.plan=null;run(async()=>{S.createIP=(await op('create_ip',{host:setHost(h)})).start_ip})};
-  action(root,live('Загрузить начальный IP сервера',()=>run(async()=>{capture();S.createIP=(await op('create_ip',{host:setHost(h)})).start_ip})));action(root,live('Запомнить IP для сервера',()=>run(async()=>{capture();S.createIP=(await op('create_ip',{host:setHost(h),start_ip:S.createIP})).start_ip})));
-  action(root,live('Проверить логин',()=>run(async()=>{capture();S.createCheck=null;S.createCheck=await op('create_check',{host:setHost(h),login:S.createLogin})}),'primary'));
-  if(S.createCheck){const x=S.createCheck;root.append(notice(x.login+' · '+x.host+' · '+({free:'Свободен на момент проверки',occupied:'Занят',unknown:'Проверка не завершена'})[x.status]));if(x.status==='occupied'&&x.suggestion)action(root,button('Использовать '+x.suggestion,()=>{S.createLogin=x.suggestion;S.createCheck=null;render(false)}))}
-  action(root,live('Предложить свободный логин',()=>run(async()=>{capture();S.createLogin=(await op('create_suggest',{host:setHost(h),login:value(l)})).login;S.createCheck=null})));action(root,live('Подобрать свободный сервер',()=>run(async()=>{S.createLogin=value(l);S.createPorts=num(p);S.createCount=num(c);S.createRegion=value(region);S.createIP=value(ip);const result=await op('create_auto',{country:S.createRegion});S.host=result.host;S.createCheck=null;S.createIP=(await op('create_ip',{host:S.host})).start_ip;toast('Выбран '+result.host)})));action(root,live('Подготовить создание',()=>{S.createLogin=value(l);S.createPorts=num(p);S.createCount=num(c);S.createIP=value(ip);stage('create_preview',{host:setHost(h),login:S.createLogin,ports:S.createPorts,count:S.createCount,start_ip:S.createIP})},'primary'));
-  previewNotice(root,currentPlan());resultNote(root);
-  if(S.planPage==='create'&&S.outcome?.clients){const rows=S.outcome.clients;root.append(table(['Логин','Сервер','VPN IP','Порты',''],rows.map(c=>[c.login,c.server,c.remote_address,c.ports.join(', '),live('Копировать VPN',()=>rpc('copyVpn',c.server,c.login).then(()=>toast('Скопировано')).catch(error))])));if(rows.length)action(root,live('Копировать все созданные VPN',()=>rpc('copyVpnBatch',rows.map(c=>({host:c.server,login:c.login}))).then(x=>toast('Скопировано: '+x.count)).catch(error),'primary'))}
+  root.append(hero('VPN / PROVISIONING','Создание клиента','Новая VPN-учётная запись без лишних шагов. Выберите сервер, задайте логин и параметры.'));
+  const hosts=S.hosts||[],countries=[...new Set(['Россия','Казахстан','Беларусь',...hosts.map(x=>x.country)])];
+  S.createRegion=S.createRegion||'Россия';
+  const available=hosts.filter(x=>x.country===S.createRegion);
+  if(!available.some(x=>x.host===S.createHost))S.createHost=available[0]?.host||'';
+  const region=field('Страна','select',S.createRegion,countries.map(x=>[x,x]));
+  const h=field('VPN-сервер','select',S.createHost,available.length?available.map(x=>[x.host,x.host]):[['','Нет доступных серверов']]);
+  const l=field('Логин клиента','text',S.createLogin||''),p=field('Порты','number',S.createPorts??3),c=field('Учётки','number',S.createCount??1);
+  l.input.placeholder='Например, 890000001';l.input.maxLength=64;
+  p.input.min=1;p.input.max=14;c.input.min=1;c.input.max=20;p.input.step=1;c.input.step=1;
+  for(const [key,f] of [['region',region],['host',h],['login',l],['ports',p],['count',c]])f.input.dataset.createControl=key;
+  const layout=el('div','create-workspace'),left=el('div','panel create-form'),right=el('div','panel create-result');
+  const step=(n,title)=>add(el('h2','create-step'),el('span','create-step-number',n),el('span','',title));
+  left.append(step('1','Выбор VPN-сервера'),region.node,h.node);
+  h.input.disabled=!available.length||!!S.createLoading;
+  if(S.createLoading)left.append(busy('Загружаю список серверов…'));
+  else if(!hosts.length){left.append(notice(S.createLoadError||'Нет загруженных VPN-серверов.'));left.append(live('Загрузить серверы',loadCreateHosts))}
+  else if(!available.length)left.append(notice('В выбранной стране нет доступного VPN-сервера. Другой регион не подставляется.'));
+  left.append(step('2','Параметры клиента'));
+  const check=button('Проверить',()=>run(async()=>{capture();invalidate();lock();S.createCheck=await op('create_check',{host:S.createHost,login:S.createLogin})}),'quiet',preview||!S.createHost);
+  const loginRow=add(el('div','create-login-row'),l.node,check);left.append(loginRow);
+  const checkBox=el('div','create-check');
+  if(S.createCheck){const x=S.createCheck;checkBox.append(notice(x.login+' · '+x.host+' · '+({free:'Свободен на момент проверки',occupied:'Занят',unknown:'Проверка не завершена'})[x.status]));if(x.status==='occupied'&&x.suggestion)checkBox.append(button('Использовать '+x.suggestion,()=>{S.createLogin=x.suggestion;discardPlan();S.createCheck=null;render(false)}))}
+  left.append(checkBox,add(el('div','create-counters'),p.node,c.node));
+  const capture=()=>{S.createLogin=value(l);S.createPorts=num(p);S.createCount=num(c);S.createRegion=value(region);S.createHost=value(h)};
+  const invalidate=()=>{discardPlan();S.createCheck=null;checkBox.replaceChildren();left.querySelector('.confirmation')?.remove()};
+  const lock=()=>{for(const n of left.querySelectorAll('input,select,button'))n.disabled=true};
+  l.input.oninput=()=>{capture();invalidate()};
+  p.input.oninput=c.input.oninput=()=>{capture();invalidate()};
+  region.input.onchange=()=>{capture();invalidate();S.createHost='';render(false)};
+  h.input.onchange=()=>{capture();invalidate();render(false)};
+  l.input.onkeydown=e=>{if(e.key==='Enter'&&!check.disabled){e.preventDefault();check.click()}};
+  const prepare=auto=>run(async()=>{
+   capture();if(!l.input.reportValidity()||!p.input.reportValidity()||!c.input.reportValidity()||!S.createLogin)throw Error('Заполните логин и корректное количество портов и учёток.');
+   invalidate();S.createResult=null;lock();const owner=identity,route=epoch;
+   if(auto){const picked=await op('create_auto',{country:S.createRegion});if(identity!==owner||epoch!==route)return;if(!available.some(x=>x.host===picked.host))throw Error('Подобранный сервер не относится к выбранному региону.');S.createHost=picked.host}
+   const plan=await op('create_preview',{host:S.createHost,login:S.createLogin,ports:S.createPorts,count:S.createCount});
+   if(identity===owner&&epoch===route){S.plan=plan;S.planPage='create'}
+  });
+  const blocked=preview||!S.createHost||!identity?.writes;
+  const manual=button('Создать клиента',()=>prepare(false),'primary',blocked),auto=button('Подобрать сервер автоматически',()=>prepare(true),'quiet',blocked);
+  manual.dataset.createAction='manual';auto.dataset.createAction='auto';left.append(add(el('div','actionbar'),manual,auto));
+  if(!preview&&!identity?.writes)left.append(notice('Режим проверки: создание учёток отключено.'));
+  previewNotice(left,currentPlan(),out=>{S.createResult=out?.clients||[]});
+  right.append(el('h2','','Данные клиента'),el('p','muted','После создания здесь появятся сервер, логин, адрес и порты. Пароль передаётся только в системный буфер обмена.'));
+  const rows=S.createResult||[];
+  if(!rows.length)right.append(add(el('div','create-empty'),el('span','create-empty-symbol','◇'),el('h3','','Клиент ещё не создан'),el('p','muted','Заполните форму и нажмите «Создать клиента».')));
+  else for(const row of rows){const card=el('div','create-client-card');card.append(el('h3','',row.login));keyValue(card,[['Сервер',row.server],['VPN IP',row.remote_address],['Порты',row.ports]]);card.append(live('Копировать VPN',()=>rpc('copyVpn',row.server,row.login).then(()=>toast('Скопировано')).catch(error)));right.append(card)}
+  right.append(button('Копировать данные',()=>rpc('copyVpnBatch',rows.map(c=>({host:c.server,login:c.login}))).then(x=>toast('Скопировано: '+x.count)).catch(error),'quiet',preview||!rows.length));
+  layout.append(left,right);root.append(layout);
  }
  async function client(host,login){stopTraffic();stopRefresh();S.clientHistory=null;S.camPorts=null;S.cameraLogin='';S.client=null;S.plan=null;S.outcome=null;S.newPorts=[];S.refreshWarning='';await run(async()=>{S.client=await op('client_detail',{host,login});syncResult(S.client);startRefresh()})}
  let refresh=null;
@@ -384,5 +428,5 @@
   previewNotice(root,currentPlan(),out=>{if(out?.background&&S.background)S.background.v4=out.background});resultNote(root);
 
  }
- window.lvModules=Object.freeze({...(window.helper?.smokeMode?{fixture:(name,data)=>{if(!preview)throw Error('Fixture requires offline preview');Object.assign(S,data);if(name==='archives'||name==='diagnostics')S.archivePage=name;render(false)}}:{}),reset,discardPlan,client,stopTraffic,stopRefresh,cloudRestore:c=>stage("cloud_restore_preview",{host:c.server,login:c.login}),dashboard,settings:workspaceSettings,clearClient:()=>{stopTraffic();stopRefresh();S.newPorts=[];S.refreshWarning='';S.clientHistory=null;S.camPorts=null;S.client=null;S.plan=null;S.outcome=null},renderClient,render:(name,root)=>{({create,inactive,lv,recovery,admin,billing,archives:r=>archive(r,false),diagnostics:r=>archive(r,true),agent,camera,templates})[name]?.(root)}});
+ window.lvModules=Object.freeze({...(window.helper?.smokeMode?{fixture:(name,data)=>{if(!preview)throw Error('Fixture requires offline preview');Object.assign(S,data);if(name==='archives'||name==='diagnostics')S.archivePage=name;render(false)}}:{}),reset,loadCreateHosts,discardPlan,client,stopTraffic,stopRefresh,cloudRestore:c=>stage("cloud_restore_preview",{host:c.server,login:c.login}),dashboard,settings:workspaceSettings,clearClient:()=>{stopTraffic();stopRefresh();S.newPorts=[];S.refreshWarning='';S.clientHistory=null;S.camPorts=null;S.client=null;S.plan=null;S.outcome=null},renderClient,render:(name,root)=>{({create,inactive,lv,recovery,admin,billing,archives:r=>archive(r,false),diagnostics:r=>archive(r,true),agent,camera,templates})[name]?.(root)}});
 })();

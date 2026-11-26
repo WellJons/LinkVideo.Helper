@@ -378,9 +378,16 @@ class Operations:
             if not re.fullmatch(r"[A-Za-z0-9_.-]+",login): raise InputError("Недопустимый VPN-логин.")
             ports=number(a,"ports",1,14);count=number(a,"count",1,20)
             from linkvideo_vpn_helper.services.vpn_address_allocator import DEFAULT_START_IP, validate_start_ip
-            try: start_ip=validate_start_ip(text(a,"start_ip",32,False) or DEFAULT_START_IP)
-            except ValueError as ex: raise InputError(str(ex))
-            self.settings.setValue("vpn_create/start_ip/"+h.lower(),start_ip)
+            key="vpn_create/start_ip/"+h.lower()
+            if a.get("start_ip") is None:
+                # The desktop creation form does not expose IP tuning. Preserve
+                # each server's saved pool start rather than resetting it.
+                try: start_ip=validate_start_ip(self.settings.value(key,DEFAULT_START_IP,str))
+                except ValueError: start_ip=DEFAULT_START_IP
+            else:
+                try: start_ip=validate_start_ip(text(a,"start_ip",32))
+                except ValueError as ex: raise InputError(str(ex))
+                self.settings.setValue(key,start_ip)
             return self.stage("create",(h,login,ports,count,start_ip),f"Создать {count} VPN-учёток, по {ports} портов: {h} / {login}. Начальный IP: {start_ip}.")
         if method=="vpn_preview":
             h=self.host(a);login=text(a,"login");act=text(a,"action",32)

@@ -26,6 +26,13 @@ async function layoutSmoke(){
  for(const name of ['home','search','servers','create','inactive','lv','recovery','billing','archives','diagnostics','agent','camera','templates','admin','settings']){
   go(name);window.lvModules.fixture(name,data);await wait();check(name);
  }
+ go('create');window.lvModules.fixture('create',{hosts:[{host:'ru.example.invalid',country:'Россия'},{host:'kz.example.invalid',country:'Казахстан'}],createRegion:'Россия',createHost:'',createPorts:3,createCount:1});await wait();
+ const control=id=>document.querySelector('[data-create-control="'+id+'"]');
+ if(control('ports').value!=='3'||control('count').value!=='1'||control('host').value!=='ru.example.invalid'||!document.querySelector('.create-result'))throw Error('Desktop create defaults differ');
+ const country=value=>{control('region').value=value;control('region').dispatchEvent(new Event('change'))};
+ country('Казахстан');if(control('host').value!=='kz.example.invalid')throw Error('Country filter failed');
+ country('Беларусь');if(control('host').value!==''||!document.querySelector('[data-create-action="manual"]').disabled)throw Error('Unavailable country fell back to another region');
+ country('Россия');check('create:region');
  go('settings');for(const [id] of themes){setTheme(id);await wait();check('theme:'+id)}
  setTheme('dark');motion=false;preferences();go('home');await wait();if($('page').getAnimations().length)throw Error('Animation active with reduced motion');
  motion=true;preferences();go('billing');window.lvModules.fixture('billing',data);await wait();check('billing:screenshot');

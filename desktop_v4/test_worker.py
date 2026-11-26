@@ -140,6 +140,9 @@ class TestWorkspace(unittest.TestCase):
         with patch.dict("os.environ",{"LV4_ENABLE_WRITES":"1"}):
             plan=self.w.dispatch("create_preview",{"host":"trusted.example","login":"test","ports":2,"count":1,"start_ip":"172.18.1.1"})
             self.assertIn("172.18.1.1",plan["label"])
+            automatic=self.w.dispatch("create_preview",{"host":"trusted.example","login":"next","ports":3,"count":1})
+            self.assertIn("172.18.1.1",automatic["label"])
+            self.assertEqual(self.w.dispatch("create_ip",{"host":"trusted.example"})["start_ip"],"172.18.1.1")
             with self.assertRaises(InputError): self.w.dispatch("create_preview",{"host":"trusted.example","login":"test","ports":2,"count":1,"start_ip":"127.0.0.1"})
     def test_camera_lookup_requires_independent_b2o(self):
         self.w.dispatch("login",{"username":"AdminChats","password":"valid"})
