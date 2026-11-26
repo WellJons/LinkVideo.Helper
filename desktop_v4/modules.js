@@ -1,8 +1,9 @@
 'use strict';
 (()=>{
- let S={};
- const reset=()=>{stopTraffic();stopRefresh();stopThumbs();S={}};
- const discardPlan=()=>{S.planGeneration=(S.planGeneration||0)+1;S.plan=null;S.outcome=null;S.planPage=null};
+ let S={},planTimer=null;
+ const stopPlanTimer=()=>{clearTimeout(planTimer);planTimer=null};
+ const reset=()=>{stopTraffic();stopRefresh();stopThumbs();stopPlanTimer();S={}};
+ const discardPlan=()=>{stopPlanTimer();S.planGeneration=(S.planGeneration||0)+1;S.plan=null;S.planDeadline=0;S.outcome=null;S.planPage=null};
  const op=(method,args={})=>rpc('operation',method,args);
  const button=(name,fn,cls='quiet',disabled=false)=>{const b=btn(name,cls,fn);b.disabled=disabled;return b};
  const live=(text,fn,cls='quiet')=>button(text,fn,cls,preview);
@@ -25,9 +26,31 @@
  const serverField=(title='VPN-сервер')=>field(title,'select',S.host||'',(S.hosts||[]).map(r=>[r.host,r.host+' · '+r.country]));
  const ensureHosts=(root)=>{if(S.hosts?.length)return true;root.append(notice('Загрузите список доступных серверов.'));action(root,live('Загрузить серверы',()=>run(async()=>{S.hosts=await rpc('servers');S.host=S.hosts[0]?.host||''}),'primary'));return false};
  const setHost=f=>{S.host=value(f);return S.host};
- const previewNotice=(root,plan,onConfirm)=>{if(!plan)return;const p=el('div','panel confirmation');p.append(el('p','eyebrow','ПОДТВЕРЖДЕНИЕ'),el('h3','',plan.label),el('p','','Одноразовое разрешение действует 120 секунд. Проверьте параметры до отправки.'));const b=live('Подтвердить',()=>run(async()=>{const token=plan.token,owner=identity,from=epoch;S.plan=null;const out=await op('commit',{token});if(identity===owner&&epoch===from){S.outcome=out;if(onConfirm)onConfirm(out)}else if(identity===owner)toast('Операция завершена. Обновите прежний раздел для проверки результата.')}),'primary');p.append(add(el('div','actionbar'),b,button('Отменить',()=>{S.plan=null;render(false)})));root.append(p)};
- const stage=(method,args)=>{const from=page,generation=epoch,owner=identity;stopTraffic();return run(async()=>{discardPlan();const planGeneration=S.planGeneration;const plan=await op(method,args);if(epoch===generation&&identity===owner&&S.planGeneration===planGeneration){S.plan=plan;S.planPage=from}else toast('Раздел или параметры изменились. Подготовьте действие заново.')})};
- const currentPlan=()=>S.planPage===page?S.plan:null;
+ function planRemaining(){return Math.max(0,Math.ceil(((S.planDeadline||0)-Date.now())/1000))}
+ function expirePlan(plan){
+  if(S.plan!==plan)return;
+  discardPlan();
+  const panel=$('page').querySelector('.confirmation');if(!panel)return;
+  panel.classList.add('confirmation-expired');const time=panel.querySelector('[data-plan-time]');if(time)time.textContent='Срок действия истёк. Подготовьте операцию заново.';
+  const confirm=panel.querySelector('[data-plan-confirm]');if(confirm)confirm.disabled=true;
+  const cancel=panel.querySelector('[data-plan-cancel]');if(cancel)cancel.textContent='Закрыть'
+ }
+ function setPlan(plan,from,deadline=Date.now()+120000){
+  stopPlanTimer();S.plan=plan;S.planPage=from;S.planDeadline=deadline;
+  const tick=()=>{if(S.plan!==plan){stopPlanTimer();return}const left=planRemaining();if(!left){expirePlan(plan);return}
+   const node=$('page').querySelector('[data-plan-time]');if(node)node.textContent='Подтверждение доступно ещё '+left+' сек.';
+   planTimer=setTimeout(tick,Math.min(1000,Math.max(1,S.planDeadline-Date.now())))
+  };tick()
+ }
+ const previewNotice=(root,plan,onConfirm)=>{
+  if(!plan)return;
+  const p=el('div','panel confirmation'),time=el('p','confirmation-time','Подтверждение доступно ещё '+planRemaining()+' сек.');time.dataset.planTime='';
+  p.append(el('p','eyebrow','ПОДТВЕРЖДЕНИЕ'),el('h3','',plan.label),el('p','','Проверьте параметры до отправки.'),time);
+  const b=live('Подтвердить',()=>{if(S.plan!==plan||!planRemaining()){expirePlan(plan);return}run(async()=>{const token=plan.token,owner=identity,from=epoch;stopPlanTimer();S.plan=null;S.planDeadline=0;const out=await op('commit',{token});if(identity===owner&&epoch===from){S.outcome=out;if(onConfirm)onConfirm(out)}else if(identity===owner)toast('Операция завершена. Обновите прежний раздел для проверки результата.')})},'primary');b.dataset.planConfirm='';
+  const cancel=button('Отменить',()=>{discardPlan();render(false)});cancel.dataset.planCancel='';p.append(add(el('div','actionbar'),b,cancel));root.append(p)
+ };
+ const stage=(method,args)=>{if(taskBusy)return toast('Дождитесь завершения текущей операции.');const from=page,generation=epoch,owner=identity;stopTraffic();return run(async()=>{discardPlan();const planGeneration=S.planGeneration;const plan=await op(method,args);if(epoch===generation&&identity===owner&&S.planGeneration===planGeneration)setPlan(plan,from);else toast('Раздел или параметры изменились. Подготовьте действие заново.')})};
+ const currentPlan=()=>{if(S.plan&&S.planDeadline&&!planRemaining())expirePlan(S.plan);return S.planPage===page?S.plan:null};
  const resultNote=(root)=>{if(S.outcome&&S.planPage===page)root.append(notice('Операция завершена. Проверьте актуальное состояние целевой записи.'))};
  let thumbJob=null;
  function stopThumbs(){if(thumbJob){clearTimeout(thumbJob.timer);thumbJob=null}}
@@ -116,7 +139,7 @@
    invalidate();S.createResult=null;lock();const owner=identity,route=epoch;
    if(auto){const picked=await op('create_auto',{country:S.createRegion});if(identity!==owner||epoch!==route)return;if(!available.some(x=>x.host===picked.host))throw Error('Подобранный сервер не относится к выбранному региону.');S.createHost=picked.host}
    const plan=await op('create_preview',{host:S.createHost,login:S.createLogin,ports:S.createPorts,count:S.createCount});
-   if(identity===owner&&epoch===route){S.plan=plan;S.planPage='create'}
+   if(identity===owner&&epoch===route)setPlan(plan,'create')
   });
   const blocked=preview||!S.createHost||!identity?.writes;
   const manual=button('Создать клиента',()=>prepare(false),'primary',blocked),auto=button('Подобрать сервер автоматически',()=>prepare(true),'quiet',blocked);
@@ -371,10 +394,10 @@
   if(tab==='create'){sessionStrip(root,'b2o');billingCreate(root);return}
   sessionStrip(root,'crm');
   if(tab==='all'){billingCatalog(root,'all');return}
-  const q=field('Логин или номер учётной записи','text',S.billingQuery||''),search=el('form','panel billing-search-form');
-  q.input.placeholder='Введите логин клиента, например lkz_...';q.input.maxLength=100;q.input.required=true;
+  const q=field('Логин или номер учётной записи','text',S.billingDraft??S.billingQuery??''),search=el('form','panel billing-search-form');
+  q.input.placeholder='Введите логин клиента, например lkz_...';q.input.maxLength=100;q.input.required=true;q.input.oninput=()=>{S.billingDraft=q.input.value};
   const find=el('button','primary','Найти клиента');find.type='submit';find.disabled=preview||!S.admin?.crm;
-  search.append(q.node,find);root.append(search);search.onsubmit=e=>{e.preventDefault();if(find.disabled||taskBusy)return;const query=value(q);if(!query)return;run(async()=>{S.billingQuery=query;clearBillingView();S.hits=await op('billing_search',{query});if(S.hits.length===1){S.billingClient=await op('billing_select',{id:S.hits[0].id});S.billingCardTab='services'}})};
+  search.append(q.node,find);root.append(search);search.onsubmit=e=>{e.preventDefault();if(find.disabled||taskBusy)return;const query=value(q);if(!query)return;run(async()=>{S.billingQuery=query;S.billingDraft=query;clearBillingView();S.hits=await op('billing_search',{query});if(S.hits.length===1){S.billingClient=await op('billing_select',{id:S.hits[0].id});S.billingCardTab='services'}})};
   if(S.hits?.length>1)root.append(table(['Логин','Клиент','Страна','Баланс',''],S.hits.map(x=>[x.login,x.account_name,x.country,x.balance_text,live('Открыть',()=>run(async()=>{S.billingClient=null;discardPlan();S.history=null;S.catalog=null;S.catalogFilter={};S.billingImage=null;S.bulkSelected=[];S.bulkResult=null;S.recipients=null;S.billingEdit=null;S.billingCardTab='services';S.billingClient=await op('billing_select',{id:x.id})}))])));
   const c=S.billingClient;
   if(!c){if(S.bulkResult){section(root,'Результаты массового изменения');root.append(table(['Камера','Результат'],S.bulkResult.map(x=>[x.camera,({confirmed:'Подтверждено',unknown:'Неизвестный результат',not_confirmed:'Не подтверждено',not_attempted:'Не отправлено'})[x.status]||x.status])));root.append(notice('Не удалось перечитать карточку клиента. Выполните поиск заново.'))}root.append(add(el('div','panel billing-empty'),el('h2','',S.hits?.length===0?'Клиент не найден':'Найдите клиента'),el('p','muted',S.admin?.crm?'Введите логин или номер учётной записи.':'Войдите в корпоративный биллинг, чтобы искать клиентов.')));return}
@@ -529,11 +552,11 @@
  }
  function templates(root){
   root.append(hero('SUPPORT / KNOWLEDGE','Шаблоны ответов','Личная библиотека быстрых ответов · локальное сохранение.'));
-  const q=field('Поиск','text',S.templateQuery||''),cat=field('Категория','select',S.templateCategory||'',[['','Все'],...(S.templates?.categories||[]).map(v=>[v,v])]),fav=el('input');fav.type='checkbox';fav.checked=!!S.templateFavorites;q.input.placeholder='Найти шаблон или фразу…';
+  const q=field('Поиск','text',S.templateDraft??S.templateQuery??''),cat=field('Категория','select',S.templateCategory||'',[['','Все'],...(S.templates?.categories||[]).map(v=>[v,v])]),fav=el('input');fav.type='checkbox';fav.checked=!!S.templateFavorites;q.input.placeholder='Найти шаблон или фразу…';q.input.oninput=()=>{S.templateDraft=q.input.value};
   const workspace=el('div','template-workspace'),library=el('div','panel template-library'),detail=el('div','panel template-detail');workspace.append(library,detail);root.append(workspace);
   const items=S.templates?.items||[],selected=items.find(t=>t.id===S.templateSelected)||S.templateCurrent;
   library.append(add(el('div','template-heading'),el('h2','','Библиотека'),el('span','muted',items.length+' ответов')),q.node,cat.node,add(el('label','checkline'),fav,el('span','','Только избранное')));
-  const filter=()=>{S.templateQuery=value(q);S.templateCategory=value(cat);S.templateFavorites=fav.checked};
+  const filter=()=>{S.templateQuery=value(q);S.templateDraft=S.templateQuery;S.templateCategory=value(cat);S.templateFavorites=fav.checked};
   const load=()=>{filter();return loadTemplates()};
   q.input.onkeydown=e=>{if(e.key==='Enter'&&!preview&&!taskBusy)run(load)};
   cat.input.onchange=fav.onchange=()=>{if(!preview&&!taskBusy)run(load)};
@@ -617,9 +640,9 @@
    S.cameraInfo=await op('camera_inspect',{camera,operator});
   };
   if(!S.cameraInfo){
-   const query=field('Логин клиента, ID или серийный номер','text',S.cameraLookupQuery||'');query.input.placeholder='Логин клиента, ID или серийный номер';query.input.required=true;query.input.maxLength=100;
+   const query=field('Логин клиента, ID или серийный номер','text',S.cameraLookupDraft??S.cameraLookupQuery??'');query.input.placeholder='Логин клиента, ID или серийный номер';query.input.required=true;query.input.maxLength=100;query.input.oninput=()=>{S.cameraLookupDraft=query.input.value};
    const box=el('form','panel billing-search-form'),find=el('button','primary','Найти камеры');find.type='submit';find.disabled=preview||!S.admin?.b2o;
-   box.append(query.node,find);root.append(box);box.onsubmit=e=>{e.preventDefault();if(find.disabled||taskBusy||!value(query))return;run(async()=>{S.cameraLookupQuery=value(query);S.cameraChoices=null;S.cameraChoice=null;S.cameraInfo=null;S.cameraLive=null;S.cameraImage=null;S.cameraChoices=await op('camera_lookup',{query:S.cameraLookupQuery})})};
+   box.append(query.node,find);root.append(box);box.onsubmit=e=>{e.preventDefault();if(find.disabled||taskBusy||!value(query))return;run(async()=>{S.cameraLookupQuery=value(query);S.cameraLookupDraft=S.cameraLookupQuery;S.cameraChoices=null;S.cameraChoice=null;S.cameraInfo=null;S.cameraLive=null;S.cameraImage=null;S.cameraChoices=await op('camera_lookup',{query:S.cameraLookupQuery})})};
    const results=el('div','panel');results.append(el('h2','','Камеры'));root.append(results);
    if(S.cameraChoices){results.append(notice('Подтверждённых совпадений: '+S.cameraChoices.length));const list=el('div','billing-camera-list');list.dataset.scrollKey='camera-results';const thumbs=thumbnailState('camera',S.cameraChoices);
     for(const choice of S.cameraChoices){const card=el('article','camera-search-card');card.dataset.cameraChoice=choice.camera_id;const key=choice.operator_id+':'+choice.camera_id,thumb=el('div','billing-camera-thumb camera-result-thumb');thumb.dataset.thumbKey=key;thumb.append(el('span','muted','Нет превью'));showThumb(thumb,thumbs.images.get(key));const main=el('div','billing-camera-details');main.append(el('h3','',choice.label||choice.camera_id),el('p','muted','ID: '+choice.camera_id+' · '+choice.country),el('p','muted',[choice.customer_login?'Клиент: '+choice.customer_login:'',choice.tariff?'Тариф: '+choice.tariff:''].filter(Boolean).join(' · ')));card.append(thumb,main,el('span','muted',choice.status||'—'),live('Подробнее',()=>run(()=>inspect(choice.camera_id,choice.operator_id,choice)),'primary'));list.append(card)}results.append(list);queueThumbs('camera',S.cameraChoices,S.cameraChoices.slice(0,12).map(x=>({key:x.operator_id+':'+x.camera_id,method:'camera_lookup_image',args:{camera:x.camera_id,operator:x.operator_id}})),thumbs);
@@ -710,5 +733,5 @@
   previewNotice(root,currentPlan(),out=>{if(out?.background&&S.background)S.background.v4=out.background});resultNote(root);
 
  }
- window.lvModules=Object.freeze({...(window.helper?.smokeMode?{fixture:(name,data)=>{if(!preview)throw Error('Fixture requires offline preview');Object.assign(S,data);if(name==='archives'||name==='diagnostics')S.archivePage=name;render(false)},refreshFixture:now=>{if(!preview)throw Error('Fixture requires offline preview');preserveScroll(()=>{applyClientRefresh(now);paintClient()})}}:{}),reset,enterPage,loadCreateHosts,discardPlan,client,selectedClient:()=>S.client,stopTraffic,stopRefresh,cloudRestore:c=>stage("cloud_restore_preview",{host:c.server,login:c.login}),dashboard,settings:workspaceSettings,infrastructure,infrastructureResults,lvLabel:host=>{const x=(S.lvFleet?.rows||[]).find(r=>r.server===host);return x&&!x.error?x.state_text:'Не проверено'},clearClient:()=>{stopTraffic();stopRefresh();S.selectedPort=null;S.expandedPorts=new Set();S.cameraMatchError='';S.newPorts=[];S.refreshWarning='';S.clientHistory=null;S.camPorts=null;S.client=null;S.plan=null;S.outcome=null},renderClient,render:(name,root)=>{({create,inactive,lv,recovery,admin,billing,archives:r=>archive(r,false),diagnostics:r=>archive(r,true),agent,camera,templates})[name]?.(root)}});
+ window.lvModules=Object.freeze({...(window.helper?.smokeMode?{expireFixture:()=>{if(!preview)throw Error('Fixture requires offline preview');setPlan({token:'offline-fixture',label:'Тест подтверждения'},page,Date.now()+80);render(false)},fixture:(name,data)=>{if(!preview)throw Error('Fixture requires offline preview');Object.assign(S,data);if(name==='archives'||name==='diagnostics')S.archivePage=name;render(false)},refreshFixture:now=>{if(!preview)throw Error('Fixture requires offline preview');preserveScroll(()=>{applyClientRefresh(now);paintClient()})}}:{}),reset,enterPage,loadCreateHosts,discardPlan,client,selectedClient:()=>S.client,stopTraffic,stopRefresh,cloudRestore:c=>stage("cloud_restore_preview",{host:c.server,login:c.login}),dashboard,settings:workspaceSettings,infrastructure,infrastructureResults,lvLabel:host=>{const x=(S.lvFleet?.rows||[]).find(r=>r.server===host);return x&&!x.error?x.state_text:'Не проверено'},clearClient:()=>{stopTraffic();stopRefresh();S.selectedPort=null;S.expandedPorts=new Set();S.cameraMatchError='';S.newPorts=[];S.refreshWarning='';S.clientHistory=null;S.camPorts=null;S.client=null;S.plan=null;S.outcome=null},renderClient,render:(name,root)=>{({create,inactive,lv,recovery,admin,billing,archives:r=>archive(r,false),diagnostics:r=>archive(r,true),agent,camera,templates})[name]?.(root)}});
 })();

@@ -86,14 +86,14 @@ function render(animate){
  const active=nav.querySelector('[aria-current=page]');if(animate&&active){const a=active.getBoundingClientRect(),n=nav.getBoundingClientRect();if(a.top<n.top)nav.scrollTop+=a.top-n.top;else if(a.bottom>n.bottom)nav.scrollTop+=a.bottom-n.bottom}
  $('location').textContent=pages.find(p=>p[0]===page)[2];
  const root=$('page');for(const a of root.getAnimations({subtree:true}))a.cancel();
- const focus=document.activeElement,controls=[...root.querySelectorAll('input,select,textarea,button')],idx=controls.indexOf(focus),tag=focus?.tagName,type=focus?.type,caption=focus?.closest('label')?.textContent||focus?.textContent,focusKey=controlKey(focus);
+ const focus=document.activeElement,controls=[...root.querySelectorAll('input,select,textarea,button')],idx=controls.indexOf(focus),tag=focus?.tagName,type=focus?.type,caption=focus?.closest('label')?.textContent||focus?.textContent,focusKey=controlKey(focus),selection=idx>=0&&type!=='password'&&typeof focus.selectionStart==='number'?{start:focus.selectionStart,end:focus.selectionEnd,direction:focus.selectionDirection,value:focus.value}:null;
  const scroll=animate?null:scrollSnapshot();
  root.replaceChildren();if(preview)root.append(notice('Демонстрационный режим. Подключения и реальные данные отключены.'));
  const fn={home,search,servers,settings}[page];if(fn)fn(root);else window.lvModules?.render(page,root);
  const parent=primaryRoute(page),related=pages.filter(([id])=>secondaryRoutes[id]===parent&&pageAllowed(id));
  if(related.length){const local=el('div','desktop-section-nav');local.setAttribute('role','group');local.setAttribute('aria-label','Инструменты раздела');for(const [id,,label] of [pages.find(p=>p[0]===parent),...related]){const tabLabel=parent==='search'?(id==='search'?'VPN · поиск и управление':'Информация по камере'):label;const b=btn(tabLabel,'quiet',()=>{if(page!==id)go(id)});b.dataset.sectionRoute=id;b.setAttribute('aria-pressed',String(page===id));local.append(b)}const heroNode=root.querySelector('.hero');if(heroNode)heroNode.after(local);else root.prepend(local);}
  if(!animate){
-  const next=[...root.querySelectorAll('input,select,textarea,button')];let candidate=focusKey?next.find(n=>controlKey(n)===focusKey):null;if(!candidate&&idx>=0){const matching=next.filter(n=>n.tagName===tag&&n.type===type&&(n.closest('label')?.textContent||n.textContent)===caption);candidate=matching.length===1?matching[0]:next[idx];if(candidate&&!matching.includes(candidate))candidate=null}if(candidate&&!candidate.disabled)candidate.focus({preventScroll:true});
+  const next=[...root.querySelectorAll('input,select,textarea,button')];let candidate=focusKey?next.find(n=>controlKey(n)===focusKey):null;if(!candidate&&idx>=0){const matching=next.filter(n=>n.tagName===tag&&n.type===type&&(n.closest('label')?.textContent||n.textContent)===caption);candidate=matching.length===1?matching[0]:next[idx];if(candidate&&!matching.includes(candidate))candidate=null}if(candidate&&!candidate.disabled){candidate.focus({preventScroll:true});if(selection&&candidate.value===selection.value&&typeof candidate.setSelectionRange==='function')try{candidate.setSelectionRange(selection.start,selection.end,selection.direction)}catch{}}
   restoreScroll(scroll);
  }else{
   window.scrollTo(0,0);
