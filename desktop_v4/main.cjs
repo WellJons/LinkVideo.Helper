@@ -1,4 +1,5 @@
 'use strict';
+if(process.argv.some(x=>x.startsWith('--lv4-wizard='))){require('./wizard-main.cjs').start()}else{
 const {app,BrowserWindow,ipcMain,dialog,clipboard,safeStorage,shell,nativeImage}=require('electron');
 const path=require('node:path');
 const {pathToFileURL}=require('node:url');
@@ -289,4 +290,6 @@ if(smokeMode)setTimeout(()=>app.exit(1),150000).unref();
 app.on('second-instance',()=>{if(win){if(win.isMinimized())win.restore();win.focus()}});
 app.on('before-quit',()=>bridge.stop());
 app.on('window-all-closed',()=>app.quit());
+}
+
 }
