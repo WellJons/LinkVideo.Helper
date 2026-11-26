@@ -110,18 +110,24 @@ jobs:
       - name: Build isolated Windows installer
         shell: pwsh
         run: |
-          $iscc = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Inno Setup 6\ISCC.exe'
-          if (!(Test-Path $iscc)) { choco install innosetup --yes --no-progress; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
           & ./desktop_v4/build-native-installer.ps1
           Get-FileHash dist-v4/*-Setup.exe -Algorithm SHA256 | Format-List | Out-File dist-v4/SHA256.txt
           $setup = Get-ChildItem dist-v4/*-Setup.exe | Select-Object -First 1
           Write-Host ('LV4_SETUP_BYTES=' + $setup.Length)
           Add-Content dist-v4/size-report.txt ('Installer bytes: ' + $setup.Length)
-      - name: Capture original native installer and removal pages
+      - name: Test Electron installer and uninstaller layouts
         shell: pwsh
+        env:
+          LV4_SMOKE: '1'
+          LV4_WIZARD_REPORT: ${{ github.workspace }}/dist-v4/layout/installer
         run: |
-          $setup = (Get-ChildItem dist-v4/*-Setup.exe | Select-Object -First 1).FullName
-          & ./desktop_v4/capture-native-installer.ps1 -Setup $setup -Uninstaller (Resolve-Path installer_v4/Uninstall.exe).Path -Output (Join-Path $PWD 'dist-v4/layout/installer')
+          $exe = Resolve-Path 'dist-v4/LinkVideo.Helper.4-win32-x64/LinkVideo.Helper.4.exe'
+          foreach ($mode in @('install','uninstall')) {
+            $profile = Join-Path $env:RUNNER_TEMP "lv4-wizard-$mode"
+            New-Item -ItemType Directory -Force $profile | Out-Null
+            $p = Start-Process -FilePath $exe -ArgumentList @("--lv4-wizard=$mode",'--lv4-wizard-preview',('--lv4-wizard-profile="' + $profile + '"')) -PassThru -Wait
+            if ($p.ExitCode -ne 0) { throw "Electron wizard layout failed: $mode / $($p.ExitCode)" }
+          }
       - name: Smoke test actual installed application
         shell: pwsh
         env:
@@ -132,13 +138,13 @@ jobs:
           $p = Start-Process -FilePath $installer -ArgumentList '--quiet' -PassThru -Wait
           if ($p.ExitCode -ne 0) { throw "Setup failed: $($p.ExitCode)" }
           $p = Start-Process -FilePath $installer -ArgumentList '--quiet' -PassThru -Wait
-          if ($p.ExitCode -ne 0) { throw "Native upgrade failed: $($p.ExitCode)" }
+          if ($p.ExitCode -ne 0) { throw "Electron installer upgrade failed: $($p.ExitCode)" }
           & (Join-Path $dest 'resources/worker/helper-core.exe') --lv4-runtime-selftest
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $p = Start-Process -FilePath (Join-Path $dest 'LinkVideo.Helper.4.exe') -ArgumentList '--lv4-smoke' -PassThru -Wait
           if ($p.ExitCode -ne 0) { throw "Installed app failed: $($p.ExitCode)" }
           $uninstaller = Join-Path $dest 'Uninstall.exe'
-          if (!(Test-Path $uninstaller)) { throw 'Missing native uninstaller' }
+          if (!(Test-Path $uninstaller)) { throw 'Missing uninstaller bootstrap' }
           $entry = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\LinkVideo.Helper.4.Preview_is1'
           if ($entry.UninstallString -notlike '*Uninstall.exe*') { throw 'Windows does not point to native uninstaller' }
           $copy = Join-Path $env:RUNNER_TEMP 'LV4-Native-Uninstall.exe'
@@ -149,6 +155,7 @@ jobs:
         shell: pwsh
         run: |
           $iscc = Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'Inno Setup 6\ISCC.exe'
+          if (!(Test-Path $iscc)) { choco install innosetup --yes --no-progress; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
           & $iscc desktop_v4/background-installer.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $local = Resolve-Path 'dist-v4-core/worker/helper-core.exe'
