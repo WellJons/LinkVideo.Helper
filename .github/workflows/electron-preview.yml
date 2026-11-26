@@ -68,10 +68,10 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force build-v4-core | Out-Null
-          python -m PyInstaller --noconfirm --clean --onedir --console --name helper-core --distpath dist-v4-core --workpath build-v4-core --specpath build-v4-core --paths . --exclude-module PySide6 --exclude-module shiboken6 --exclude-module tkinter --exclude-module IPython --exclude-module matplotlib --exclude-module numpy --exclude-module pandas desktop_v4/worker.py
+          python -m PyInstaller --noconfirm --clean --onedir --console --name helper-core --distpath dist-v4-core --workpath build-v4-core --specpath build-v4-core --paths . --exclude-module PySide6 --exclude-module shiboken6 desktop_v4/worker.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Move-Item dist-v4-core/helper-core dist-v4-core/worker
-          $unexpected = Get-ChildItem dist-v4-core/worker -File -Recurse | Where-Object { $_.Name -match '^(Qt6.*\.dll|opengl32sw\.dll|shiboken.*\.(dll|pyd)) }
+          $unexpected = Get-ChildItem dist-v4-core/worker -File -Recurse | Where-Object { $_.Name -match '^(Qt6.*\.dll|opengl32sw\.dll|shiboken.*\.(dll|pyd))$' -or $_.FullName -match '[\\/](PySide6|shiboken6)[\\/]' }
           if ($unexpected) { throw ('Unexpected Qt runtime bundled: ' + ($unexpected.FullName -join ', ')) }
           $files=Get-ChildItem dist-v4-core/worker -File -Recurse | Sort-Object Length -Descending
           Write-Host ('LV4_CORE_SIZE_BYTES=' + (($files | Measure-Object Length -Sum).Sum))
