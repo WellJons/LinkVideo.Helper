@@ -1,15 +1,9 @@
-name: Verify LinkVideo.Helper Release
+name: Prepare verified final draft 3.0.28
 
 on:
-  pull_request:
-    branches:
-      - main
-  workflow_dispatch:
   push:
     branches:
-      - 'rc/**'
-    tags:
-      - 'v*'
+      - 'rc/final-3.0.28'
 
 permissions:
   contents: write
@@ -25,6 +19,8 @@ jobs:
     steps:
       - name: Checkout exact release source
         uses: actions/checkout@v4
+        with:
+          ref: 'db3d324705ca4effdc79bd33afe8dc9a1d19073d'
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -47,55 +43,16 @@ jobs:
         shell: pwsh
         run: ./scripts/verify_release.ps1
 
-      # RC builds remain outside the stable updater channel. After all
-      # release checks pass, publish a prerelease installer that users can
-      # download directly for manual verification.
-      - name: Publish downloadable RC prerelease
-        if: startsWith(github.ref, 'refs/heads/rc/')
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $version = (python -c "from linkvideo_vpn_helper.version import APP_VERSION; print(APP_VERSION)").Trim()
-          if ([string]::IsNullOrWhiteSpace($version)) { throw 'APP_VERSION not found' }
-          $tag = "rc-$version"
-          $setup = "release_candidate/LinkVideo.Helper_Setup_${version}_RC.exe"
-          $report = 'release_candidate/verification.json'
-          foreach ($required in @($setup, $report)) {
-            if (-not (Test-Path $required)) { throw "Verified RC output not found: $required" }
-          }
-          $hash = (Get-FileHash -Algorithm SHA256 $setup).Hash.ToLowerInvariant()
-          $verification = Get-Content -Raw -LiteralPath $report | ConvertFrom-Json
-          if ([string]$verification.source_commit -ne $env:GITHUB_SHA) {
-            throw "RC verification source_commit does not match GITHUB_SHA"
-          }
-          if ([string]$verification.setup_sha256 -ne $hash) {
-            throw "RC verification SHA-256 does not match the uploaded Setup"
-          }
-          $body = "Тестовая RC-сборка LinkVideo.Helper $version.`n`nCommit: $env:GITHUB_SHA`nSHA-256: $hash`n`nСледующая успешная RC-проверка заменяет этот файл."
-
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git tag -f $tag $env:GITHUB_SHA
-          git push origin "refs/tags/$tag" --force
-
-          gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $setup $report --repo $env:GITHUB_REPOSITORY --clobber
-            gh release edit $tag --repo $env:GITHUB_REPOSITORY --draft=false --prerelease --title "LinkVideo.Helper $version RC" --notes $body
-          } else {
-            gh release create $tag $setup $report --repo $env:GITHUB_REPOSITORY --prerelease --target $env:GITHUB_SHA --title "LinkVideo.Helper $version RC" --notes $body
-          }
-
       # A real version tag is the final private draft gate. Public publication is
       # still a separate explicit action after manual RC acceptance.
       - name: Create or update private final draft Release
-        if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "${{ github.ref_name }}"
+          $tag = "v3.0.28"
+          $source = "db3d324705ca4effdc79bd33afe8dc9a1d19073d"
+          if ((git rev-parse HEAD).Trim() -ne $source) { throw "Wrong source commit" }
           if ($tag -notmatch '^v\d+\.\d+\.\d+(?:\.\d+)?$') { throw "Invalid final release tag: $tag" }
           $version = $tag.TrimStart('v')
           $appVersion = (python -c "from linkvideo_vpn_helper.version import APP_VERSION; print(APP_VERSION)").Trim()
@@ -111,13 +68,23 @@ jobs:
           }
           $verificationData = Get-Content -Raw -LiteralPath $verification | ConvertFrom-Json
           $setupHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash.ToLowerInvariant()
-          if ([string]$verificationData.source_commit -ne $env:GITHUB_SHA) {
+          if ([string]$verificationData.source_commit -ne $source) {
             throw "Final verification source_commit does not match GITHUB_SHA"
           }
           if ([string]$verificationData.setup_sha256 -ne $setupHash) {
             throw "Final verification SHA-256 does not match LinkVideo.Helper_Setup.exe"
           }
           $assets = @($setup, $uninstall, $payloadZip, $payloadJson, $verification)
+          $remoteTag = git ls-remote origin "refs/tags/$tag"
+          if ($LASTEXITCODE -ne 0) { throw "Cannot inspect release tag" }
+          if ($remoteTag) {
+            if (($remoteTag -split "\s+")[0] -ne $source) { throw "Existing tag points to another commit" }
+          } else {
+            git tag $tag $source
+            if ($LASTEXITCODE -ne 0) { throw "Cannot create final tag" }
+            git push origin "refs/tags/$tag"
+            if ($LASTEXITCODE -ne 0) { throw "Cannot push final tag" }
+          }
           gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -eq 0) {
             $state = gh release view $tag --repo $env:GITHUB_REPOSITORY --json isDraft,isPrerelease | ConvertFrom-Json
@@ -136,10 +103,4 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Could not create final draft: $tag" }
           }
 
-          # Keep Releases clean: the single temporary RC release/tag is removed
-          # after the final draft was created successfully.
-          $rcTag = "rc-$version"
-          gh release view $rcTag --repo $env:GITHUB_REPOSITORY 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            gh release delete $rcTag --repo $env:GITHUB_REPOSITORY --yes --cleanup-tag
-          }
+          Write-Host 'Final draft is ready; manual verification of this exact Setup is still required before public publication.'
