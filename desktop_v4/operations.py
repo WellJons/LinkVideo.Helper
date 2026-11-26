@@ -60,7 +60,7 @@ class MemorySettings:
     def sync(self): pass
 
 class Operations:
-    METHODS=frozenset(("client_detail","client_refresh","traffic_sample","camera_ports","inactive_fleet","inactive_batch_preview","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","lv_fleet","lv_batch_preview","create_suggest","create_ip","create_check","camera_lookup","admin_login","admin_logout","admin_status","admin_retry","billing_refresh","billing_filter","billing_search","billing_select","billing_catalog","billing_history","billing_preview","billing_bulk_preview","billing_camera_image","create_auto","archive_discover","archive_diagnose","archive_download","archive_settings","archive_settings_update","agent_search","agent_settings","agent_preview","templates_list","templates_migrate","server_fleet","templates_save","templates_favorite","templates_delete","background_status","background_preview","background_verify_admin")) | EXTRA_METHODS
+    METHODS=frozenset(("client_detail","client_refresh","traffic_sample","camera_ports","inactive_fleet","inactive_batch_preview","create_preview","vpn_preview","commit","inactive","lv_status","lv_preview","lv_fleet","lv_batch_preview","create_suggest","create_ip","create_check","camera_lookup","camera_lookup_image","admin_login","admin_logout","admin_status","admin_retry","billing_refresh","billing_filter","billing_search","billing_select","billing_catalog","billing_history","billing_preview","billing_bulk_preview","billing_camera_image","create_auto","archive_discover","archive_diagnose","archive_download","archive_settings","archive_settings_update","agent_search","agent_settings","agent_preview","templates_list","templates_migrate","server_fleet","templates_save","templates_favorite","templates_delete","background_status","background_preview","background_verify_admin")) | EXTRA_METHODS
     def __init__(self,workspace):
         self.w=workspace
         self.settings=MemorySettings(workspace)
@@ -72,6 +72,7 @@ class Operations:
         self.discovery=None
         self.download_token=None
         self.camera=None
+        self.camera_choices={}
         self.agent=None
         self.agent_values={}
         self.created_batch=set()
@@ -98,6 +99,7 @@ class Operations:
     def clear_b2o(self):
         self.archive=self.discovery=None
         self.download_token=None
+        self.camera_choices={}
         self.extra.camera_report=None;self.extra.camera_operator=None;self.b2o_ready=False;self.admin_credentials=None;self.plan=None
         self.settings.remove("b2o")
 
@@ -292,8 +294,20 @@ class Operations:
             from linkvideo_vpn_helper.services.camera_lookup import search_all_cameras
             if self.admin_credentials is None: raise InputError("Выполните независимый вход в Админку.")
             query=text(a,"query",100)
-            rows=search_all_cameras(query,self.archives().b2o,self.admin_credentials)
-            return [{k:getattr(c,k) for k in ("camera_id","operator_id","country","label","customer_login","status","tariff")} for c in rows][:200]
+            self.camera_choices={}
+            rows=tuple(search_all_cameras(query,self.archives().b2o,self.admin_credentials))[:200]
+            self.camera_choices={(c.operator_id,c.camera_id):c for c in rows}
+            return [{k:getattr(c,k) for k in ("camera_id","operator_id","country","label","customer_login","status","tariff")} for c in rows]
+        if method=="camera_lookup_image":
+            import base64
+            from linkvideo_vpn_helper.services.b2o_camera_preview import fetch_camera_preview
+            camera=text(a,"camera",128);operator=self.operator(a)
+            choice=self.camera_choices.get((operator,camera))
+            if choice is None: raise InputError("Камера не входит в актуальные результаты поиска.")
+            raw=fetch_camera_preview(choice.country,choice.camera_id,self.archives().b2o.token())
+            mime="image/jpeg" if raw.startswith(b"\xff\xd8") else "image/png" if raw.startswith(b"\x89PNG\r\n\x1a\n") else "image/webp" if raw[:4]==b"RIFF" and raw[8:12]==b"WEBP" else ""
+            if not mime or len(raw)>1024*1024: raise InputError("Превью списка недоступно или слишком велико.")
+            return {"camera":camera,"operator":operator,"src":"data:"+mime+";base64,"+base64.b64encode(raw).decode("ascii")}
         if method=="camera_ports":
             from linkvideo_vpn_helper.services.vpn_camera_port_match import match_vpn_ports
             h=self.host(a);login=text(a,"login")

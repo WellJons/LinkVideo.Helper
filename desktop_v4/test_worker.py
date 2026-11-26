@@ -160,6 +160,12 @@ class TestWorkspace(unittest.TestCase):
             self.assertEqual(result[0]["camera_id"],"42")
             self.assertEqual(search.call_args.args[0],"linkvideo_42")
             self.assertNotIn("password",result[0])
+        with patch("linkvideo_vpn_helper.services.b2o_camera_preview.fetch_camera_preview",return_value=b"\xff\xd8fixture") as preview:
+            image=self.w.dispatch("camera_lookup_image",{"camera":"42","operator":241})
+            self.assertTrue(image["src"].startswith("data:image/jpeg;base64,"))
+            with self.assertRaises(InputError):
+                self.w.dispatch("camera_lookup_image",{"camera":"43","operator":241})
+            preview.assert_called_once_with("Россия","42","offline-token")
         with patch("linkvideo_vpn_helper.services.b2o_client_admin.B2OOperatorReadOnly.check_access",return_value={"token":"not-for-renderer"}) as check:
             result=self.w.dispatch("b2o_access",{"country":"Россия"})
             self.assertEqual(result,{"country":"Россия","ok":True})

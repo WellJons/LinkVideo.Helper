@@ -1,7 +1,7 @@
 'use strict';
 (()=>{
  let S={};
- const reset=()=>{stopTraffic();stopRefresh();S={}};
+ const reset=()=>{stopTraffic();stopRefresh();stopThumbs();S={}};
  const discardPlan=()=>{S.plan=null;S.outcome=null;S.planPage=null};
  const op=(method,args={})=>rpc('operation',method,args);
  const button=(name,fn,cls='quiet',disabled=false)=>{const b=btn(name,cls,fn);b.disabled=disabled;return b};
@@ -29,6 +29,47 @@
  const stage=(method,args)=>{const from=page,generation=epoch,owner=identity;stopTraffic();return run(async()=>{discardPlan();const plan=await op(method,args);if(epoch===generation&&identity===owner){S.plan=plan;S.planPage=from}else toast('Раздел изменился. Подготовьте действие заново.')})};
  const currentPlan=()=>S.planPage===page?S.plan:null;
  const resultNote=(root)=>{if(S.outcome&&S.planPage===page)root.append(notice('Операция завершена. Проверьте актуальное состояние целевой записи.'))};
+ let thumbJob=null;
+ function stopThumbs(){if(thumbJob){clearTimeout(thumbJob.timer);thumbJob=null}}
+ function thumbnailState(kind,source){
+  const key=kind+'Thumbs';
+  if(S[key]?.source!==source)S[key]={source,images:new Map(),attempted:new Set(),bytes:0};
+  return S[key]
+ }
+ function showThumb(node,src){
+  if(!node||typeof src!=='string'||!/^data:image\/(png|jpeg|webp);base64,/.test(src))return;
+  const im=el('img');im.alt='Кадр камеры';im.src=src;node.replaceChildren(im)
+ }
+ function queueThumbs(kind,source,targets,state){
+  if(preview||!S.admin?.b2o||!targets.length)return;
+  if(thumbJob?.state===state)return;
+  stopThumbs();
+  const owner=identity,route=epoch;
+  const job={state,timer:null};thumbJob=job;
+  const valid=()=>thumbJob===job&&identity===owner&&epoch===route&&!preview&&!!S.admin?.b2o&&
+    (kind==='billing'?page==='billing'&&(S.billingTab||'search')==='search'&&(S.billingCardTab||'services')==='services'&&S.billingClient===source:page==='camera'&&!S.cameraInfo&&S.cameraChoices===source);
+  const next=ms=>{if(valid())job.timer=setTimeout(step,ms);else if(thumbJob===job)stopThumbs()};
+  async function step(){
+   if(!valid()){if(thumbJob===job)stopThumbs();return}
+   if(taskBusy||idleRead||S.plan||document.hidden){next(500);return}
+   const target=targets.find(x=>!state.attempted.has(x.key)&&!state.images.has(x.key));
+   if(!target||state.bytes>=8*1024*1024){stopThumbs();return}
+   try{
+    const reply=await backgroundRead(target.method,target.args);
+    if(!valid())return;
+    if(!reply){next(500);return}
+    state.attempted.add(target.key);
+    const src=reply.ok?reply.data?.src:null;
+    if(typeof src==='string'&&src.length<=1500000&&state.bytes+src.length<=8*1024*1024&&/^data:image\/(png|jpeg|webp);base64,/.test(src)){
+     state.images.set(target.key,src);state.bytes+=src.length;
+     const node=[...document.querySelectorAll('[data-thumb-key]')].find(x=>x.dataset.thumbKey===target.key);
+     showThumb(node,src)
+    }
+   }catch{if(valid())state.attempted.add(target.key)}
+   finally{if(valid())next(100);else if(thumbJob===job)stopThumbs()}
+  }
+  next(100)
+ }
  function imagePreview(root,result){if(!result?.src||!/^data:image\/(png|jpeg|webp);base64,/.test(result.src))return;const i=el('img','camera-thumb');i.alt='Кадр камеры';i.src=result.src;root.append(add(el('div','panel camera-preview'),el('h3','','Превью камеры'),i))}
  async function loadCreateHosts(){
   const owner=identity;if(!owner||preview||S.createLoading)return;
@@ -212,7 +253,7 @@
   if(S.inactive){const result=S.inactive,labels={A:'Активная',S:'Сон',Q:'Карантин',R:'Архив',M:'Ручная',U:'Неизвестно'};keyValue(root,[['Найдено',result.rows.length],['Серверов',result.total],['Ошибок',result.errors.length]]);if(result.errors.length)root.append(notice('Недоступны: '+result.errors.join(', ')));if(result.cancelled)root.append(notice('Проверка отменена, вывод неполный.'));
    const filter=field('Состояние LV','select',S.lifeFilter||'', [['','Все'],...Object.entries(labels)]),order=field('Сортировка','select',S.lifeOrder||'old',[['old','Сначала старые'],['new','Сначала новые'],['server','По серверу'],['login','По логину']]),query=field('Фильтр логина','text',S.lifeQuery||'');form(root,filter,order,query);action(root,button('Применить фильтр',()=>{S.lifeFilter=value(filter);S.lifeOrder=value(order);S.lifeQuery=value(query);render(false)}));
    const rows=result.rows.filter(x=>(!S.lifeFilter||x.lifecycle_state===S.lifeFilter)&&(!S.lifeQuery||x.login.toLowerCase().includes(S.lifeQuery.toLowerCase()))).sort((a,b)=>S.lifeOrder==='new'?String(b.last_seen||'').localeCompare(a.last_seen||''):S.lifeOrder==='server'?a.server.localeCompare(b.server):S.lifeOrder==='login'?a.login.localeCompare(b.login):String(a.last_seen||'9999').localeCompare(b.last_seen||'9999'));const items=(S.inactiveSelected||[]),key=x=>x.server+'|'+x.login;
-   const listRoot=el('div','panel inactive-list');listRoot.append(el('h2','','Учётные записи'));root.append(listRoot);listRoot.append(table(['','Логин','Сервер','Состояние LV','Последний выход','Учётка'],rows.map(c=>{const ch=el('input','camera-check');ch.type='checkbox';ch.checked=items.some(x=>key(x)===key(c));ch.disabled=identity?.role!=='sysadmin'||c.is_online||result.cancelled;ch.setAttribute('aria-label','Выбрать '+c.login);ch.onchange=()=>{S.inactiveSelected=(S.inactiveSelected||[]).filter(x=>key(x)!==key(c));if(ch.checked)S.inactiveSelected.push(c);discardPlan();root.querySelector('.confirmation')?.remove();$('inactive-count').textContent='Выбрано: '+S.inactiveSelected.length};return [ch,c.login,c.server,labels[c.lifecycle_state]||c.lifecycle_state,c.last_logged_out||'—',c.is_enabled?'Включена':'Отключена']})));
+   const listRoot=el('div','panel inactive-list');listRoot.append(el('h2','','Учётные записи'));root.append(listRoot);listRoot.append(table(['','Логин','Сервер','Состояние LV','Последний выход','Учётка',''],rows.map(c=>{const ch=el('input','camera-check');ch.type='checkbox';ch.checked=items.some(x=>key(x)===key(c));ch.disabled=identity?.role!=='sysadmin'||c.is_online||result.cancelled;ch.setAttribute('aria-label','Выбрать '+c.login);ch.onchange=()=>{S.inactiveSelected=(S.inactiveSelected||[]).filter(x=>key(x)!==key(c));if(ch.checked)S.inactiveSelected.push(c);discardPlan();root.querySelector('.confirmation')?.remove();$('inactive-count').textContent='Выбрано: '+S.inactiveSelected.length};return [ch,c.login,c.server,labels[c.lifecycle_state]||c.lifecycle_state,c.last_logged_out||'—',c.is_enabled?'Включена':'Отключена',live('Карточка',()=>{window.lvModules.clearClient();go('search');client(c.server,c.login)})]})));
    const count=el('span','muted','Выбрано: '+items.length);count.id='inactive-count';root.append(add(el('div','actionbar'),count,button('Выбрать до 50',()=>{discardPlan();S.inactiveSelected=rows.filter(x=>!x.is_online).slice(0,50);render(false)},'quiet',identity?.role!=='sysadmin'||result.cancelled),button('Снять выбор',()=>{discardPlan();S.inactiveSelected=[];render(false)})));
    if(identity?.role==='sysadmin'){
     for(const [act,label] of [['enable','Включить выбранные'],['disable','Отключить выбранные']])action(root,live(label,()=>stage('inactive_batch_preview',{action:act,targets:(S.inactiveSelected||[]).map(x=>({host:x.server,login:x.login}))})));
@@ -236,8 +277,8 @@
   const x=S.lv;if(x)keyValue(root,[['Сервер',x.server],['Версия',x.version],['Скрипты',x.scripts_installed+' / '+x.scripts_expected],['Планировщики',x.schedulers_installed+' / '+x.schedulers_expected],['Установка',x.installed?'Подтверждена':'Не полная'],['Пауза',x.paused?'Да':'Нет'],['Инициализировано',x.initialized],['LV-Aging',x.aging_enabled?'Включён':'Выключен'],['Активные',x.active],['Сон',x.sleeping],['Карантин',x.quarantine],['Архив',x.archive],['Неизвестные',x.unknown]]);
   previewNotice(root,currentPlan(),out=>{if(out.lv_results){S.lvBatch=out.lv_results;S.lvFleet=null}else S.lv=out});if(S.lvBatch)root.append(table(['Сервер','Результат','Статус LV'],S.lvBatch.map(x=>[x.server,({confirmed:'Подтверждено',not_confirmed:'Не подтверждено',not_attempted:'Не отправлено'})[x.status],x.state])));resultNote(root);
  }
- function clearBillingView(){S.billingEdit=null;S.billingCardTab='services';S.billingHistoryCamera=null;S.billingClient=null;S.hits=null;S.history=null;S.catalog=null;S.catalogFilter={};S.billingImage=null;S.bulkSelected=[];S.bulkResult=null;S.recipients=null;S.plan=null;S.outcome=null}
- function clearB2OView(){S.b2oDraft=null;S.b2oCreated=null;S.b2oAccess=null;S.b2oClient=null;S.b2oReadId=null;S.archive=null;S.archiveSaved=null;S.cameraInfo=null;S.cameraChoices=null;S.cameraLive=null;S.cameraImage=null;S.billingImage=null;S.agentImage=null;S.camPorts=null;S.plan=null;S.outcome=null}
+ function clearBillingView(){stopThumbs();S.billingThumbs=null;S.billingEdit=null;S.billingCardTab='services';S.billingHistoryCamera=null;S.billingClient=null;S.hits=null;S.history=null;S.catalog=null;S.catalogFilter={};S.billingImage=null;S.bulkSelected=[];S.bulkResult=null;S.recipients=null;S.plan=null;S.outcome=null}
+ function clearB2OView(){stopThumbs();S.billingThumbs=null;S.cameraThumbs=null;S.b2oDraft=null;S.b2oCreated=null;S.b2oAccess=null;S.b2oClient=null;S.b2oReadId=null;S.archive=null;S.archiveSaved=null;S.cameraInfo=null;S.cameraChoices=null;S.cameraLive=null;S.cameraImage=null;S.billingImage=null;S.agentImage=null;S.camPorts=null;S.plan=null;S.outcome=null}
  function sessionStrip(root,kind){
   const connected=!!S.admin?.[kind];const panel=el('div','panel session-strip');
   panel.append(add(el('div'),el('p','eyebrow','РАБОЧАЯ УЧЁТНАЯ ЗАПИСЬ'),el('h3','',kind==='crm'?'CRM / Биллинг':'B2O / Видео'),el('p','muted',connected?'Последний вход подтверждён · '+S.admin.username:'Подключение не подтверждено.')));
@@ -300,19 +341,20 @@
   const updateCount=()=>{const n=(S.bulkSelected||[]).length;count.textContent='Выбрано: '+n;bulk.textContent='Изменить выбранным ('+n+')';bulk.disabled=preview||!identity?.writes||!n};
   panel.append(add(el('div','actionbar'),count,bulk,live('Каталог тарифов',()=>run(async()=>{discardPlan();S.billingEdit=null;await loadCatalog()})),live('Выбрать все',()=>{discardPlan();S.bulkSelected=c.services.filter(x=>x.id===x.camera_id).map(x=>x.id).slice(0,100);render(false)}),live('Снять выбор',()=>{discardPlan();S.bulkSelected=[];render(false)})));
   if(!c.services_loaded)panel.append(notice('CRM не подтвердила загрузку списка камер.'));
-  const list=el('div','billing-camera-list');list.dataset.scrollKey='billing-cameras';list.tabIndex=0;
+  const thumbs=thumbnailState('billing',c);const list=el('div','billing-camera-list');list.dataset.scrollKey='billing-cameras';list.tabIndex=0;
   if(!c.services.length)list.append(notice('Нет загруженных услуг.'));
   for(const x of c.services){
    const check=el('input','camera-check');check.type='checkbox';check.setAttribute('aria-label','Выбрать '+x.camera_name);check.checked=(S.bulkSelected||[]).includes(x.id);check.disabled=preview||x.id!==x.camera_id;
    check.onchange=()=>{discardPlan();const ids=(S.bulkSelected||[]).filter(id=>id!==x.id);if(check.checked&&ids.length>=100){check.checked=false;toast('Можно выбрать до 100 камер.')}S.bulkSelected=check.checked?[...ids,x.id]:ids;updateCount();document.querySelector('.billing-services .confirmation')?.remove()};
    const card=el('article','billing-camera-card');card.dataset.billingCamera=x.id;
-   const thumb=el('div','billing-camera-thumb');const img=S.billingImage?.camera===x.id?S.billingImage.src:'';
-   if(img&&/^data:image\/(png|jpeg|webp);base64,/.test(img)){const im=el('img');im.alt='Кадр камеры';im.src=img;thumb.append(im)}else thumb.append(el('span','muted','Нет превью'));
+   const thumb=el('div','billing-camera-thumb');thumb.dataset.thumbKey=x.id;const img=S.billingImage?.camera===x.id?S.billingImage.src:thumbs.images.get(x.id);
+   thumb.append(el('span','muted','Нет превью'));if(img)showThumb(thumb,img);
    const main=el('div','billing-camera-details');main.append(add(el('div','billing-camera-title'),el('h3','',x.camera_name||'Камера '+x.camera_id),el('span',x.status==='Активный'?'online':'muted',x.status)),el('p','','Тариф: '+(x.tariff_name||'—')),el('p','muted','ID CRM: '+(x.camera_id||'—')+' · ID B2O: '+(x.camera_vc_id||'—')),el('p','muted','Цена: '+(x.price_text||'—')+' · Скидка: '+(x.discount_text||'—')+' · Итого: '+(x.total_text||'—')));
    const actions=el('div','actionbar');const writable=!!identity?.writes&&x.id===x.camera_id;
    actions.append(live('Кадр',()=>run(async()=>{S.billingImage=await op('billing_camera_image',{camera:x.id})})),button('Изменить тариф',()=>openEdit(x.id,'tariff'),'primary',preview||!writable),live('История',()=>run(async()=>{discardPlan();S.billingHistoryCamera=x.id;S.history=await op('billing_history',{camera:x.id})})),button('Статус',()=>openEdit(x.id,'status'),'quiet',preview||!writable),button('Перенос камеры',()=>openEdit(x.id,'transfer'),'quiet',preview||!writable));main.append(actions);card.append(check,thumb,main);list.append(card);
   }
   panel.append(list,el('p','muted','Выберите камеру и тариф. Изменения выполняются только после подтверждения.'));
+  queueThumbs('billing',c,c.services.filter(x=>x.id===x.camera_id&&x.camera_vc_id).slice(0,12).map(x=>({key:x.id,method:'billing_camera_image',args:{camera:x.id}})),thumbs);
   const edit=S.billingEdit;
   if(edit){
    const selected=c.services.find(x=>x.id===edit.id);
@@ -429,6 +471,7 @@
   S.templates=await op('templates_list',{query:S.templateQuery||'',category:S.templateCategory||'',favorites:!!S.templateFavorites});
  }
  function enterPage(name){
+  if(name!=='billing'&&name!=='camera')stopThumbs();
   if(name==='templates'&&!preview&&!S.templates&&!taskBusy)run(loadTemplates);
   if(name==='archives'&&!preview&&!S.archiveFolder&&!taskBusy)run(async()=>{S.archiveFolder=await rpc('archiveFolder','get')});
  }
@@ -526,8 +569,8 @@
    const box=el('form','panel billing-search-form'),find=el('button','primary','Найти камеры');find.type='submit';find.disabled=preview||!S.admin?.b2o;
    box.append(query.node,find);root.append(box);box.onsubmit=e=>{e.preventDefault();if(find.disabled||taskBusy||!value(query))return;run(async()=>{S.cameraLookupQuery=value(query);S.cameraChoices=null;S.cameraChoice=null;S.cameraInfo=null;S.cameraLive=null;S.cameraImage=null;S.cameraChoices=await op('camera_lookup',{query:S.cameraLookupQuery})})};
    const results=el('div','panel');results.append(el('h2','','Камеры'));root.append(results);
-   if(S.cameraChoices){results.append(notice('Подтверждённых совпадений: '+S.cameraChoices.length));const list=el('div','billing-camera-list');list.dataset.scrollKey='camera-results';
-    for(const choice of S.cameraChoices){const card=el('article','camera-search-card');card.dataset.cameraChoice=choice.camera_id;const main=el('div','billing-camera-details');main.append(el('h3','',choice.label||choice.camera_id),el('p','muted','ID: '+choice.camera_id+' · '+choice.country),el('p','muted',[choice.customer_login?'Клиент: '+choice.customer_login:'',choice.tariff?'Тариф: '+choice.tariff:''].filter(Boolean).join(' · ')));card.append(main,el('span','muted',choice.status||'—'),live('Подробнее',()=>run(()=>inspect(choice.camera_id,choice.operator_id,choice)),'primary'));list.append(card)}results.append(list);
+   if(S.cameraChoices){results.append(notice('Подтверждённых совпадений: '+S.cameraChoices.length));const list=el('div','billing-camera-list');list.dataset.scrollKey='camera-results';const thumbs=thumbnailState('camera',S.cameraChoices);
+    for(const choice of S.cameraChoices){const card=el('article','camera-search-card');card.dataset.cameraChoice=choice.camera_id;const key=choice.operator_id+':'+choice.camera_id,thumb=el('div','billing-camera-thumb camera-result-thumb');thumb.dataset.thumbKey=key;thumb.append(el('span','muted','Нет превью'));showThumb(thumb,thumbs.images.get(key));const main=el('div','billing-camera-details');main.append(el('h3','',choice.label||choice.camera_id),el('p','muted','ID: '+choice.camera_id+' · '+choice.country),el('p','muted',[choice.customer_login?'Клиент: '+choice.customer_login:'',choice.tariff?'Тариф: '+choice.tariff:''].filter(Boolean).join(' · ')));card.append(thumb,main,el('span','muted',choice.status||'—'),live('Подробнее',()=>run(()=>inspect(choice.camera_id,choice.operator_id,choice)),'primary'));list.append(card)}results.append(list);queueThumbs('camera',S.cameraChoices,S.cameraChoices.slice(0,12).map(x=>({key:x.operator_id+':'+x.camera_id,method:'camera_lookup_image',args:{camera:x.camera_id,operator:x.operator_id}})),thumbs);
    }else results.append(notice('Введите логин клиента, ID или серийный номер камеры.'));
    const direct=el('details','panel camera-direct');direct.append(el('summary','','Прямая диагностика по ID и стране'));
    const id=field('ID камеры','text',S.cameraId||''),opid=field('Страна','select',S.cameraOperator||241,[[241,'Россия'],[1721,'Казахстан'],[1741,'Беларусь'],[1442,'Здравсервис / Goodline'],[621,'Провзор']]);form(direct,id,opid);action(direct,live('Диагностика камеры',()=>run(()=>inspect(value(id),num(opid))),'primary'));root.append(direct);return
