@@ -26,6 +26,7 @@ async function layoutSmoke(){
  for(const name of ['home','search','servers','create','inactive','lv','recovery','billing','archives','diagnostics','agent','camera','templates','admin','settings']){
   go(name);window.lvModules.fixture(name,data);await wait();check(name);
  }
+ go('servers');serverState={rows:[{host,country:'Россия',metrics:{server:host,clients_online:3,clients_total:8,ports_active:5,ports_total:12,cpu_load:27,memory_usage_percent:45}}],metric:{server:host,clients_online:3,clients_total:8,ports_active:5,ports_total:12,cpu_load:27,memory_usage_percent:45}};render(false);await wait();if(!document.querySelector('#page').textContent.includes('Порты онлайн / всего')||!document.querySelector('#page').textContent.includes('Выгрузить этот сервер'))throw Error('Infrastructure workspace missing');check('servers:details');serverState=null;
  go('templates');window.lvModules.fixture('templates',{...data,editTemplate:null});await wait();const item=document.querySelector('[data-template-id="1"]');if(!item)throw Error('Missing template library');item.click();await wait();if(!document.querySelector('.template-answer'))throw Error('Missing selected template');check('templates:selection');
  go('archives');window.lvModules.fixture('archives',data);await wait();
  if(!document.querySelector('.archive-workspace')||!document.querySelector('[data-archive-folder]')||[...document.querySelectorAll('input[type=datetime-local]')].some(x=>!x.value))throw Error('Archive workflow missing');
@@ -59,6 +60,7 @@ async function layoutSmoke(){
  country('Казахстан');if(control('host').value!=='kz.example.invalid')throw Error('Country filter failed');
  country('Беларусь');if(control('host').value!==''||!document.querySelector('[data-create-action="manual"]').disabled)throw Error('Unavailable country fell back to another region');
  country('Россия');check('create:region');
+ go('settings');for(const id of ['cloud','archive','servers','about','appearance']){const b=document.querySelector('[data-settings-tab="'+id+'"]');if(!b)throw Error('Missing native settings tab '+id);b.click();await wait();check('settings:'+id)}if(document.querySelectorAll('[data-theme-choice]').length!==themes.length)throw Error('Missing theme choices');
  go('settings');for(const [id] of themes){setTheme(id);await wait();check('theme:'+id)}
  setTheme('dark');motion=false;preferences();go('home');await wait();if($('page').getAnimations().length)throw Error('Animation active with reduced motion');
  motion=true;preferences();go('billing');window.lvModules.fixture('billing',data);await wait();check('billing:screenshot');

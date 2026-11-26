@@ -446,7 +446,7 @@
   if(!items.length)list.append(notice('Пока нет ответов. Создайте шаблон или импортируйте DOCX.'));
   const select=async t=>{S.templateSelected=t.id;S.templateCurrent=t;S.editTemplate=null;S.imageTemplate=t.id;S.images=null;if(!preview)await loadImages(t.id)};
   const loadImages=async id=>{S.images=await op('templates_images',{id})};
-  for(const t of items){const row=button('','', 'template-list-item');row.onclick=()=>run(()=>select(t));row.dataset.templateId=String(t.id);row.setAttribute('aria-pressed',String(t.id===S.templateSelected));row.append(el('strong','',t.title+(t.favorite?' · ★':'')),el('small','muted',t.category),el('span','template-excerpt',t.body.slice(0,180)));list.append(row)}
+  for(const t of items){const row=button('',()=>{},'template-list-item');row.onclick=()=>run(()=>select(t));row.dataset.templateId=String(t.id);row.setAttribute('aria-pressed',String(t.id===S.templateSelected));row.append(el('strong','',t.title+(t.favorite?' · ★':'')),el('small','muted',t.category),el('span','template-excerpt',t.body.slice(0,180)));list.append(row)}
   library.append(list,el('p','muted','Сохранение локальное · без отправки на сервер'));
   library.append(add(el('div','actionbar'),live('Импортировать DOCX',()=>run(async()=>{const r=await rpc('fileAction','templates_import',{category:value(cat)});await load();toast('Импортировано: '+r.count)})),live('Перенести библиотеку 3.x',()=>run(async()=>{S.migrateResult=await rpc('fileAction','templates_migrate');await load()}))));
   if(S.migrateResult)keyValue(library,[['Перенесено',S.migrateResult.imported],['Уже имеются',S.migrateResult.skipped],['Изображений',S.migrateResult.images],['Недоступные вложения',S.migrateResult.missing]]);
@@ -531,20 +531,49 @@
   }
   root.append(g);
  }
- function workspaceSettings(root){
+ function infrastructure(root,metric){
+  if(identity?.role!=='sysadmin')return;
+  const writable=!preview&&!!identity?.writes;
+  if(!metric){
+   const card=el('div','panel infrastructure-actions');card.append(el('h3','','Действия со всеми серверами'));
+   const bar=el('div','actionbar');
+   bar.append(live('Выгрузить все серверы',()=>run(async()=>{S.backup=await op('backup',{all:true})})),live('Обновить состояние LV',()=>run(async()=>{S.lvFleet=await op('lv_fleet')})));
+   const hosts=(S.hosts||[]).map(h=>h.host),installed=(S.lvFleet?.rows||[]).filter(x=>x.installed&&!x.error).map(x=>x.server);
+   for(const [act,label,targets] of [['install','Установить/обновить LV на всех',hosts],['start','Запустить LV на всех',installed],['pause','Остановить LV на всех',installed]])bar.append(button(label,()=>stage('lv_batch_preview',{action:act,hosts:targets}),'quiet',!writable||!targets.length||!!S.lvFleet?.cancelled));
+   card.append(bar);
+   const more=el('details','infrastructure-legend');more.append(el('summary','','Памятка состояний VPN-клиентов'),el('p','','A — активная · S — сон · Q — карантин · R — архив · M — ручная · U — неизвестно'));card.append(more);
+   if(S.backup)keyValue(card,[['Копии успешно',S.backup.success],['Ошибки',S.backup.failed],['Папка',S.backup.folder]]);
+   root.append(card);return;
+  }
+  const host=metric.server,card=el('div','panel infrastructure-actions'),state=S.lv?.server===host?S.lv:(S.lvFleet?.rows||[]).find(x=>x.server===host&&!x.error);
+  card.append(el('h3','','Управление сервером · '+host));
+  const bar=el('div','actionbar');bar.append(live('Выгрузить этот сервер',()=>run(async()=>{S.backup=await op('backup',{host})})),live('Проверить LV',()=>run(async()=>{discardPlan();S.lv=await op('lv_status',{host})})));
+  for(const [act,label] of [['install',state?.installed?'Обновить LV':'Установить LV'],['seed','Инициализировать активность'],[state?.paused?'start':'pause',state?.paused?'Запустить LV':'Остановить LV'],[state?.aging_enabled?'quarantine_off':'quarantine_on',state?.aging_enabled?'Выключить карантин':'Включить карантин']])bar.append(button(label,()=>stage('lv_preview',{host,action:act}),'quiet',!writable||(act!=='install'&&!state?.installed)));
+  card.append(bar);if(state)keyValue(card,[['LV',state.state_text],['Версия',state.version],['Карантин',state.aging_enabled?'Включён':'Выключен']]);else card.append(notice('Сначала получите подтверждённое состояние LV.'));
+  root.append(card);
+ }
+ function infrastructureResults(root){
+  if(identity?.role!=='sysadmin')return;
+  previewNotice(root,currentPlan(),out=>{if(out.lv_results){S.lvBatch=out.lv_results;S.lvFleet=null}else S.lv=out});
+  if(S.lvBatch)root.append(table(['Сервер','Результат','Статус LV'],S.lvBatch.map(x=>[x.server,({confirmed:'Подтверждено',not_confirmed:'Не подтверждено',not_attempted:'Не отправлено'})[x.status],x.state])));resultNote(root);
+ }
+ function workspaceSettings(root,tab){
   if(preview){root.append(notice('Настройки корпоративных серверов доступны после входа.'));return}
-  section(root,'Защищённые учётные данные');action(root,live('Очистить сохранённый вход',()=>run(()=>rpc('clearSaved','work'))));cloudSettings(root);
+  if(tab==='cloud'){section(root,'Защищённые учётные данные');action(root,live('Очистить сохранённый вход',()=>run(()=>rpc('clearSaved','work'))));cloudSettings(root);return}
+  if(tab==='archive'){
   section(root,'Архив · кластеры и серверы');
   action(root,live('Настройки архива',()=>run(async()=>{S.archiveSettings=await op('archive_settings')}),'primary'));
   if(S.archiveSettings){
    for(const item of S.archiveSettings.clusters){const b=el('div','panel setting-row');const sw=btn('','switch',()=>run(async()=>{S.archiveSettings=await op('archive_settings_update',{action:'cluster',cluster:item.key,enabled:!item.enabled})}));sw.setAttribute('role','switch');sw.setAttribute('aria-label',item.name);sw.setAttribute('aria-checked',String(item.enabled));sw.append(el('span'));b.append(add(el('div'),el('h3','',item.name),el('p','','Operator '+item.operator)),sw);root.append(b)}
    if(identity?.role==='sysadmin'){for(const group of S.archiveSettings.hosts){if(!group.custom.length)continue;section(root,group.country+' · '+group.operator);root.append(table(['Сервер',''],group.custom.map(host=>[host,live('Удалить',()=>run(async()=>{S.archiveSettings=await op('archive_settings_update',{action:'remove_host',operator:group.operator,host})}))])))}const operator=field('Оператор','select','241',S.archiveSettings.hosts.map(x=>[x.operator,x.country+' · '+x.operator])),host=field('Дополнительный архивный сервер','text');form(root,operator,host);action(root,live('Добавить сервер архива',()=>run(async()=>{S.archiveSettings=await op('archive_settings_update',{action:'add_host',operator:num(operator),host:value(host)})})))}
   }
+  return}
+  if(tab==='about'){
   section(root,'Журнал работы Helper 4');const logCard=el('div','panel');logCard.append(el('p','muted','Локальный журнал операций: время, название, результат и длительность. Без параметров, паролей, токенов и содержимого буфера обмена.'));
   const loadLogs=async()=>{S.logs=await rpc('logRead')};
   logCard.append(add(el('div','actionbar'),live('Обновить',()=>run(loadLogs),'primary'),live('Открыть папку',()=>run(()=>rpc('logFolder'))),live('Очистить',()=>run(async()=>{await rpc('logClear');await loadLogs()})),live('Скопировать',()=>rpc('copy',(S.logs||[]).map(x=>x.time+' '+x.action+' '+(x.ok?'OK':'ERROR')+' '+x.ms+' ms').join('\n')).then(()=>toast('Журнал скопирован')).catch(error))));
-  if(S.logs){const out=el('pre','runtime-log',(S.logs||[]).map(x=>x.time+'  '+(x.ok?'OK   ':'ERROR')+'  '+x.action+'  '+x.ms+' ms').join('\n')||'Журнал пуст.');out.tabIndex=0;logCard.append(out)}root.append(logCard);
-  if(identity?.role!=='sysadmin')return;
+  if(S.logs){const out=el('pre','runtime-log',(S.logs||[]).map(x=>x.time+'  '+(x.ok?'OK   ':'ERROR')+'  '+x.action+'  '+x.ms+' ms').join('\n')||'Журнал пуст.');out.tabIndex=0;out.dataset.scrollKey='runtime-log';logCard.append(out)}root.append(logCard);return}
+  if(tab!=='servers'||identity?.role!=='sysadmin'){root.append(notice('Доступно системному администратору.'));return;}
   section(root,'Реестр VPN-серверов');
   const load=async()=>{S.registry=await op('registry_list');S.hosts=await rpc('servers');serverState=null;searchState=null};
   action(root,live('Открыть реестр',()=>run(load),'primary'));
@@ -572,5 +601,5 @@
   previewNotice(root,currentPlan(),out=>{if(out?.background&&S.background)S.background.v4=out.background});resultNote(root);
 
  }
- window.lvModules=Object.freeze({...(window.helper?.smokeMode?{fixture:(name,data)=>{if(!preview)throw Error('Fixture requires offline preview');Object.assign(S,data);if(name==='archives'||name==='diagnostics')S.archivePage=name;render(false)},refreshFixture:now=>{if(!preview)throw Error('Fixture requires offline preview');preserveScroll(()=>{applyClientRefresh(now);paintClient()})}}:{}),reset,enterPage,loadCreateHosts,discardPlan,client,selectedClient:()=>S.client,stopTraffic,stopRefresh,cloudRestore:c=>stage("cloud_restore_preview",{host:c.server,login:c.login}),dashboard,settings:workspaceSettings,clearClient:()=>{stopTraffic();stopRefresh();S.newPorts=[];S.refreshWarning='';S.clientHistory=null;S.camPorts=null;S.client=null;S.plan=null;S.outcome=null},renderClient,render:(name,root)=>{({create,inactive,lv,recovery,admin,billing,archives:r=>archive(r,false),diagnostics:r=>archive(r,true),agent,camera,templates})[name]?.(root)}});
+ window.lvModules=Object.freeze({...(window.helper?.smokeMode?{fixture:(name,data)=>{if(!preview)throw Error('Fixture requires offline preview');Object.assign(S,data);if(name==='archives'||name==='diagnostics')S.archivePage=name;render(false)},refreshFixture:now=>{if(!preview)throw Error('Fixture requires offline preview');preserveScroll(()=>{applyClientRefresh(now);paintClient()})}}:{}),reset,enterPage,loadCreateHosts,discardPlan,client,selectedClient:()=>S.client,stopTraffic,stopRefresh,cloudRestore:c=>stage("cloud_restore_preview",{host:c.server,login:c.login}),dashboard,settings:workspaceSettings,infrastructure,infrastructureResults,lvLabel:host=>{const x=(S.lvFleet?.rows||[]).find(r=>r.server===host);return x&&!x.error?x.state_text:'Не проверено'},clearClient:()=>{stopTraffic();stopRefresh();S.newPorts=[];S.refreshWarning='';S.clientHistory=null;S.camPorts=null;S.client=null;S.plan=null;S.outcome=null},renderClient,render:(name,root)=>{({create,inactive,lv,recovery,admin,billing,archives:r=>archive(r,false),diagnostics:r=>archive(r,true),agent,camera,templates})[name]?.(root)}});
 })();
