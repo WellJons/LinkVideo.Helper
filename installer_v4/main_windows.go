@@ -810,7 +810,7 @@ func (w *wizard) drawRequirementsCard(hdc uintptr, rc rect) {
     drawText(hdc, "Системные требования", rect{rc.Left + 16, rc.Top + 12, rc.Right - 14, rc.Top + 39}, w.fontBold, rgb(44, 46, 49), dtLeft|dtVCenter|dtSingleLine)
     drawText(hdc, "Windows 10/11 · x64", rect{rc.Left + 16, rc.Top + 46, rc.Left + 205, rc.Top + 73}, w.fontSmall, rgb(69, 72, 76), dtLeft|dtVCenter|dtSingleLine)
     drawText(hdc, "Сеть до VPN-серверов", rect{rc.Left + 198, rc.Top + 46, rc.Left + 362, rc.Top + 73}, w.fontSmall, rgb(69, 72, 76), dtLeft|dtVCenter|dtSingleLine)
-    drawText(hdc, "Без прав администратора", rect{rc.Left + 365, rc.Top + 46, rc.Right - 12, rc.Top + 73}, w.fontSmall, rgb(69, 72, 76), dtLeft|dtVCenter|dtSingleLine)
+    drawText(hdc, "Без администратора", rect{rc.Left + 365, rc.Top + 46, rc.Right - 12, rc.Top + 73}, w.fontSmall, rgb(69, 72, 76), dtLeft|dtVCenter|dtSingleLine)
 }
 
 func (w *wizard) stepLabels() []string {

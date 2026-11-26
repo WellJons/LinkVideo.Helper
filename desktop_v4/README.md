@@ -149,3 +149,5 @@ Windows run 45764732955 measured 38,065,425 bytes for the Python worker (formerl
 
 ### Original Windows wizard
 The 3.0.27 native Go/Win32 wizard is reused in `installer_v4` for installation and removal. Its 900×580 original UI, sidebar, logo, cards, buttons and page flow remain; the text and paths are scoped to 4.x. The compressed Inno payload is executed silently to preserve compression and existing isolated per-user registration; Windows Apps & Features points to the native `Uninstall.exe`. No 3.x installer code or registration is changed. Existing 4.x installs in custom locations must be removed before installing this fixed-path preview. CI tests real installation and removal via the native executable. Optional background installer remains separate.
+
+Native setup CI captures all seven installer/uninstaller pages in non-mutating layout preview mode and tests installation twice (upgrade), then removal. Registry reads use Windows Unicode APIs and the inner Inno uninstall command is restored only during its upgrade operation, preventing duplicate uninstall logs. GUI previews do not execute installation or deletion.

@@ -117,6 +117,11 @@ jobs:
           $setup = Get-ChildItem dist-v4/*-Setup.exe | Select-Object -First 1
           Write-Host ('LV4_SETUP_BYTES=' + $setup.Length)
           Add-Content dist-v4/size-report.txt ('Installer bytes: ' + $setup.Length)
+      - name: Capture original native installer and removal pages
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem dist-v4/*-Setup.exe | Select-Object -First 1).FullName
+          & ./desktop_v4/capture-native-installer.ps1 -Setup $setup -Uninstaller (Resolve-Path installer_v4/Uninstall.exe).Path -Output (Join-Path $PWD 'dist-v4/layout/installer')
       - name: Smoke test actual installed application
         shell: pwsh
         env:
@@ -126,6 +131,8 @@ jobs:
           $installer = (Get-ChildItem dist-v4/*-Setup.exe | Select-Object -First 1).FullName
           $p = Start-Process -FilePath $installer -ArgumentList '--quiet' -PassThru -Wait
           if ($p.ExitCode -ne 0) { throw "Setup failed: $($p.ExitCode)" }
+          $p = Start-Process -FilePath $installer -ArgumentList '--quiet' -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "Native upgrade failed: $($p.ExitCode)" }
           & (Join-Path $dest 'resources/worker/helper-core.exe') --lv4-runtime-selftest
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $p = Start-Process -FilePath (Join-Path $dest 'LinkVideo.Helper.4.exe') -ArgumentList '--lv4-smoke' -PassThru -Wait

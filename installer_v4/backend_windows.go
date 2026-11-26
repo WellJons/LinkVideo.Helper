@@ -4,6 +4,7 @@ package main
 
 import (
     _ "embed"
+    "encoding/binary"
     "errors"
     "fmt"
     "os"
@@ -36,30 +37,52 @@ func hidden(name string, args ...string) *exec.Cmd {
     c.SysProcAttr=&syscall.SysProcAttr{HideWindow:true, CreationFlags:0x08000000}
     return c
 }
-func registeredDir() string {
-    out,err:=hidden("reg.exe","query",uninstallKey,"/v","InstallLocation").Output()
-    if err!=nil { return "" }
-    for _,line:=range strings.Split(string(out),"\n") {
-        if i:=strings.Index(line,"REG_SZ");i>=0 { return strings.TrimSpace(line[i+6:]) }
+func registryValue(name string)(string,error) {
+    var key syscall.Handle
+    sub,err:=syscall.UTF16PtrFromString(strings.TrimPrefix(uninstallKey,"HKCU\\"))
+    if err!=nil{return "",err}
+    if err=syscall.RegOpenKeyEx(syscall.Handle(syscall.HKEY_CURRENT_USER),sub,0,syscall.KEY_QUERY_VALUE,&key);err!=nil{
+        if errors.Is(err,syscall.ERROR_FILE_NOT_FOUND){return "",nil};return "",err
     }
-    return ""
+    defer syscall.RegCloseKey(key)
+    value,_:=syscall.UTF16PtrFromString(name)
+    var typ,n uint32
+    if err=syscall.RegQueryValueEx(key,value,nil,&typ,nil,&n);err!=nil{
+        if errors.Is(err,syscall.ERROR_FILE_NOT_FOUND){return "",nil};return "",err
+    }
+    if typ!=1||n>65536||n<2||n%2!=0{return "",errors.New("Некорректная запись установки Windows.")}
+    buf:=make([]byte,n)
+    if err=syscall.RegQueryValueEx(key,value,nil,&typ,&buf[0],&n);err!=nil{return "",err}
+    units:=make([]uint16,n/2)
+    for i:=range units{units[i]=binary.LittleEndian.Uint16(buf[2*i:])}
+    return syscall.UTF16ToString(units),nil
 }
+func registeredDir()(string,error){return registryValue("InstallLocation")}
 func prepare() error {
     if !filepath.IsAbs(os.Getenv("LOCALAPPDATA")) || !filepath.IsAbs(os.Getenv("APPDATA")) { return errors.New("Не найдена папка текущего пользователя Windows.") }
-    if existing:=registeredDir(); existing!="" && !strings.EqualFold(filepath.Clean(existing),filepath.Clean(defaultInstallDir())) {
+    existing,err:=registeredDir();if err!=nil{return err}
+    if existing!="" && !strings.EqualFold(filepath.Clean(existing),filepath.Clean(defaultInstallDir())) {
         return errors.New("Версия 4.0 установлена в другой папке. Сначала удалите её через приложения Windows, затем запустите установщик.")
     }
     return os.Chdir(os.TempDir())
 }
-func registerWizard(dest string) error {
-    un:=filepath.Join(dest,"Uninstall.exe")
-    for _,v:=range [][2]string{{"UninstallString",fmt.Sprintf("%q",un)},{"QuietUninstallString",fmt.Sprintf("%q --quiet",un)}} {
-        // Windows command-line quoting, not Go string-literal escaping.
-        data:="\""+un+"\""
-        if v[0]=="QuietUninstallString" {data+=" --quiet"}
-        if err:=hidden("reg.exe","add",uninstallKey,"/v",v[0],"/t","REG_SZ","/d",data,"/f").Run();err!=nil {return fmt.Errorf("Не удалось зарегистрировать мастер удаления: %w",err)}
+func writeUninstallCommand(exe string, native bool) error {
+    normal:="\""+exe+"\""
+    quiet:=normal+" /VERYSILENT"
+    if native{quiet=normal+" --quiet"}
+    for _,v:=range [][2]string{{"UninstallString",normal},{"QuietUninstallString",quiet}} {
+        if err:=hidden("reg.exe","add",uninstallKey,"/v",v[0],"/t","REG_SZ","/d",v[1],"/f").Run();err!=nil{return fmt.Errorf("Не удалось зарегистрировать мастер удаления: %w",err)}
     }
     return nil
+}
+func registerWizard(dest string) error{return writeUninstallCommand(filepath.Join(dest,"Uninstall.exe"),true)}
+func innerUninstaller(dest string)(string,error){
+    matches,err:=filepath.Glob(filepath.Join(dest,"unins*.exe"))
+    if err!=nil{return "",err}
+    valid:=[]string{}
+    for _,p:=range matches{if st,e:=os.Stat(strings.TrimSuffix(p,filepath.Ext(p))+".dat");e==nil&&st.Mode().IsRegular(){valid=append(valid,p)}}
+    if len(valid)!=1{return "",errors.New("Не найден однозначный пакет удаления версии 4.0.")}
+    return valid[0],nil
 }
 func installProduct(opts installOptions, progress progressFunc)(string,error) {
     dest:=defaultInstallDir()
@@ -69,10 +92,18 @@ func installProduct(opts installOptions, progress progressFunc)(string,error) {
     if err!=nil{return "",err};defer os.RemoveAll(tmp)
     exe:=filepath.Join(tmp,"payload.exe")
     if err=os.WriteFile(exe,payload,0600);err!=nil{return "",err}
-    task:="/TASKS="
+    task:="/MERGETASKS=!desktopicon"
     if opts.DesktopShortcut {task="/TASKS=desktopicon"}
+    // Restore the Inno uninstall command before updating the existing log.
+    previous,err:=registryValue("UninstallString");if err!=nil{return "",err}
+    hadNative:=strings.EqualFold(strings.Trim(previous,"\""),filepath.Join(dest,"Uninstall.exe"))
+    if hadNative {
+        inner,e:=innerUninstaller(dest);if e!=nil{return "",e}
+        if e=writeUninstallCommand(inner,false);e!=nil{return "",e}
+        defer func(){if _,e:=os.Stat(filepath.Join(dest,"Uninstall.exe"));e==nil{_ = registerWizard(dest)}}()
+    }
     progress(20,"Установка файлов LinkVideo.Helper 4…")
-    cmd:=hidden(exe,"/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/DIR="+dest,task,"/LOG="+filepath.Join(tmp,"setup.log"))
+    cmd:=hidden(exe,"/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/CLOSEAPPLICATIONS","/NORESTARTAPPLICATIONS","/DIR="+dest,task,"/LOG="+filepath.Join(tmp,"setup.log"))
     if err=cmd.Run();err!=nil{return "",fmt.Errorf("Установка не завершена: %w",err)}
     progress(85,"Проверка установленной программы…")
     app:=filepath.Join(dest,appExeName)
@@ -99,10 +130,9 @@ func uninstallProduct(removeData bool,progress progressFunc) error{
     dest:=defaultInstallDir()
     progress(8,"Подготовка к удалению…")
     // Only the specific 4.x Inno uninstaller in the fixed user directory.
-    matches,err:=filepath.Glob(filepath.Join(dest,"unins*.exe"))
-    if err!=nil||len(matches)!=1{return errors.New("Не найден однозначный пакет удаления версии 4.0.")}
+    inner,err:=innerUninstaller(dest);if err!=nil{return err}
     progress(30,"Удаление файлов и ярлыков…")
-    if err=hidden(matches[0],"/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART").Run();err!=nil{return fmt.Errorf("Удаление не завершено: %w",err)}
+    if err=hidden(inner,"/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART").Run();err!=nil{return fmt.Errorf("Удаление не завершено: %w",err)}
     // Inno waits for its own bootstrap. Verify the app is gone before reporting success.
     for i:=0;i<30;i++{
         if _,err=os.Stat(filepath.Join(dest,appExeName));os.IsNotExist(err){break}
