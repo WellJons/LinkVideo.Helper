@@ -135,8 +135,11 @@ jobs:
         run: |
           $dest = Join-Path $env:LOCALAPPDATA 'Programs/LinkVideo.Helper.4'
           $installer = (Get-ChildItem dist-v4/*-Setup.exe | Select-Object -First 1).FullName
-          $p = Start-Process -FilePath $installer -ArgumentList '--quiet' -PassThru -Wait
-          if ($p.ExitCode -ne 0) { throw "Setup failed: $($p.ExitCode)" }
+          $env:LV4_WIZARD_E2E = '1'
+          try {
+            $p = Start-Process -FilePath $installer -PassThru -Wait
+            if ($p.ExitCode -ne 0) { throw "Interactive Electron Setup failed: $($p.ExitCode)" }
+          } finally { Remove-Item Env:LV4_WIZARD_E2E -ErrorAction SilentlyContinue }
           $p = Start-Process -FilePath $installer -ArgumentList '--quiet' -PassThru -Wait
           if ($p.ExitCode -ne 0) { throw "Electron installer upgrade failed: $($p.ExitCode)" }
           & (Join-Path $dest 'resources/worker/helper-core.exe') --lv4-runtime-selftest
@@ -147,10 +150,9 @@ jobs:
           if (!(Test-Path $uninstaller)) { throw 'Missing uninstaller bootstrap' }
           $entry = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\LinkVideo.Helper.4.Preview_is1'
           if ($entry.UninstallString -notlike '*Uninstall.exe*') { throw 'Windows does not point to native uninstaller' }
-          $copy = Join-Path $env:RUNNER_TEMP 'LV4-Native-Uninstall.exe'
-          Copy-Item $uninstaller $copy -Force
-          $p = Start-Process -FilePath $copy -ArgumentList '--quiet' -PassThru -Wait
-          if ($p.ExitCode -ne 0 -or (Test-Path (Join-Path $dest 'LinkVideo.Helper.4.exe'))) { throw "Uninstall failed: $($p.ExitCode)" }
+          $env:LV4_WIZARD_E2E = '1'
+          try { $p = Start-Process -FilePath $uninstaller -PassThru -Wait } finally { Remove-Item Env:LV4_WIZARD_E2E -ErrorAction SilentlyContinue }
+          if ($p.ExitCode -ne 0 -or (Test-Path (Join-Path $dest 'LinkVideo.Helper.4.exe')) -or (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\LinkVideo.Helper.4.Preview_is1')) { throw "Interactive Electron uninstall failed: $($p.ExitCode)" }
       - name: Build separate protected Windows background component
         shell: pwsh
         run: |

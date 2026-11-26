@@ -7,6 +7,7 @@ const {pathToFileURL}=require('node:url');
 function start(){
  const mode=process.argv.find(x=>x.startsWith('--lv4-wizard='))?.split('=')[1];
  const preview=process.argv.includes('--lv4-wizard-preview')&&process.env.LV4_SMOKE==='1';
+ const e2e=!preview&&process.env.LV4_SMOKE==='1'&&process.env.LV4_WIZARD_E2E==='1';
  if(!['install','uninstall'].includes(mode)||(!app.isPackaged&&!preview)){app.exit(1);return}
  const profile=process.argv.find(x=>x.startsWith('--lv4-wizard-profile='))?.slice('--lv4-wizard-profile='.length);
  if(!profile||!path.isAbsolute(profile)){app.exit(1);return}
@@ -33,6 +34,25 @@ function start(){
   win.webContents.setWindowOpenHandler(()=>({action:'deny'}));win.webContents.on('will-navigate',e=>e.preventDefault());
   win.on('close',e=>{if(busy)e.preventDefault()});
   await win.loadFile('wizard.html');win.show();
+  if(e2e){
+   try{
+    await win.webContents.executeJavaScript(`(async()=>{
+     const wait=ms=>new Promise(r=>setTimeout(r,ms)),get=id=>document.getElementById(id);
+     async function until(fn){for(let i=0;i<1200;i++){if(fn())return;await wait(100)}throw Error('Wizard operation timed out')}
+     await until(()=>get('title').textContent.length>0&&get('next').onclick);
+     if(get('title').textContent==='Ошибка запуска мастера')throw Error(get('description').textContent);
+     if(${JSON.stringify(mode)}==='install'){get('next').click();await until(()=>get('title').textContent==='Параметры установки');const box=document.querySelector('input[type=checkbox]');if(!box?.checked)throw Error('Desktop shortcut default missing');box.click()}
+     else if(document.querySelector('input[type=checkbox]')?.checked)throw Error('Removal data option must be unchecked by default');
+     get('next').click();
+     await until(()=>['Готово','Удаление завершено','Установка не завершена','Удаление завершено с ошибкой'].includes(get('title').textContent));
+     if(!['Готово','Удаление завершено'].includes(get('title').textContent))throw Error(document.querySelector('.error')?.textContent||'Wizard operation failed');
+     return true
+    })()`);
+    if(!finished)throw Error('Wizard did not complete its backend operation');
+    app.exit(0);
+   }catch(e){console.error(e);app.exit(1)}
+   return;
+  }
   if(preview){
    const out=process.env.LV4_WIZARD_REPORT;if(!out){app.exit(1);return}
    try{
