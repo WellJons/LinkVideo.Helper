@@ -106,7 +106,7 @@ nav button span{min-width:0;text-align:left}nav{min-height:0}.sidebar-end strong
 textarea{display:block;width:100%;min-width:0;max-width:100%;min-height:145px;resize:vertical;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:var(--control-radius);padding:11px 12px;font:inherit;line-height:1.55;transition:border-color .15s,box-shadow .15s}
 textarea:focus{border-color:var(--accent)}
 :where(textarea,summary,[tabindex]):focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-:where(input,textarea)::placeholder{color:var(--muted);opacity:.84}
+:where(input,textarea)::placeholder{color:var(--muted);opacity:1}
 :where(input[type=checkbox],input[type=radio]){width:16px;height:16px;min-height:0;padding:0;accent-color:var(--accent);flex:none}
 :where(.fields,.create-form,.template-detail,.billing-create-fields) label{min-width:0}
 .primary,.quiet,.theme-choice{min-height:var(--control-height);border-radius:var(--control-radius)}
@@ -180,3 +180,9 @@ nav button{transition:color .16s,background .16s,border-color .16s}nav button[ar
 [data-client-new-ports]:empty{display:none}[data-client-facts] .kv-grid,[data-client-state] .kv-grid{margin:0 0 12px}.traffic-chart path{vector-effect:non-scaling-stroke}.traffic-chart .traffic-axis{font-variant-numeric:tabular-nums}[data-port-counters]{font-variant-numeric:tabular-nums}
 
 .archive-quick-period{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.archive-quick-period button{min-height:32px;padding:6px 12px}.archive-quick-period button[aria-pressed=true]{background:var(--accent-bg);color:var(--accent-text);border-color:var(--accent)}.archive-duration{font-variant-numeric:tabular-nums;font-weight:600}.report-tabs{margin-top:8px}.timeline-box svg{height:34px}.timeline-axis{font-variant-numeric:tabular-nums}.archive-extra-row button{min-width:36px;font-size:18px}
+
+/* Light palettes: maintain readable contrast on tinted and hovered controls. */
+:root.light .primary:not(:disabled):hover{background:color-mix(in srgb,var(--accent) 92%,#000);color:var(--primary-fg)}
+:root[data-theme="rose_milk"]{--muted:#735a68;--accent-bg:color-mix(in srgb,#C2276C 8%,#FFFFFF)}
+:root[data-theme="linkvideo_2026"]{--muted:#56636f;--accent-bg:color-mix(in srgb,#B74405 8%,#FFFFFF)}
+:root[data-theme="lavender_mist"]{--muted:#6b5b7d}

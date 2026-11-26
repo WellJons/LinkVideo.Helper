@@ -135,3 +135,6 @@ Client status and NAT counters now update existing elements instead of rebuildin
 
 ### Archive workspace polish
 Quick period buttons (5/15 minutes, 1/3/24 hours), selected duration, accessible comparison-row removal, stable report tabs and saved FFmpeg draft. Editing camera, period or comparison invalidates the displayed result immediately and prevents a delayed response for old parameters from appearing. Timeline intervals are clipped to the selected time range. Offline tests verify the report node is reused and stale archive results disappear.
+
+### Theme contrast checks
+Measured contrast of all ten palettes. Adjusted muted text, selected control backgrounds and primary hover in light palettes; placeholders now use the full text color. Added offline Chromium contrast regression check for eight foreground/background pairs in every palette (minimum 4.5:1). This checks specified pairs, not an exhaustive accessibility certification.

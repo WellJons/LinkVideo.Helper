@@ -65,7 +65,16 @@ async function layoutSmoke(){
  country('Беларусь');if(control('host').value!==''||!document.querySelector('[data-create-action="manual"]').disabled)throw Error('Unavailable country fell back to another region');
  country('Россия');check('create:region');window.lvModules.expireFixture();await new Promise(r=>setTimeout(r,140));const expired=document.querySelector('.confirmation-expired');if(!expired||!expired.querySelector('[data-plan-confirm]').disabled||!expired.textContent.includes('Срок действия истёк'))throw Error('Expired confirmation remained active');expired.querySelector('[data-plan-cancel]').click();await wait();if(document.querySelector('.confirmation'))throw Error('Expired confirmation not dismissed');check('create:confirmation-expiry');
  go('settings');for(const id of ['cloud','archive','servers','about','appearance']){const b=document.querySelector('[data-settings-tab="'+id+'"]');if(!b)throw Error('Missing native settings tab '+id);b.click();await wait();check('settings:'+id)}if(document.querySelectorAll('[data-theme-choice]').length!==themes.length)throw Error('Missing theme choices');
- go('settings');for(const [id] of themes){setTheme(id);await wait();check('theme:'+id)}
+ function paletteContrast(id){
+  const probe=document.createElement('span');probe.hidden=true;document.body.append(probe);
+  const canvas=document.createElement('canvas');canvas.width=canvas.height=1;const ctx=canvas.getContext('2d',{willReadFrequently:true});
+  const get=key=>{probe.style.color='var(--'+key+')';const color=getComputedStyle(probe).color;ctx.clearRect(0,0,1,1);ctx.fillStyle=color;ctx.fillRect(0,0,1,1);return [...ctx.getImageData(0,0,1,1).data].slice(0,3)};
+  const luminance=rgb=>rgb.map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4).reduce((a,v,i)=>a+v*[.2126,.7152,.0722][i],0);
+  try{for(const [fg,bg] of [['text','panel'],['muted','panel'],['muted','bg'],['muted','hover'],['accent-text','accent-bg'],['primary-fg','accent'],['ok','panel'],['danger','panel']]){
+    const a=luminance(get(fg)),b=luminance(get(bg)),ratio=(Math.max(a,b)+.05)/(Math.min(a,b)+.05);if(ratio<4.5)throw Error('Insufficient theme contrast '+id+' '+fg+'/'+bg+': '+ratio.toFixed(2))
+  }}finally{probe.remove()}
+ }
+ go('settings');for(const [id] of themes){setTheme(id);await wait();paletteContrast(id);check('theme:'+id)}
  setTheme('dark');motion=false;preferences();go('home');await wait();if($('page').getAnimations({subtree:true}).length)throw Error('Animation active with reduced motion');
  motion=true;preferences();go('billing');window.lvModules.fixture('billing',data);await wait();check('billing:screenshot');
  window.__lv4CaptureFixture=async name=>{motion=false;preferences();go(name);window.lvModules.fixture(name,{...data,editTemplate:null,billingTab:'search',billingCardTab:'services'});if(name==='servers'){serverState={rows:[{host,country:'Россия',metrics:{server:host,clients_online:3,clients_total:8,ports_active:5,ports_total:12,cpu_load:27,memory_usage_percent:45}}],metric:{server:host,clients_online:3,clients_total:8,ports_active:5,ports_total:12,cpu_load:27,memory_usage_percent:45}};render(false)}if(name==='templates')document.querySelector('[data-template-id="1"]')?.click();await wait();};
