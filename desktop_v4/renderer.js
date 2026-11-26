@@ -113,9 +113,9 @@ function search(root){
 function servers(root){
  root.append(hero('VPN / INFRASTRUCTURE','VPN-серверы','Текущее состояние инфраструктуры.'));window.lvModules?.infrastructure(root);if(preview&&!serverState){root.append(notice('Для получения списка серверов войдите в рабочий аккаунт.'));return}
  const reload=btn('Обновить данные','primary',async()=>{const owner=identity;serverState={loading:true};render(false);try{const d=await rpc('operation','server_fleet',{});if(identity===owner)serverState={fleet:d,rows:d.rows}}catch(err){if(identity===owner)serverState={error:err.message}}if(identity===owner&&page==='servers')render(false)});reload.disabled=preview||!!serverState?.loading||!!serverState?.analyzing;root.append(add(el('div','actionbar'),reload));
- if(!serverState){root.append(notice('Нажмите «Обновить все серверы». Данные поступают из RouterOS, без подставных метрик.'));return}
+ if(!serverState){root.append(notice('Нажмите «Обновить данные». Данные поступают из RouterOS, без подставных метрик.'));window.lvModules?.infrastructureResults(root);return}
  if(serverState.loading){root.append(busy('Параллельно проверяю VPN-серверы…'));return}
- if(serverState.error)root.append(notice(serverState.error));if(!serverState.rows)return;
+ if(serverState.error)root.append(notice(serverState.error));if(!serverState.rows){window.lvModules?.infrastructureResults(root);return}
  const rows=serverState.rows,ok=rows.filter(x=>x.metrics),sum=k=>ok.reduce((a,x)=>a+(x.metrics[k]||0),0);
  const metrics=el('div','grid');for(const [label,value] of [['Ответили',ok.length+' / '+rows.length],['VPN онлайн',sum('clients_online').toLocaleString('ru-RU')],['Порты онлайн / всего',sum('ports_active').toLocaleString('ru-RU')+' / '+sum('ports_total').toLocaleString('ru-RU')]])metrics.append(add(el('div','tile'),el('small','',label),el('div','metric',value)));root.append(metrics);
  if(serverState.fleet?.cancelled)root.append(notice('Проверка остановлена. Показатели отражают только полученные ответы.'));else if(ok.length!==rows.length)root.append(notice('Часть серверов не вернула подтверждённые данные.'));

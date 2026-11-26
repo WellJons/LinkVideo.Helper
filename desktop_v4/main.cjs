@@ -11,7 +11,9 @@ const {version:appVersion}=require('./package.json');
 app.setName('LinkVideo.Helper 4 Preview');
 app.setPath('userData',process.argv.includes('--lv4-smoke')&&process.env.LV4_SMOKE==='1'?require('node:fs').mkdtempSync(path.join(require('node:os').tmpdir(),'lv4-smoke-')):path.join(app.getPath('appData'),'LinkVideo.Helper.v4-preview'));
 if(!app.requestSingleInstanceLock()){app.quit()}else{
-let win=null,approved=null,updateAbort=null,installBusy=false,lastArchive=null;
+let win=null,approved=null,updateAbort=null,installBusy=false,lastArchive=null,createdB2O=null;
+function clearB2OCopy(){createdB2O=null}
+function expireRecord(record,clear,ms){const timer=setTimeout(()=>clear(record),ms);timer.unref()}
 const updater=new Updater(appVersion);
 const vault=new CredentialVault(app.getPath('userData'),safeStorage);
 const runtimeLog=new RuntimeLog(path.join(app.getPath('userData'),'logs'));
@@ -37,7 +39,7 @@ handle('helper:log-folder',async()=>{await fsp.mkdir(runtimeLog.dir,{recursive:t
 async function login(a){
  const username=clean(a?.username,128),password=clean(a?.password,512);
  if(!username?.trim()||!password)throw Error('Введите логин и пароль.');
- approved=null;
+ approved=null;clearB2OCopy();
  const result=await bridge.request('login',{username:username.trim(),password});
  let remembered=false;
  try{if(a.remember===true){vault.save('work',{username:username.trim(),password});remembered=true}else vault.clear('work')}catch{}
@@ -52,12 +54,14 @@ handle('helper:status',()=>bridge.request('status'));
 handle('helper:search',a=>{const query=clean(a?.query,128);if(!query?.trim()||!['login','port'].includes(a?.mode))throw Error('Некорректный запрос.');return bridge.request('search',{query:query.trim(),mode:a.mode})});
 handle('helper:servers',()=>bridge.request('servers'));
 handle('helper:analyze',a=>{const host=clean(a?.host,253);if(!host)throw Error('Выберите сервер.');return bridge.request('analyze',{host})});
-const operations=new Set(['client_detail','client_refresh','traffic_sample','camera_ports','camera_lookup','inactive_fleet','inactive_batch_preview','server_fleet','create_preview','vpn_preview','commit','inactive','lv_status','lv_preview','lv_fleet','lv_batch_preview','create_suggest','create_ip','create_check','admin_logout','admin_status','admin_retry','billing_refresh','billing_filter','billing_search','billing_select','billing_catalog','billing_history','billing_preview','billing_bulk_preview','billing_camera_image','create_auto','archive_discover','archive_settings','archive_settings_update','archive_diagnose','agent_search','agent_settings','agent_preview','templates_list','templates_save','templates_favorite','templates_delete','background_status','background_preview','background_verify_admin','backup','delete_preview','backup_status','backup_inventory','backup_verify','cloud_deleted_search','deleted_search','restore_preview','sheets_preview','cloud_status','cloud_restore_preview','activity','camera_inspect','camera_live','camera_image','agent_image','b2o_read','b2o_create_preview','billing_recipient','billing_transfer_preview','templates_images','templates_detach','winbox','registry_list','registry_update','background_status']);
+const operations=new Set(['client_detail','client_refresh','traffic_sample','camera_ports','camera_lookup','inactive_fleet','inactive_batch_preview','server_fleet','create_preview','vpn_preview','commit','inactive','lv_status','lv_preview','lv_fleet','lv_batch_preview','create_suggest','create_ip','create_check','admin_logout','admin_status','admin_retry','billing_refresh','billing_filter','billing_search','billing_select','billing_catalog','billing_history','billing_preview','billing_bulk_preview','billing_camera_image','create_auto','archive_discover','archive_settings','archive_settings_update','archive_diagnose','agent_search','agent_settings','agent_preview','templates_list','templates_save','templates_favorite','templates_delete','background_status','background_preview','background_verify_admin','backup','delete_preview','backup_status','backup_inventory','backup_verify','cloud_deleted_search','deleted_search','restore_preview','sheets_preview','cloud_status','cloud_restore_preview','activity','camera_inspect','camera_live','camera_image','agent_image','b2o_read','b2o_access','b2o_create_preview','billing_recipient','billing_transfer_preview','templates_images','templates_detach','winbox','registry_list','registry_update','background_status']);
 handle('helper:operation',async a=>{
  if(!a||!operations.has(a.method)||!a.args||typeof a.args!=='object'||Array.isArray(a.args)||JSON.stringify(a.args).length>65000)throw Error('Недопустимая операция.');
+ let confirmed=null;
+ if(a.method==='b2o_create_preview')clearB2OCopy();
  if(a.method==='commit'){
   if(!approved||approved.token!==a.args.token||Date.now()>approved.deadline){approved=null;throw Error('Подтверждение устарело.');}
-  const confirmed=approved;approved=null;
+  confirmed=approved;approved=null;
   const answer=await dialog.showMessageBox(win,{type:'warning',buttons:['Отмена','Подтвердить'],defaultId:0,cancelId:0,title:'LinkVideo.Helper 4',message:confirmed.label,detail:'Проверьте выбранные данные. При неизвестном результате не повторяйте запрос автоматически.'});
   if(answer.response!==1)throw Error('Подтверждение отменено.');
  }
@@ -65,14 +69,23 @@ handle('helper:operation',async a=>{
  const target=clean(a.args.host,253);if(!target)throw Error('Некорректный сервер.');
  const answer=await dialog.showMessageBox(win,{type:'warning',message:'Разрешить подключение к '+target+'?',detail:'Рабочие данные MikroTik передаются этому серверу. Добавляйте только проверенные корпоративные адреса. Доверие действует текущий сеанс.',buttons:['Отмена','Разрешить'],defaultId:0,cancelId:0});if(answer.response!==1)throw Error('Доверие не подтверждено.');}
  const data=await bridge.request(a.method,a.args);
- if(a.method.endsWith('_preview')&&data?.token&&data?.label)approved={token:data.token,label:String(data.label).slice(0,600),deadline:Date.now()+120000};
- if(a.method==='admin_logout'){approved=null;}
+ if(a.method.endsWith('_preview')&&data?.token&&data?.label){
+  const record={token:data.token,label:String(data.label).slice(0,600),deadline:Date.now()+120000};
+  if(a.method==='b2o_create_preview')record.b2o={login:clean(a.args.login,100),password:clean(a.args.password,128)};
+  approved=record;expireRecord(record,x=>{if(approved===x)approved=null},120000);
+ }
+ if(confirmed?.b2o&&Number.isSafeInteger(data?.id_account)&&data.id_account>0){
+  const record={id:data.id_account,login:confirmed.b2o.login,password:confirmed.b2o.password,deadline:Date.now()+300000};
+  createdB2O=record;expireRecord(record,x=>{if(createdB2O===x)clearB2OCopy()},300000);
+ }
+ if(a.method==='admin_logout'||(a.method==='admin_retry'&&a.args.target==='b2o')){approved=null;clearB2OCopy();}
  return data;
 });
+handle('helper:copy-b2o-created',a=>{const c=createdB2O;if(!c||c.id!==a?.id||Date.now()>c.deadline||!c.login||!c.password)throw Error('Реквизиты недоступны или срок копирования истёк.');clipboard.writeText('Создали вам аккаунт:\nЛогин: '+c.login+'\nПароль: '+c.password+'\n\nДанные можете поменять после того, как авторизуетесь в личном кабинете.');return null});
 async function adminLogin(a){
  const username=clean(a?.username,128),password=clean(a?.password,512),target=a?.target;
  if(!username?.trim()||!password||!['crm','b2o','both'].includes(target))throw Error('Проверьте данные админки.');
- approved=null;
+ approved=null;clearB2OCopy();
  const data=await bridge.request('admin_login',{username:username.trim(),password,target});
  let remembered=false;
  if(data.crm||data.b2o){try{if(a.remember===true){vault.save('admin',{username:username.trim(),password,target:data.crm&&data.b2o?'both':data.crm?'crm':'b2o'});remembered=true}else vault.clear('admin')}catch{}}
@@ -107,10 +120,14 @@ handle('helper:task-scheduler',async()=>{
  const err=await shell.openPath(file);if(err)throw Error('Не удалось открыть планировщик.');
  return true;
 });
-let archiveFolder=null;
+let archiveFolder=null,archiveFolderLoaded=false;
+const archiveFolderFile=path.join(app.getPath('userData'),'archive-folder.json');
+async function loadArchiveFolder(){if(archiveFolderLoaded)return;archiveFolderLoaded=true;try{const data=JSON.parse(await fsp.readFile(archiveFolderFile,'utf8'));if(typeof data.folder==='string'&&path.isAbsolute(data.folder)&&(await fsp.stat(data.folder)).isDirectory())archiveFolder=data.folder}catch{}}
+async function rememberArchiveFolder(folder){archiveFolder=folder;try{await fsp.mkdir(app.getPath('userData'),{recursive:true});await fsp.writeFile(archiveFolderFile,JSON.stringify({folder}),'utf8')}catch{}}
 handle('helper:archive-folder',async a=>{
  if(!['get','choose'].includes(a?.action))throw Error('Неизвестное действие.');
- if(a.action==='choose'){const r=await dialog.showOpenDialog(win,{title:'Папка архива',defaultPath:archiveFolder||app.getPath('videos'),properties:['openDirectory','createDirectory']});if(!r.canceled&&r.filePaths[0])archiveFolder=r.filePaths[0]}
+ await loadArchiveFolder();
+ if(a.action==='choose'){const r=await dialog.showOpenDialog(win,{title:'Папка архива',defaultPath:archiveFolder||app.getPath('videos'),properties:['openDirectory','createDirectory']});if(!r.canceled&&r.filePaths[0])await rememberArchiveFolder(r.filePaths[0])}
  return archiveFolder||app.getPath('videos');
 });
 handle('helper:archive-download',async a=>{
@@ -118,9 +135,10 @@ handle('helper:archive-download',async a=>{
  const manual=clean(a?.manual??'',4000);if(manual===null)throw Error('Слишком длинная команда FFmpeg.');
  const token=clean(a?.token,100);if(!token)throw Error('Повторите поиск архива.');
  const filename=typeof a.filename==='string'&&/^[A-Za-z0-9_.-]{1,180}\.mp4$/.test(a.filename)?a.filename:'archive.mp4';
+ await loadArchiveFolder();
  const result=await dialog.showSaveDialog(win,{title:'Сохранить архив',defaultPath:path.join(archiveFolder||app.getPath('videos'),filename),filters:[{name:'Видео MP4',extensions:['mp4']}]});
  if(result.canceled||!result.filePath)throw Error('Сохранение отменено.');
- archiveFolder=path.dirname(result.filePath);
+ await rememberArchiveFolder(path.dirname(result.filePath));
  const out=await bridge.request('archive_download',{output:result.filePath,mode:a.mode,manual,token});lastArchive=out?.output===result.filePath?result.filePath:null;return out;
 });
 handle('helper:backup-folder',async()=>{
@@ -224,7 +242,7 @@ handle('helper:update-install',async()=>{
 });
 handle('helper:cancel',()=>{if(updateAbort){updateAbort.abort();return true}return bridge.cancel()});
 handle('helper:copy',a=>{const value=clean(a?.text,50000);if(value===null)throw Error('Слишком длинный текст.');clipboard.writeText(value);return null});
-handle('helper:logout',()=>{if(bridge.pending)throw Error('Сначала дождитесь завершения операции или отмените её.');approved=null;lastArchive=null;bridge.stop();try{vault.clear('work');vault.clear('admin');vault.clear('cloud')}catch{}return null});
+handle('helper:logout',()=>{if(bridge.pending)throw Error('Сначала дождитесь завершения операции или отмените её.');approved=null;clearB2OCopy();lastArchive=null;bridge.stop();try{vault.clear('work');vault.clear('admin');vault.clear('cloud')}catch{}return null});
 function open(){
  win=new BrowserWindow({width:1320,height:850,minWidth:820,minHeight:600,show:false,backgroundColor:'#171a20',title:'LinkVideo.Helper 4 — Preview',webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,sandbox:true,nodeIntegration:false,webSecurity:true,devTools:!app.isPackaged,additionalArguments:smokeMode?['--lv4-layout-fixtures']:[]}});
  win.webContents.setWindowOpenHandler(()=>({action:'deny'}));

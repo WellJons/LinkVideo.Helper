@@ -10,7 +10,7 @@ import re
 import subprocess
 import shutil
 
-METHODS=frozenset(("copy_vpn","copy_vpn_batch","backup","delete_preview","backup_status","backup_inventory","backup_verify","cloud_deleted_search","sheets_load","deleted_search","restore_preview","sheets_preview","cloud_connect","cloud_status","cloud_disconnect","cloud_restore_preview","activity","camera_inspect","camera_live","camera_image","agent_image","b2o_read","b2o_create_preview","billing_recipient","billing_transfer_preview","templates_import","templates_attach","templates_reply","templates_images","templates_detach","winbox","registry_list","registry_update"))
+METHODS=frozenset(("copy_vpn","copy_vpn_batch","backup","delete_preview","backup_status","backup_inventory","backup_verify","cloud_deleted_search","sheets_load","deleted_search","restore_preview","sheets_preview","cloud_connect","cloud_status","cloud_disconnect","cloud_restore_preview","activity","camera_inspect","camera_live","camera_image","agent_image","b2o_read","b2o_access","b2o_create_preview","billing_recipient","billing_transfer_preview","templates_import","templates_attach","templates_reply","templates_images","templates_detach","winbox","registry_list","registry_update"))
 class Extended:
     def __init__(self,ops):
         self.o=ops;self.cloud=None;self.sheets=None;self.deleted={};self.cloud_deleted={};self.recipients={};self.camera_report=None;self.camera_operator=None
@@ -400,6 +400,11 @@ class Extended:
             mime="image/jpeg" if raw.startswith(b"\xff\xd8") else "image/png" if raw.startswith(b"\x89PNG\r\n\x1a\n") else "image/webp" if raw[:4]==b"RIFF" and raw[8:12]==b"WEBP" else ""
             if not mime or len(raw)>5*1024*1024: raise InputError("Неподдерживаемый формат превью.")
             return {"country":country,"camera":camera,"src":"data:"+mime+";base64,"+base64.b64encode(raw).decode("ascii")}
+        if m=="b2o_access":
+            from linkvideo_vpn_helper.services.b2o_client_admin import B2OOperatorReadOnly
+            country=text(a,"country",32)
+            B2OOperatorReadOnly(o.archives().b2o).check_access(country)
+            return {"country":country,"ok":True}
         if m=="b2o_read":
             from linkvideo_vpn_helper.services.b2o_client_admin import B2OOperatorReadOnly
             manager=B2OOperatorReadOnly(o.archives().b2o)

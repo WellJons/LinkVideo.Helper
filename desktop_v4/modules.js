@@ -237,7 +237,7 @@
   previewNotice(root,currentPlan(),out=>{if(out.lv_results){S.lvBatch=out.lv_results;S.lvFleet=null}else S.lv=out});if(S.lvBatch)root.append(table(['Сервер','Результат','Статус LV'],S.lvBatch.map(x=>[x.server,({confirmed:'Подтверждено',not_confirmed:'Не подтверждено',not_attempted:'Не отправлено'})[x.status],x.state])));resultNote(root);
  }
  function clearBillingView(){S.billingEdit=null;S.billingCardTab='services';S.billingHistoryCamera=null;S.billingClient=null;S.hits=null;S.history=null;S.catalog=null;S.catalogFilter={};S.billingImage=null;S.bulkSelected=[];S.bulkResult=null;S.recipients=null;S.plan=null;S.outcome=null}
- function clearB2OView(){S.b2oDraft=null;S.b2oCreated=null;S.b2oClient=null;S.b2oReadId=null;S.archive=null;S.archiveSaved=null;S.cameraInfo=null;S.cameraChoices=null;S.cameraLive=null;S.cameraImage=null;S.billingImage=null;S.agentImage=null;S.camPorts=null;S.plan=null;S.outcome=null}
+ function clearB2OView(){S.b2oDraft=null;S.b2oCreated=null;S.b2oAccess=null;S.b2oClient=null;S.b2oReadId=null;S.archive=null;S.archiveSaved=null;S.cameraInfo=null;S.cameraChoices=null;S.cameraLive=null;S.cameraImage=null;S.billingImage=null;S.agentImage=null;S.camPorts=null;S.plan=null;S.outcome=null}
  function sessionStrip(root,kind){
   const connected=!!S.admin?.[kind];const panel=el('div','panel session-strip');
   panel.append(add(el('div'),el('p','eyebrow','РАБОЧАЯ УЧЁТНАЯ ЗАПИСЬ'),el('h3','',kind==='crm'?'CRM / Биллинг':'B2O / Видео'),el('p','muted',connected?'Последний вход подтверждён · '+S.admin.username:'Подключение не подтверждено.')));
@@ -340,11 +340,11 @@
   const capture=()=>{S.b2oDraft={country:value(country),name:value(name),login:value(login),phone:value(phone)}};
   for(const f of [country,name,login,password,phone])f.input.addEventListener('input',()=>{capture();discardPlan();left.querySelector('.confirmation')?.remove()});
   const generate=button('Создать пароль (9 символов)',()=>{const alphabet='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789',limit=256-256%alphabet.length;let out='';while(out.length<9){for(const x of crypto.getRandomValues(new Uint8Array(16))){if(x<limit)out+=alphabet[x%alphabet.length];if(out.length===9)break}}password.input.value=out;password.input.dispatchEvent(new Event('input'))});
-  const formNode=el('form','billing-create-fields');formNode.append(country.node,name.node,login.node,password.node,generate,phone.node,el('p','muted','Тип аккаунта: Обычный · Передать в биллинг: Да'));
+  const formNode=el('form','billing-create-fields');const access=live('Проверить B2O',()=>run(async()=>{capture();S.b2oAccess=null;S.b2oAccess=await op('b2o_access',{country:value(country)})}));formNode.append(country.node,access);if(S.b2oAccess?.country===value(country))formNode.append(notice('Доступ к оператору подтверждён: '+S.b2oAccess.country));formNode.append(name.node,login.node,password.node,generate,phone.node,el('p','muted','Тип аккаунта: Обычный · Передать в биллинг: Да'));
   const submit=el('button','primary','Создать клиента у оператора');submit.type='submit';submit.disabled=preview||!identity?.writes||!S.admin?.b2o;formNode.append(submit);left.append(formNode);
   formNode.onsubmit=e=>{e.preventDefault();if(submit.disabled||taskBusy)return;capture();const pw=password.input.value;password.input.value='';S.b2oCreated=null;stage('b2o_create_preview',{...S.b2oDraft,password:pw})};
   previewNotice(left,currentPlan(),out=>{S.b2oCreated=out});
-  right.append(el('h2','','Данные клиента'));if(S.b2oCreated?.id_account){keyValue(right,[['ID аккаунта',S.b2oCreated.id_account],['Проверка чтением',S.b2oCreated.read_back_verified?'Да':'Не подтверждена']]);right.append(notice('Пароль не хранится в интерфейсе после отправки.'))}else right.append(add(el('div','create-empty'),el('span','create-empty-symbol','◇'),el('h3','','Клиент ещё не создан')));
+  right.append(el('h2','','Данные клиента'));if(S.b2oCreated?.id_account){keyValue(right,[['ID аккаунта',S.b2oCreated.id_account],['Проверка чтением',S.b2oCreated.read_back_verified?'Да':'Не подтверждена']]);right.append(live('Скопировать данные клиенту',()=>rpc('copyB2OCreated',S.b2oCreated.id_account).then(()=>toast('Данные скопированы')).catch(error),'primary'),notice('Реквизиты доступны для копирования 5 минут после создания, не сохраняются в интерфейсе.'))}else right.append(add(el('div','create-empty'),el('span','create-empty-symbol','◇'),el('h3','','Клиент ещё не создан')));
   layout.append(left,right);root.append(layout);
   const read=el('div','panel');read.append(el('h3','','Проверить существующего клиента B2O'));const readCountry=field('Страна','select',S.b2oReadCountry||'Россия',[['Россия','Россия'],['Казахстан','Казахстан'],['Беларусь','Беларусь']]),account=field('ID аккаунта','number',S.b2oReadId||'');account.input.min=1;form(read,readCountry,account);action(read,live('Проверить клиента',()=>run(async()=>{S.b2oReadCountry=value(readCountry);S.b2oReadId=num(account);S.b2oClient=null;S.b2oClient=await op('b2o_read',{country:S.b2oReadCountry,id:S.b2oReadId})})));if(S.b2oClient)keyValue(read,[['ID',S.b2oClient.id_account],['Логин',S.b2oClient.login],['Имя',S.b2oClient.client_name],['Тип',S.b2oClient.account_type]]);root.append(read);
  }
@@ -396,7 +396,7 @@
     action(root,button('Шаблон со звуком',()=>{method.input.value='ffmpeg';manual.input.value=command(true)}));
     action(root,button('Шаблон без звука',()=>{method.input.value='ffmpeg_no_audio';manual.input.value=command(false)}));
     root.append(notice('Оставьте поле пустым для стандартной команды. В ручном режиме доступен ограниченный набор параметров; реальные URL и пути подставляет ядро.'));
-    action(root,live(S.archiveSaved?'Скачать повторно':'Скачать найденный архив',()=>run(async()=>{S.downloadMethod=value(method);S.manualCommand=value(manual);S.archiveSaved=await rpc('archiveDownload',S.downloadMethod,S.manualCommand,d.download_token,d.filename);toast((S.archiveSaved.partial?'Частично сохранён: ':'Сохранён: ')+S.archiveSaved.output)}),'primary'));
+    action(root,live(S.archiveSaved?'Скачать повторно':'Скачать найденный архив',()=>run(async()=>{S.downloadMethod=value(method);S.manualCommand=value(manual);S.archiveSaved=await rpc('archiveDownload',S.downloadMethod,S.manualCommand,d.download_token,d.filename);S.archiveFolder=await rpc('archiveFolder','get');toast((S.archiveSaved.partial?'Частично сохранён: ':'Сохранён: ')+S.archiveSaved.output)}),'primary'));
     if(S.archiveSaved){const s=S.archiveSaved;keyValue(root,[['Файл',s.output],['Сохранено, сек.',s.downloaded_seconds],['Пропущено, сек.',s.failed_seconds],['Ошибок',s.error_count]]);action(root,live('Открыть папку',()=>run(()=>rpc('archiveLocation'))));action(root,live('Копировать путь',()=>rpc('copy',s.output).then(()=>toast('Путь скопирован')).catch(error)))}
    }
   }
@@ -407,7 +407,7 @@
   left.append(el('h2','create-step','1. Найти камеру'));right.append(el('h2','','Статус и данные'));
   const sn=field('Серийный номер','text',S.serial||'');sn.input.placeholder='Серийный номер камеры LD';form(root,sn);
   const getSetting=async action=>{S.plan=null;S.agentSettings=S.agentSettings||{};if(action==='all')S.agentSettings={};else delete S.agentSettings[action];const out=await op('agent_settings',{action});Object.assign(S.agentSettings,out)};
-  action(root,live('Найти камеру',()=>run(async()=>{S.serial=value(sn);S.agent=null;S.agentImage=null;S.agentSettings=null;S.agentOutcome=null;S.plan=null;S.agent=await op('agent_search',{serial:S.serial});if(S.agentAction==='rotation'||S.agentAction==='bitrate')await getSetting(S.agentAction)}),'primary'));
+  action(root,live('Найти камеру',()=>run(async()=>{S.serial=value(sn);S.agent=null;S.agentImage=null;S.agentSettings=null;S.agentOutcome=null;S.plan=null;S.agent=await op('agent_search',{serial:S.serial});if(S.admin?.b2o){try{S.agentImage=await op('agent_image')}catch{S.agentImage=null}}if(S.agentAction==='rotation'||S.agentAction==='bitrate')await getSetting(S.agentAction)}),'primary'));
   const c=S.agent;if(!c)right.append(add(el('div','create-empty'),el('span','create-empty-symbol','◇'),el('h3','','Камера ещё не выбрана'),el('p','muted','Введите серийный номер и нажмите «Найти камеру»')));if(c){keyValue(right,[['SN',c.serial_number],['Модель',c.model],['Производитель',c.vendor],['Сервер',c.server],['Версия агента',c.version],['Подключение',c.connect_time]]);
    action(right,live('Копировать данные',()=>rpc('copy',['Серийный номер: '+c.serial_number,'Agent-vcore: '+c.server,'Устройство: '+c.vendor+' · '+c.model,'Версия агента: '+c.version,'Подключение: '+(c.connect_time||'—')].join('\n')).then(()=>toast('Данные скопированы')).catch(error)));
    action(right,live('Обновить кадр',()=>run(async()=>{S.agentImage=null;S.agentImage=await op('agent_image')})));if(S.agentImage)imagePreview(right,S.agentImage);else right.append(el('p','muted','Превью камеры ещё не загружено.'));root.append(el('h2','create-step','2. Настройки камеры'));
@@ -430,6 +430,7 @@
  }
  function enterPage(name){
   if(name==='templates'&&!preview&&!S.templates&&!taskBusy)run(loadTemplates);
+  if(name==='archives'&&!preview&&!S.archiveFolder&&!taskBusy)run(async()=>{S.archiveFolder=await rpc('archiveFolder','get')});
  }
  function templates(root){
   root.append(hero('SUPPORT / KNOWLEDGE','Шаблоны ответов','Личная библиотека быстрых ответов · локальное сохранение.'));

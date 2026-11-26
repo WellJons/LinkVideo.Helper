@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('helper',Object.freeze({
  servers:()=>ipcRenderer.invoke('helper:servers'),
  analyze:host=>ipcRenderer.invoke('helper:analyze',{host}),
  operation:(method,args)=>ipcRenderer.invoke('helper:operation',{method,args}),
+ copyB2OCreated:id=>ipcRenderer.invoke('helper:copy-b2o-created',{id}),
  copyVpn:(host,login)=>ipcRenderer.invoke('helper:copy-vpn',{host,login}),
  copyVpnBatch:targets=>ipcRenderer.invoke('helper:copy-vpn-batch',{targets}),
  templatePaste:id=>ipcRenderer.invoke('helper:template-paste',{id}),
