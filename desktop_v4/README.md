@@ -132,3 +132,6 @@ Camera parity: returned B2O preview, installation address, original transcode po
 
 ### Live rendering optimization
 Client status and NAT counters now update existing elements instead of rebuilding the entire card. NAT rows are keyed by port; unchanged rows retain identity and focus, and expanded recorder groups remain open. The RX/TX chart also keeps its SVG and patches paths/labels. Structural changes still update only affected rows; scroll is preserved. Traffic reads pause during confirmation. Offline smoke asserts DOM identity and graph updates in addition to prior scroll tests.
+
+### Archive workspace polish
+Quick period buttons (5/15 minutes, 1/3/24 hours), selected duration, accessible comparison-row removal, stable report tabs and saved FFmpeg draft. Editing camera, period or comparison invalidates the displayed result immediately and prevents a delayed response for old parameters from appearing. Timeline intervals are clipped to the selected time range. Offline tests verify the report node is reused and stale archive results disappear.
