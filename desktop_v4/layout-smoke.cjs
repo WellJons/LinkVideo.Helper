@@ -26,6 +26,14 @@ async function layoutSmoke(){
  for(const name of ['home','search','servers','create','inactive','lv','recovery','billing','archives','diagnostics','agent','camera','templates','admin','settings']){
   go(name);window.lvModules.fixture(name,data);await wait();check(name);
  }
+ go('billing');window.lvModules.fixture('billing',{...data,billingTab:'search',billingCardTab:'services',catalog:{...data.catalog,scope:'client'}});await wait();
+ const billingTab=(kind,id)=>document.querySelector('[data-billing-tab="'+kind+':'+id+'"]');
+ if(!document.querySelector('[data-billing-camera="001"]'))throw Error('Missing native camera card');
+ billingTab('client','info').click();await wait();if(document.querySelector('.billing-camera-list')||!document.querySelector('#page').textContent.includes('Дата регистрации'))throw Error('Billing info tab failed');
+ billingTab('client','services').click();await wait();if(!document.querySelector('.billing-camera-list'))throw Error('Billing services tab failed');check('billing:services');
+ billingTab('workspace','create').click();await wait();if(!document.querySelector('.billing-create-fields')||document.querySelector('.billing-camera-list'))throw Error('B2O creation tab failed');check('billing:create');
+ billingTab('workspace','all').click();window.lvModules.fixture('billing',{catalog:data.catalog});await wait();if(!document.querySelector('#page').textContent.includes('Показано 1 из 1')||document.querySelector('.billing-create-fields'))throw Error('All tariffs tab failed');check('billing:all');
+ billingTab('workspace','search').click();await wait();if(!document.querySelector('.billing-camera-list'))throw Error('Billing search state lost');
  go('search');const many=Array.from({length:48},(_,i)=>20000+i);const crowded={...c,ports:many,active_ports:many,disabled_ports:[]};window.lvModules.fixture('search',{client:crowded,newPorts:[],clientHistory:Array.from({length:25},()=>({created_at:'2026-11-17',action:'client.create',details:{}}))});await wait();
  const pane=key=>document.querySelector('[data-scroll-key="'+key+'"]');
  const info=pane('vpn-info'),actions=pane('vpn-actions');if(!info||!actions||info.scrollHeight<=info.clientHeight||actions.scrollHeight<=actions.clientHeight)throw Error('Expected independent client scroll panes');

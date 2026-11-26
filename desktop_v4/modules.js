@@ -236,8 +236,8 @@
   const x=S.lv;if(x)keyValue(root,[['Сервер',x.server],['Версия',x.version],['Скрипты',x.scripts_installed+' / '+x.scripts_expected],['Планировщики',x.schedulers_installed+' / '+x.schedulers_expected],['Установка',x.installed?'Подтверждена':'Не полная'],['Пауза',x.paused?'Да':'Нет'],['Инициализировано',x.initialized],['LV-Aging',x.aging_enabled?'Включён':'Выключен'],['Активные',x.active],['Сон',x.sleeping],['Карантин',x.quarantine],['Архив',x.archive],['Неизвестные',x.unknown]]);
   previewNotice(root,currentPlan(),out=>{if(out.lv_results){S.lvBatch=out.lv_results;S.lvFleet=null}else S.lv=out});if(S.lvBatch)root.append(table(['Сервер','Результат','Статус LV'],S.lvBatch.map(x=>[x.server,({confirmed:'Подтверждено',not_confirmed:'Не подтверждено',not_attempted:'Не отправлено'})[x.status],x.state])));resultNote(root);
  }
- function clearBillingView(){S.billingClient=null;S.hits=null;S.history=null;S.catalog=null;S.catalogFilter={};S.billingImage=null;S.bulkSelected=[];S.bulkResult=null;S.recipients=null;S.plan=null;S.outcome=null}
- function clearB2OView(){S.archive=null;S.archiveSaved=null;S.cameraInfo=null;S.cameraChoices=null;S.cameraLive=null;S.cameraImage=null;S.billingImage=null;S.agentImage=null;S.camPorts=null;S.plan=null;S.outcome=null}
+ function clearBillingView(){S.billingEdit=null;S.billingCardTab='services';S.billingHistoryCamera=null;S.billingClient=null;S.hits=null;S.history=null;S.catalog=null;S.catalogFilter={};S.billingImage=null;S.bulkSelected=[];S.bulkResult=null;S.recipients=null;S.plan=null;S.outcome=null}
+ function clearB2OView(){S.b2oDraft=null;S.b2oCreated=null;S.archive=null;S.archiveSaved=null;S.cameraInfo=null;S.cameraChoices=null;S.cameraLive=null;S.cameraImage=null;S.billingImage=null;S.agentImage=null;S.camPorts=null;S.plan=null;S.outcome=null}
  function sessionStrip(root,kind){
   const connected=!!S.admin?.[kind];const panel=el('div','panel session-strip');
   panel.append(add(el('div'),el('p','eyebrow','РАБОЧАЯ УЧЁТНАЯ ЗАПИСЬ'),el('h3','',kind==='crm'?'CRM / Биллинг':'B2O / Видео'),el('p','muted',connected?'Последний вход подтверждён · '+S.admin.username:'Подключение не подтверждено.')));
@@ -255,29 +255,97 @@
   for(const k of ['crm','b2o'])action(root,live('Повторить '+k.toUpperCase(),()=>run(async()=>{if(k==='crm')clearBillingView();else clearB2OView();S.admin=await op('admin_retry',{target:k})}))); 
   if(S.admin){keyValue(root,[['Аккаунт',S.admin.username],['CRM',S.admin.crm?'Подключено':'Не подключено'],['B2O',S.admin.b2o?'Подключено':'Не подключено']]);for(const e of S.admin.errors||[])root.append(notice(e))}
  }
- function billing(root){
-  root.append(hero('CRM / BILLING','Биллинг','Поиск клиента, карточка, история камеры и тарифный справочник BY / KZ.'));
-  sessionStrip(root,'crm');
-  const q=field('Логин клиента','text',S.billingQuery||'');
-  form(root,q);action(root,live('Найти',()=>run(async()=>{S.billingQuery=value(q);clearBillingView();S.hits=await op('billing_search',{query:S.billingQuery})}),'primary'));
-  action(root,live('Все тарифы',()=>run(async()=>{S.catalogFilter={};S.catalog=await op('billing_catalog',{scope:'all'})})));
-  if(S.hits)root.append(table(['Логин','Клиент','Страна','Баланс',''],S.hits.map(x=>[x.login,x.account_name,x.country,x.balance_text,live('Открыть',()=>run(async()=>{S.billingClient=null;S.plan=null;S.history=null;S.catalog=null;S.catalogFilter={};S.billingImage=null;S.bulkSelected=[];S.bulkResult=null;S.recipients=null;S.billingClient=await op('billing_select',{id:x.id})}))])));
-  const c=S.billingClient;if(c){section(root,c.display_name||c.login);keyValue(root,[['Логин',c.login],['Страна',c.country],['Статус',c.status],['Баланс',c.balance_text],['Договор',c.contract_number],['Тип',c.legal_type],['Услуги',c.services_loaded?c.services_status||c.services.length:'Не загружены'],['E-mail',c.email],['Телефон',c.phone],['Менеджер',c.manager],['Адрес',c.address],['Регистрация',c.registered_at]]);action(root,live('Обновить карточку',()=>run(async()=>{S.plan=null;S.catalog=null;S.catalogFilter={};S.history=null;S.billingImage=null;S.bulkSelected=[];S.recipients=null;S.billingClient=await op('billing_refresh')})));if(!c.services_loaded)root.append(notice('CRM не подтвердила загрузку списка камер.'));
-   root.append(table(['','Камера','ID CRM','ID B2O','Тариф','Статус','Цена','Скидка','Итого','Действия'],c.services.map(x=>{const check=el('input','camera-check');check.type='checkbox';check.setAttribute('aria-label','Выбрать '+x.camera_name);check.checked=(S.bulkSelected||[]).includes(x.id);check.disabled=preview||x.id!==x.camera_id;check.onchange=()=>{S.bulkSelected=[...(S.bulkSelected||[]).filter(id=>id!==x.id),...(check.checked?[x.id]:[])];$('bulk-count').textContent='Выбрано: '+S.bulkSelected.length};return [check,x.camera_name,x.camera_id,x.camera_vc_id,x.tariff_name,x.status,x.price_text,x.discount_text,x.total_text,add(el('div','actionbar'),live('Кадр',()=>run(async()=>{S.billingImage=await op('billing_camera_image',{camera:x.id})})),live('История',()=>run(async()=>{S.history=await op('billing_history',{camera:x.id})})))]})));const count=el('span','muted','Выбрано: '+(S.bulkSelected||[]).length);count.id='bulk-count';root.append(add(el('div','actionbar'),count,live('Выбрать все',()=>{S.bulkSelected=c.services.filter(x=>x.id===x.camera_id).map(x=>x.id).slice(0,100);render(false)}),live('Снять выбор',()=>{S.bulkSelected=[];render(false)})));imagePreview(root,S.billingImage);
-   action(root,live('Тарифы клиента',()=>run(async()=>{S.catalogFilter={};S.catalog=await op('billing_catalog',{scope:'client'})})));
-   if(c.services.length){const cam=field('Камера','select','',c.services.map(x=>[x.id,x.camera_name+' · '+x.id])),a=field('Изменение','select','tariff',[['tariff','Сменить тариф'],['status','Изменить статус']]),t=field('Тариф','select','',(S.catalog?.tariffs||[]).filter(x=>x.country===c.country).map(x=>[x.id,x.name+' · '+x.price])),st=field('Статус','select','1',[[1,'Включить'],[0,'Отключить']]),date=field('Дата','date'),comment=field('Комментарий','text');form(root,cam,a,t,st,date,comment);action(root,live('Подготовить изменение',()=>stage('billing_preview',{camera:value(cam),action:value(a),tariff:value(t),status:num(st),date:value(date),comment:value(comment)}),'primary'));action(root,live('Сменить тариф выбранным',()=>stage('billing_bulk_preview',{cameras:S.bulkSelected||[],tariff:value(t),date:value(date),comment:value(comment)})))}
-  }
-  if(c?.services.length){const recipient=field('Логин получателя','text',S.recipientQuery||'');form(root,recipient);action(root,live('Найти получателя CRM',()=>run(async()=>{S.recipientQuery=value(recipient);S.recipients=await op('billing_recipient',{query:S.recipientQuery})})));if(S.recipients?.length){const to=field('Получатель','select','',S.recipients.map(r=>[r.id,r.login+' · '+r.country+' · '+r.account_name])),camera=field('Камера для переноса','select','',c.services.map(x=>[x.id,x.camera_name+' · '+x.id]));form(root,to,camera);action(root,live('Подготовить перенос',()=>stage('billing_transfer_preview',{recipient:value(to),camera:value(camera)}))) }}
-  if(S.catalog){
-   section(root,'Каталог тарифов');const cat=S.catalog,f=S.catalogFilter||{},country=field('Страна','select',f.country||'',[['','Все'],...(cat.countries||[]).map(x=>[x.name,x.name])]),type=field('Тип','select',f.account_type||'',[['','Все'],...(cat.account_types||[]).map(x=>[x,x])]),q=field('Название / ID','text',f.query||''),days=field('Глубина архива, дней (0 — все)','number',f.days||0),rate=field('Битрейт, Мбит/с (0 — все)','number',f.bitrate||0);
+ function billingCatalog(root,scope){
+  if(scope==='all')action(root,live('Обновить из биллинга',()=>run(async()=>{S.catalog=null;S.catalogFilter={};S.catalog=await op('billing_catalog',{scope:'all'})}),'primary'));
+  if(!S.catalog||S.catalog.scope!==scope){if(scope==='all')root.append(notice('Список тарифов пока не загружен.'));return}
+  if(S.catalog&&S.catalog.scope===scope){
+   section(root,scope==='all'?'Все тарифы':'Каталог тарифов клиента');const cat=S.catalog,f=S.catalogFilter||{},country=field('Страна','select',f.country||'',[['','Все'],...(cat.countries||[]).map(x=>[x.name,x.name])]),type=field('Тип','select',f.account_type||'',[['','Все'],...(cat.account_types||[]).map(x=>[x,x])]),q=field('Название / ID','text',f.query||''),days=field('Глубина архива, дней (0 — все)','number',f.days||0),rate=field('Битрейт, Мбит/с (0 — все)','number',f.bitrate||0);
    days.input.min=0;rate.input.min=0;rate.input.step='.1';country.input.disabled=cat.scope==='client';form(root,country,type,q,days,rate);
    action(root,live('Применить фильтры',()=>run(async()=>{S.catalogFilter={country:value(country),account_type:value(type),query:value(q),days:num(days),bitrate:num(rate)};S.catalog=await op('billing_filter',S.catalogFilter)}),'primary'));
    action(root,live('Сбросить фильтры',()=>run(async()=>{S.catalogFilter={};S.catalog=await op('billing_filter',{})})));
    root.append(notice('Показано '+cat.tariffs.length+' из '+cat.total+' тарифов. Срок архива извлекается из названия, а не из тестового периода.'));
    root.append(table(['ID','Название','Страна','Тип','Архив, дн.','Мбит/с','Цена','Пробный период','Описание'],cat.tariffs.map(t=>[t.id,t.name,t.country,t.account_type,t.archive_days,t.bitrate_mbps,t.price+' '+t.currency,t.test_days,t.description])));
   }
-  if(S.history){section(root,'История камеры');root.append(table(['Дата','Пользователь','Действие','Поле','До','После'],S.history.map(h=>[h.date,h.user,h.action,h.field_name,h.old_value,h.new_value])))}
-  previewNotice(root,currentPlan(),out=>{if(out?.items){S.billingClient=out.client;S.bulkResult=out.items}else S.billingClient=out});if(S.bulkResult){section(root,'Результаты массового изменения');const labels={confirmed:'Подтверждено',unknown:'Неизвестный результат',not_confirmed:'Не подтверждено',not_attempted:'Не отправлено'};root.append(table(['Камера','Результат'],S.bulkResult.map(x=>[x.camera,labels[x.status]||x.status])))}resultNote(root);
+ }
+ function billingTabs(root,items,active,onSelect,kind){
+  const bar=el('div','desktop-section-nav billing-tabs');bar.setAttribute('role','group');bar.setAttribute('aria-label',kind==='workspace'?'Клиенты и тарифы':'Карточка клиента');
+  for(const [id,label] of items){const b=button(label,()=>onSelect(id),'quiet',taskBusy);b.dataset.billingTab=kind+':'+id;b.setAttribute('aria-pressed',String(active===id));bar.append(b)}root.append(bar)
+ }
+ function billing(root){
+  root.append(hero('CRM / BILLING','Клиенты и тарифы','Поиск, камеры и управление тарифами.'));
+  const tab=S.billingTab||'search';
+  billingTabs(root,[['search','Поиск клиента'],['create','Создать клиента'],['all','Все тарифы']],tab,id=>{if(id===tab)return;discardPlan();S.billingTab=id;S.catalog=null;S.catalogFilter={};S.billingEdit=null;render(true)},'workspace');
+  if(tab==='create'){sessionStrip(root,'b2o');billingCreate(root);return}
+  sessionStrip(root,'crm');
+  if(tab==='all'){billingCatalog(root,'all');return}
+  const q=field('Логин или номер учётной записи','text',S.billingQuery||''),search=el('form','panel billing-search-form');
+  q.input.placeholder='Введите логин клиента, например lkz_...';q.input.maxLength=100;q.input.required=true;
+  const find=el('button','primary','Найти клиента');find.type='submit';find.disabled=preview||!S.admin?.crm;
+  search.append(q.node,find);root.append(search);search.onsubmit=e=>{e.preventDefault();if(find.disabled||taskBusy)return;const query=value(q);if(!query)return;run(async()=>{S.billingQuery=query;clearBillingView();S.hits=await op('billing_search',{query});if(S.hits.length===1){S.billingClient=await op('billing_select',{id:S.hits[0].id});S.billingCardTab='services'}})};
+  if(S.hits?.length>1)root.append(table(['Логин','Клиент','Страна','Баланс',''],S.hits.map(x=>[x.login,x.account_name,x.country,x.balance_text,live('Открыть',()=>run(async()=>{S.billingClient=null;discardPlan();S.history=null;S.catalog=null;S.catalogFilter={};S.billingImage=null;S.bulkSelected=[];S.bulkResult=null;S.recipients=null;S.billingEdit=null;S.billingCardTab='services';S.billingClient=await op('billing_select',{id:x.id})}))])));
+  const c=S.billingClient;
+  if(!c){root.append(add(el('div','panel billing-empty'),el('h2','',S.hits?.length===0?'Клиент не найден':'Найдите клиента'),el('p','muted',S.admin?.crm?'Введите логин или номер учётной записи.':'Войдите в корпоративный биллинг, чтобы искать клиентов.')));return}
+  const header=el('div','panel billing-client-summary');header.append(add(el('div'),el('h2','',c.display_name||c.login),el('p','muted',[c.legal_type,c.country,c.login].filter(Boolean).join(' · '))),el('span',['активный','активен','active'].includes(String(c.status).toLowerCase())?'online':'muted',c.status||'Неизвестно'),live('Обновить карточку',()=>run(async()=>{discardPlan();S.catalog=null;S.catalogFilter={};S.history=null;S.billingImage=null;S.bulkSelected=[];S.recipients=null;S.billingEdit=null;S.billingClient=await op('billing_refresh')})));root.append(header);
+  const cardTab=S.billingCardTab||'services';billingTabs(root,[['info','Общая информация'],['services','Услуги']],cardTab,id=>{if(id===cardTab)return;discardPlan();S.billingCardTab=id;render(false)},'client');
+  if(cardTab==='info'){const panel=el('div','panel');keyValue(panel,[['Логин',c.login],['Договор №',c.contract_number],['Email',c.email],['Телефон',c.phone],['Менеджер',c.manager],['Адрес',c.address],['Дата регистрации',c.registered_at],['Страна',c.country],['Баланс',c.balance_text]]);root.append(panel);return}
+  billingServices(root,c);
+ }
+ function billingServices(root,c){
+  const panel=el('div','panel billing-services');panel.append(el('h2','','Услуги видеонаблюдения'));
+  const loadCatalog=async()=>{if(S.catalog?.scope!=='client'){S.catalog=null;S.catalogFilter={};S.catalog=await op('billing_catalog',{scope:'client'})}};
+  const openEdit=(id,kind)=>run(async()=>{discardPlan();S.billingEdit={id,kind};S.recipients=null;if(kind==='tariff'||kind==='bulk')await loadCatalog()});
+  const count=el('span','muted','Выбрано: '+(S.bulkSelected||[]).length);count.id='bulk-count';
+  const bulk=live('Изменить выбранным ('+(S.bulkSelected||[]).length+')',()=>openEdit(null,'bulk'),'primary');
+  bulk.disabled=preview||!identity?.writes||!(S.bulkSelected||[]).length;
+  const updateCount=()=>{const n=(S.bulkSelected||[]).length;count.textContent='Выбрано: '+n;bulk.textContent='Изменить выбранным ('+n+')';bulk.disabled=preview||!identity?.writes||!n};
+  panel.append(add(el('div','actionbar'),count,bulk,live('Каталог тарифов',()=>run(async()=>{discardPlan();S.billingEdit=null;await loadCatalog()})),live('Выбрать все',()=>{discardPlan();S.bulkSelected=c.services.filter(x=>x.id===x.camera_id).map(x=>x.id).slice(0,100);render(false)}),live('Снять выбор',()=>{discardPlan();S.bulkSelected=[];render(false)})));
+  if(!c.services_loaded)panel.append(notice('CRM не подтвердила загрузку списка камер.'));
+  const list=el('div','billing-camera-list');list.dataset.scrollKey='billing-cameras';list.tabIndex=0;
+  if(!c.services.length)list.append(notice('Нет загруженных услуг.'));
+  for(const x of c.services){
+   const check=el('input','camera-check');check.type='checkbox';check.setAttribute('aria-label','Выбрать '+x.camera_name);check.checked=(S.bulkSelected||[]).includes(x.id);check.disabled=preview||x.id!==x.camera_id;
+   check.onchange=()=>{discardPlan();const ids=(S.bulkSelected||[]).filter(id=>id!==x.id);if(check.checked&&ids.length>=100){check.checked=false;toast('Можно выбрать до 100 камер.')}S.bulkSelected=check.checked?[...ids,x.id]:ids;updateCount();document.querySelector('.billing-services .confirmation')?.remove()};
+   const card=el('article','billing-camera-card');card.dataset.billingCamera=x.id;
+   const thumb=el('div','billing-camera-thumb');const img=S.billingImage?.camera===x.id?S.billingImage.src:'';
+   if(img&&/^data:image\/(png|jpeg|webp);base64,/.test(img)){const im=el('img');im.alt='Кадр камеры';im.src=img;thumb.append(im)}else thumb.append(el('span','muted','Нет превью'));
+   const main=el('div','billing-camera-details');main.append(add(el('div','billing-camera-title'),el('h3','',x.camera_name||'Камера '+x.camera_id),el('span',x.status==='Активный'?'online':'muted',x.status)),el('p','','Тариф: '+(x.tariff_name||'—')),el('p','muted','ID CRM: '+(x.camera_id||'—')+' · ID B2O: '+(x.camera_vc_id||'—')),el('p','muted','Цена: '+(x.price_text||'—')+' · Скидка: '+(x.discount_text||'—')+' · Итого: '+(x.total_text||'—')));
+   const actions=el('div','actionbar');const writable=!!identity?.writes&&x.id===x.camera_id;
+   actions.append(live('Кадр',()=>run(async()=>{S.billingImage=await op('billing_camera_image',{camera:x.id})})),button('Изменить тариф',()=>openEdit(x.id,'tariff'),'primary',preview||!writable),live('История',()=>run(async()=>{discardPlan();S.billingHistoryCamera=x.id;S.history=await op('billing_history',{camera:x.id})})),button('Статус',()=>openEdit(x.id,'status'),'quiet',preview||!writable),button('Перенос камеры',()=>openEdit(x.id,'transfer'),'quiet',preview||!writable));main.append(actions);card.append(check,thumb,main);list.append(card);
+  }
+  panel.append(list,el('p','muted','Выберите камеру и тариф. Изменения выполняются только после подтверждения.'));
+  const edit=S.billingEdit;
+  if(edit){
+   const selected=c.services.find(x=>x.id===edit.id);
+   const formRoot=el('div','panel billing-edit');formRoot.append(add(el('div','billing-camera-title'),el('h3','',edit.kind==='bulk'?'Изменить выбранным':(selected?.camera_name||'Камера')+' · '+({tariff:'Тариф',status:'Статус',transfer:'Перенос'})[edit.kind]),button('Закрыть',()=>{discardPlan();S.billingEdit=null;render(false)})));
+   if(edit.kind==='tariff'||edit.kind==='bulk'){
+    const options=(S.catalog?.scope==='client'?S.catalog.tariffs:[]).filter(x=>x.country===c.country);
+    const tariff=field('Тариф','select','',[['','Выберите тариф'],...options.map(x=>[x.id,x.name+' · '+x.price+' '+x.currency])]),date=field('Дата','date'),comment=field('Комментарий','text');form(formRoot,tariff,date,comment);
+    const submit=live('Подготовить изменение',()=>{if(!value(tariff)){toast('Выберите тариф.');return}const args={tariff:value(tariff),date:value(date),comment:value(comment)};if(edit.kind==='bulk')stage('billing_bulk_preview',{...args,cameras:S.bulkSelected||[]});else stage('billing_preview',{...args,camera:edit.id,action:'tariff'})},'primary');submit.disabled=preview||!identity?.writes||!options.length;action(formRoot,submit);
+    if(!options.length)action(formRoot,live('Загрузить каталог',()=>run(loadCatalog)));
+   }else if(edit.kind==='status'){const st=field('Статус','select','1',[[1,'Включить'],[0,'Отключить']]);form(formRoot,st);action(formRoot,live('Подготовить изменение',()=>stage('billing_preview',{camera:edit.id,action:'status',status:num(st)}),'primary'))}
+   else if(edit.kind==='transfer'){const q=field('Логин получателя','text',S.recipientQuery||'');form(formRoot,q);action(formRoot,live('Найти получателя CRM',()=>run(async()=>{S.recipientQuery=value(q);S.recipients=await op('billing_recipient',{query:S.recipientQuery})})));if(S.recipients?.length){const to=field('Получатель','select','',S.recipients.map(r=>[r.id,r.login+' · '+r.country+' · '+r.account_name]));form(formRoot,to);action(formRoot,live('Подготовить перенос',()=>stage('billing_transfer_preview',{recipient:value(to),camera:edit.id}),'primary'))}}
+   panel.append(formRoot);
+  }
+  previewNotice(panel,currentPlan(),out=>{if(out?.items){S.billingClient=out.client;S.bulkResult=out.items}else S.billingClient=out;S.billingEdit=null;S.bulkSelected=[];S.history=null;S.billingImage=null;S.recipients=null});
+  if(S.bulkResult){section(panel,'Результаты массового изменения');const labels={confirmed:'Подтверждено',unknown:'Неизвестный результат',not_confirmed:'Не подтверждено',not_attempted:'Не отправлено'};panel.append(table(['Камера','Результат'],S.bulkResult.map(x=>[x.camera,labels[x.status]||x.status])))}
+  if(S.history){section(panel,'История камеры · '+(S.billingHistoryCamera||''));panel.append(table(['Дата','Пользователь','Действие','Поле','До','После'],S.history.map(h=>[h.date,h.user,h.action,h.field_name,h.old_value,h.new_value])))}
+  resultNote(panel);root.append(panel);
+  if(!edit||edit.kind==='tariff'||edit.kind==='bulk')billingCatalog(root,'client');
+ }
+ function billingCreate(root){
+  const layout=el('div','create-workspace'),left=el('div','panel create-form'),right=el('div','panel create-result');
+  left.append(el('h2','','Добавить клиента в админке B2O'),el('p','muted','Обычный аккаунт с подключением биллинга. Используются только проверенные операции существующего B2O-сервиса.'));
+  const draft=S.b2oDraft||{},country=field('Страна','select',draft.country||'Россия',[['Россия','Россия'],['Казахстан','Казахстан'],['Беларусь','Беларусь']]),name=field('Имя клиента','text',draft.name||''),login=field('Логин клиента','text',draft.login||''),password=field('Пароль клиента','password'),phone=field('Телефон','text',draft.phone||'');
+  for(const f of [name,login,password])f.input.required=true;password.input.autocomplete='new-password';
+  const capture=()=>{S.b2oDraft={country:value(country),name:value(name),login:value(login),phone:value(phone)}};
+  for(const f of [country,name,login,password,phone])f.input.addEventListener('input',()=>{capture();discardPlan();left.querySelector('.confirmation')?.remove()});
+  const generate=button('Создать пароль (9 символов)',()=>{const alphabet='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789',limit=256-256%alphabet.length;let out='';while(out.length<9){for(const x of crypto.getRandomValues(new Uint8Array(16))){if(x<limit)out+=alphabet[x%alphabet.length];if(out.length===9)break}}password.input.value=out;password.input.dispatchEvent(new Event('input'))});
+  const formNode=el('form','billing-create-fields');formNode.append(country.node,name.node,login.node,password.node,generate,phone.node,el('p','muted','Тип аккаунта: Обычный · Передать в биллинг: Да'));
+  const submit=el('button','primary','Создать клиента у оператора');submit.type='submit';submit.disabled=preview||!identity?.writes||!S.admin?.b2o;formNode.append(submit);left.append(formNode);
+  formNode.onsubmit=e=>{e.preventDefault();if(submit.disabled||taskBusy)return;capture();const pw=password.input.value;password.input.value='';S.b2oCreated=null;stage('b2o_create_preview',{...S.b2oDraft,password:pw})};
+  previewNotice(left,currentPlan(),out=>{S.b2oCreated=out});
+  right.append(el('h2','','Данные клиента'));if(S.b2oCreated?.id_account){keyValue(right,[['ID аккаунта',S.b2oCreated.id_account],['Проверка чтением',S.b2oCreated.read_back_verified?'Да':'Не подтверждена']]);right.append(notice('Пароль не хранится в интерфейсе после отправки.'))}else right.append(add(el('div','create-empty'),el('span','create-empty-symbol','◇'),el('h3','','Клиент ещё не создан')));
+  layout.append(left,right);root.append(layout);
  }
  function archive(root,diagnose){
   root.append(hero(diagnose?'ARCHIVE / DIAGNOSIS':'ARCHIVE / DOWNLOAD',diagnose?'Диагностика архива':'Архивы','Период задаётся в локальном времени камеры. Источник — существующий DVR / B2O сервис.'));
@@ -397,11 +465,7 @@
   action(root,live('Диагностика камеры',()=>run(async()=>{S.cameraId=value(id);S.cameraOperator=num(opid);S.cameraLive=null;S.cameraImage=null;S.cameraInfo=null;S.cameraInfo=await op('camera_inspect',{camera:S.cameraId,operator:S.cameraOperator})}),'primary'));
   const c=S.cameraInfo;if(c)keyValue(root,[['Камера',c.name||c.camera_id],['Сервер',c.server],['IP',c.ip],['RTSP-порт',c.rtsp_port],['Ping',c.ping_text],['TCP',c.tcp_text],['Состояние',c.status],['Модель',c.model],['SN',c.serial],['Архив',c.archive_depth],['Последний поток',c.last_stream],['Оператор',c.operator],['ID аккаунта',c.account_id],['Адрес установки',c.address],['Логин клиента',S.cameraChoice?.camera_id===c.camera_id?S.cameraChoice.customer_login:''],['Тариф',S.cameraChoice?.camera_id===c.camera_id?S.cameraChoice.tariff:''],['Транскод B2O',c.transcode],['Проверка транскода',c.transcode_check],['Разрешение · B2O',c.b2o_resolution],['Видеокодек · B2O',c.b2o_video_codec],['Аудиокодек · B2O',c.b2o_audio_codec],['Битрейт · B2O (справочно)',c.b2o_bitrate]]);
   if(c){action(root,live('Копировать диагностику',()=>rpc('copy',['Камера: '+(c.name||c.camera_id),'Сервер: '+c.server,'Ping: '+c.ping_text,'TCP: '+c.tcp_text,'Состояние: '+c.status,...(S.cameraLive?['Видео: '+S.cameraLive.video_codec,'Разрешение: '+S.cameraLive.resolution,'FPS: '+S.cameraLive.fps,'Битрейт: '+S.cameraLive.bitrate_mbps]:[])].join('\n')).then(()=>toast('Диагностика скопирована')).catch(error)));action(root,live('Последнее изображение B2O',()=>run(async()=>{S.cameraImage=null;S.cameraImage=await op('camera_image',{id:c.camera_id})})));imagePreview(root,S.cameraImage);action(root,live('Измерить поток',()=>run(async()=>{S.cameraLive=null;S.cameraLive=await op('camera_live',{id:c.camera_id})}),'primary'));if(S.cameraLive){const x=S.cameraLive;keyValue(root,[['Битрейт, Мбит/с',x.bitrate_mbps],['Видео',x.video_codec],['Аудио',x.audio_codec],['Разрешение',x.resolution],['FPS',x.fps],['Источник',x.source],['Последний поток',x.last_stream]]);root.append(notice(x.connectivity),notice(x.detail))}}
-  section(root,'Клиент B2O');const country=field('Страна','select','Россия',[['Россия','Россия'],['Казахстан','Казахстан'],['Беларусь','Беларусь']]),account=field('ID аккаунта','number');form(root,country,account);
-  action(root,live('Проверить клиента',()=>run(async()=>{S.b2oClient=await op('b2o_read',{country:value(country),id:num(account)})})));
-  if(S.b2oClient)keyValue(root,[['ID',S.b2oClient.id_account],['Логин',S.b2oClient.login],['Имя',S.b2oClient.client_name],['Тип',S.b2oClient.account_type]]);
-  section(root,'Создание обычного аккаунта с биллингом');const name=field('Имя клиента'),login=field('Логин'),password=field('Пароль','password'),phone=field('Телефон');form(root,name,login,password,phone);action(root,live('Подготовить создание',()=>{const pw=password.input.value;password.input.value='';stage('b2o_create_preview',{country:value(country),name:value(name),login:value(login),password:pw,phone:value(phone)})},'primary'));
-  previewNotice(root,currentPlan());if(S.outcome?.id_account&&S.planPage===page)keyValue(root,[['Создан ID',S.outcome.id_account],['Проверка чтением',S.outcome.read_back_verified?'Да':'Не подтверждена']]);resultNote(root);
+
  }
  function dashboard(root){
   section(root,'Рабочие инструменты');const g=el('div','dashboard-grid');
